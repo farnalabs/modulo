@@ -256,9 +256,7 @@ class TestListCommunityEntries:
         assert set(by_id) == {"entry-1", 99}
         assert by_id[99]["slug"] == "int-id-agent"
 
-    async def test_matches_entry_id_by_str_normalisation(
-        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_matches_entry_id_by_str_normalisation(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         """``str(entry.get("id"))``: a numeric entry id IS matched by the
         equivalent str id in the revoked list."""
         manifest = {
@@ -388,9 +386,7 @@ class TestInstallCommunityEntry:
         assert session.commits == 0
         assert session._in_tx is True
 
-    async def test_records_created_by_as_account_id(
-        self, fake_manifest: None, fake_blob: None, fake_settings: None
-    ) -> None:
+    async def test_records_created_by_as_account_id(self, fake_manifest: None, fake_blob: None, fake_settings: None) -> None:
         """``created_by`` is the install's provenance and must reach ``account_id``."""
         creator = uuid.uuid4()
 
@@ -398,9 +394,7 @@ class TestInstallCommunityEntry:
 
         assert prim.account_id == creator
 
-    async def test_non_string_description_degrades_to_none(
-        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, fake_settings: None
-    ) -> None:
+    async def test_non_string_description_degrades_to_none(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, fake_settings: None) -> None:
         """Only a ``str`` description is persisted; anything else becomes NULL."""
 
         async def _blob(_sha256: str) -> dict[str, Any]:
@@ -439,9 +433,7 @@ class TestInstallCommunityEntry:
         with pytest.raises(ValueError, match="entry not found"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
 
-    async def test_raises_unsupported_primitive_type(
-        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_raises_unsupported_primitive_type(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_manifest(monkeypatch, _manifest_with({**ENTRY_1, "type": "bogus"}))
         with pytest.raises(ValueError, match="unsupported primitive type"):
             await install_community_entry(_FakeSession(), ORG_ID, "entry-1")
@@ -465,9 +457,7 @@ class TestInstallCommunityEntry:
             "non-string-content_sha256",
         ],
     )
-    async def test_raises_entry_not_found_for_malformed_required_fields(
-        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, field: str, value: object
-    ) -> None:
+    async def test_raises_entry_not_found_for_malformed_required_fields(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch, field: str, value: object) -> None:
         entry = dict(ENTRY_1)
         if value is _MISSING:
             del entry[field]
@@ -494,9 +484,7 @@ class TestInstallCommunityEntry:
         # owns the rollback and must have executed it.
         assert session.rolled_back is True
 
-    async def test_caller_owned_transaction_is_never_rolled_back(
-        self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_caller_owned_transaction_is_never_rolled_back(self, fake_manifest: None, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _blob_none(_sha256: str) -> None:
             return None
 
@@ -561,9 +549,7 @@ class TestFetchBlob:
         assert result == {"name": "code-reviewer"}
         assert client.closed is True
 
-    async def test_raising_close_is_logged_and_swallowed(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_raising_close_is_logged_and_swallowed(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A ``close()`` that raises never escapes ``_fetch_blob``.
 
         The teardown sits in ``finally`` AFTER the ``except ValueError`` arm,

@@ -58,10 +58,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -135,10 +132,7 @@ async def _audit_events_for(engine: AsyncEngine, org_id: uuid.UUID, event_type: 
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT event_type, payload_json FROM audit_events "
-                    "WHERE organisation_id = :oid AND event_type = :et ORDER BY created_at"
-                ),
+                text("SELECT event_type, payload_json FROM audit_events WHERE organisation_id = :oid AND event_type = :et ORDER BY created_at"),
                 {"oid": str(org_id), "et": event_type},
             )
         ).fetchall()
@@ -150,9 +144,7 @@ async def _audit_events_for(engine: AsyncEngine, org_id: uuid.UUID, event_type: 
 # ---------------------------------------------------------------------------
 
 
-async def test_load_loop_intercept_guardrails_same_org_visible(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_load_loop_intercept_guardrails_same_org_visible(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-own", test_user)
     await _seed_guardrail(db_engine, test_org, pipe, test_user, name="own-block", action="block")
     factory = await _make_session_factory(app_engine)  # non-superuser role: RLS filters rows
@@ -161,9 +153,7 @@ async def test_load_loop_intercept_guardrails_same_org_visible(
     assert defs[0].config["action"] == "block"
 
 
-async def test_load_loop_intercept_guardrails_cross_org_hidden(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_load_loop_intercept_guardrails_cross_org_hidden(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-own", test_user)
     await _seed_guardrail(db_engine, test_org, pipe, test_user, name="own-block", action="block")
     other_org = await _seed_org(db_engine, "Loop-other")
@@ -178,9 +168,7 @@ async def test_load_loop_intercept_guardrails_cross_org_hidden(
     assert "foreign-block" not in [d.name for d in defs]
 
 
-async def test_load_loop_intercept_guardrails_zero_guardrails_returns_empty(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_load_loop_intercept_guardrails_zero_guardrails_returns_empty(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-empty", test_user)
     factory = await _make_session_factory(app_engine)
     defs = await load_loop_intercept_guardrails(factory, org_id=test_org, pipeline_id=pipe)
@@ -192,9 +180,7 @@ async def test_load_loop_intercept_guardrails_zero_guardrails_returns_empty(
 # ---------------------------------------------------------------------------
 
 
-async def test_stub_agent_blocked_outcome_persists_audit(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_stub_agent_blocked_outcome_persists_audit(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     """A block-action guardrail on a tool-call pattern REFUSES the call through
     the bridge, and the ``guardrail.loop_blocked`` audit event is persisted
     org-scoped."""
@@ -209,9 +195,7 @@ async def test_stub_agent_blocked_outcome_persists_audit(
         EvalEngine(),
         defs,
         LoopInterceptConfig(),
-        audit_sink=lambda records: persist_loop_interception_audit(
-            factory, org_id=test_org, run_id=run_id, node_id="n1", records=records
-        ),
+        audit_sink=lambda records: persist_loop_interception_audit(factory, org_id=test_org, run_id=run_id, node_id="n1", records=records),
     )
     port = await server.start()
     try:
@@ -236,9 +220,7 @@ async def test_stub_agent_blocked_outcome_persists_audit(
     assert _SECRET not in json.dumps(payload)
 
 
-async def test_stub_agent_warned_outcome_proceeds(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_stub_agent_warned_outcome_proceeds(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-warn", test_user)
     await _seed_guardrail(db_engine, test_org, pipe, test_user, name="warn-token", action="warn")
     factory = await _make_session_factory(app_engine)
@@ -249,9 +231,7 @@ async def test_stub_agent_warned_outcome_proceeds(
         EvalEngine(),
         defs,
         LoopInterceptConfig(),
-        audit_sink=lambda records: persist_loop_interception_audit(
-            factory, org_id=test_org, run_id=run_id, node_id="n1", records=records
-        ),
+        audit_sink=lambda records: persist_loop_interception_audit(factory, org_id=test_org, run_id=run_id, node_id="n1", records=records),
     )
     port = await server.start()
     try:
@@ -271,9 +251,7 @@ async def test_stub_agent_warned_outcome_proceeds(
     assert events
 
 
-async def test_stub_agent_redacted_outcome_masks_args(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_stub_agent_redacted_outcome_masks_args(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-redact", test_user)
     await _seed_guardrail(db_engine, test_org, pipe, test_user, name="redact-url", action="redact")
     factory = await _make_session_factory(app_engine)
@@ -296,9 +274,7 @@ async def test_stub_agent_redacted_outcome_masks_args(
         await server.close()
 
 
-async def test_stub_agent_pass_outcome_for_low_risk_tool(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_stub_agent_pass_outcome_for_low_risk_tool(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     pipe = await _seed_pipeline(db_engine, test_org, "Loop-pass", test_user)
     await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-token", action="block")
     factory = await _make_session_factory(app_engine)

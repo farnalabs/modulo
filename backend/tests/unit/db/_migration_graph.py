@@ -131,35 +131,22 @@ def assert_single_linear_head(script: ScriptDirectory, *, versions_dir: Path | N
             continue
         revision, down_revision = _read_revision(path, source)
         if revision in declared:
-            raise AssertionError(
-                f"duplicate revision id {revision!r} declared by both {declared[revision][0].name} and {path.name}"
-            )
+            raise AssertionError(f"duplicate revision id {revision!r} declared by both {declared[revision][0].name} and {path.name}")
         declared[revision] = (path, down_revision)
 
     for revision, (path, down_revision) in declared.items():
         for parent in _parents(down_revision):
             if parent not in declared:
-                raise AssertionError(
-                    f"{path.name} (revision {revision!r}) declares down_revision {parent!r}, "
-                    "which no migration file declares"
-                )
+                raise AssertionError(f"{path.name} (revision {revision!r}) declares down_revision {parent!r}, which no migration file declares")
 
     heads = script.get_heads()
     assert len(heads) == 1, f"expected exactly one migration head, got {heads!r}"
 
     revisions = list(script.walk_revisions())
-    graph_points = sorted(
-        (rev.revision, "branch point" if rev.is_branch_point else "merge point")
-        for rev in revisions
-        if rev.is_branch_point or rev.is_merge_point
-    )
+    graph_points = sorted((rev.revision, "branch point" if rev.is_branch_point else "merge point") for rev in revisions if rev.is_branch_point or rev.is_merge_point)
     plural = len(graph_points) != 1
     branchy_text = ", ".join(f"{revision!r} ({kind})" for revision, kind in graph_points)
-    assert not graph_points, (
-        f"migration graph is not linear: {branchy_text} "
-        f"{'are' if plural else 'is a'} branch/merge point{'s' if plural else ''}; "
-        "the chain has diverged and been reconciled"
-    )
+    assert not graph_points, f"migration graph is not linear: {branchy_text} {'are' if plural else 'is a'} branch/merge point{'s' if plural else ''}; the chain has diverged and been reconciled"
 
     graph_revisions = {rev.revision for rev in revisions}
     orphans = sorted(set(declared) - graph_revisions)

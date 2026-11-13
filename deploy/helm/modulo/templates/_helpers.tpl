@@ -131,7 +131,7 @@ modulo.postgresUrl). Otherwise falls back to backend.env.DATABASE_URL.
 Construct DATABASE_ADMIN_URL from Postgres config.
 Used by entrypoint.sh bootstrap_role.py to connect as the admin/superuser
 for migrations and role bootstrap. Uses postgres.adminUsername (default: modulo)
-rather than postgres.username (modulo_app) — the two must differ so the
+rather than postgres.username (farna_control_app) — the two must differ so the
 app role is NOT the superuser.
 When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 */}}
@@ -150,12 +150,12 @@ When postgres.host is unset, falls back to backend.env.DATABASE_ADMIN_URL.
 
 {{/*
 Construct MODULO_SYSTEM_DATABASE_URL from Postgres config.
-The modulo_system role (LOGIN, BYPASSRLS) is required by cross-org system
+The farna_control_system role (LOGIN, BYPASSRLS) is required by cross-org system
 crons — dispatcher_reconcile REFUSES to run without this URL, and
 dispatcher_reconcile gates /healthz/ready (a missing URL therefore means
 the backend pod NEVER becomes Ready). bootstrap_role creates the role with
 the password parsed from this URL, so it shares postgres.password just like
-modulo_app does. The chart's saq-runner/saq-system commands bypass
+farna_control_app does. The chart's saq-runner/saq-system commands bypass
 entrypoint.sh, so the URL cannot be derived at runtime — it must be wired
 here. Falls back to backend.env.MODULO_SYSTEM_DATABASE_URL when postgres.host
 is unset (mirrors modulo.databaseUrl).
@@ -163,7 +163,7 @@ is unset (mirrors modulo.databaseUrl).
 {{- define "farna-control.systemDatabaseUrl" -}}
 {{- if .Values.postgres.host }}
 {{- include "farna-control.postgresUrl" (dict
-      "user" (.Values.postgres.systemUsername | default "modulo_system")
+      "user" (.Values.postgres.systemUsername | default "farna_control_system")
       "password" (include "farna-control.postgresPassword" .)
       "host" .Values.postgres.host
       "port" .Values.postgres.port

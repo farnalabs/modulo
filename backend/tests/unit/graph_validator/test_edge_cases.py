@@ -199,9 +199,7 @@ def test_nullable_output_type_mismatch():
 
 def test_enum_subset_compatible():
     gv = GraphValidator()
-    errors = gv._check_schema_fields(
-        {"type": "string", "enum": ["a", "b"]}, {"type": "string", "enum": ["a", "b", "c"]}
-    )
+    errors = gv._check_schema_fields({"type": "string", "enum": ["a", "b"]}, {"type": "string", "enum": ["a", "b", "c"]})
     assert not errors
 
 

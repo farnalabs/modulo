@@ -1126,9 +1126,7 @@ async def test_claim_update_where_allows_unclaimed_or_same_account_only():
     """The claim UPDATE's WHERE admits unclaimed gates and same-account
     re-claims (FAR-686) but still requires the gate to be undecided."""
     _mgr, _session, captured = await _claim_capture()
-    update_stmt = captured[
-        2
-    ]  # execute calls: pre-check SELECT, run-status SELECT, then the UPDATE ... RETURNING (FAR-612)
+    update_stmt = captured[2]  # execute calls: pre-check SELECT, run-status SELECT, then the UPDATE ... RETURNING (FAR-612)
     sql = str(update_stmt.compile())
     assert "account_id IS NULL" in sql
     assert "decision IS NULL" in sql
@@ -1146,9 +1144,7 @@ _TEAM = uuid.uuid4()
 async def test_create_gate_with_required_team_id():
     session = _session_get(return_value=None)
     mgr = HITLManager()
-    result = await mgr.create_gate(
-        session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM
-    )
+    result = await mgr.create_gate(session, run_id=_RUN, review_id=_GATE, pipeline_id=_PIPELINE, org_id=_ORG, required_team_id=_TEAM)
     session.add.assert_called_once()
     added = session.add.call_args[0][0]
     assert added.organisation_id == _ORG
@@ -2070,12 +2066,7 @@ def test_decision_payload_none_is_accepted():
 
 def test_decision_payload_valid_dict_is_accepted():
     """A well-formed dict decision payload passes validation."""
-    assert (
-        HITLManager._validate_decision_payload(
-            {"action": "approved", "modified_output": {"blob": "ok"}, "nested": {"list": [1, 2, 3]}}
-        )
-        is None
-    )
+    assert HITLManager._validate_decision_payload({"action": "approved", "modified_output": {"blob": "ok"}, "nested": {"list": [1, 2, 3]}}) is None
 
 
 def test_decision_payload_unserialisable_rejected():
@@ -2841,9 +2832,7 @@ async def test_hitl_review_invalid_required_team_id_is_logged_and_sanitized(capl
     ``uuid.UUID()`` conversion must never see an invalid string (logged, not
     raised)."""
     caplog.set_level("WARNING", logger="farna.core.pipeline_engine.node_runner")
-    payload = await _interrupt_payload(
-        {"review_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"}
-    )
+    payload = await _interrupt_payload({"review_id": "review-step", "human_only": False, "required_team_id": "not-a-uuid"})
     assert payload["required_team_id"] is None
     assert "hitl_review.invalid_required_team_id" in caplog.text
 
@@ -2851,9 +2840,7 @@ async def test_hitl_review_invalid_required_team_id_is_logged_and_sanitized(capl
 async def test_hitl_review_valid_required_team_id_passes_through() -> None:
     """A valid UUID string is preserved in the interrupt payload unchanged."""
     team_id = uuid.uuid4()
-    payload = await _interrupt_payload(
-        {"review_id": "review-step", "human_only": False, "required_team_id": str(team_id)}
-    )
+    payload = await _interrupt_payload({"review_id": "review-step", "human_only": False, "required_team_id": str(team_id)})
     assert payload["required_team_id"] == str(team_id)
 
 

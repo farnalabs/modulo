@@ -113,7 +113,7 @@ async def _unique_provider_id(session: AsyncSession, base: str, _org_id: uuid.UU
 
     Scans every ``provider_id`` visible to ``session`` and returns ``base``,
     ``base-2``, ... — the first value not present. When ``session`` runs as the
-    ``modulo_system`` role (BYPASSRLS) the scan is instance-global (all orgs),
+    ``farna_control_system`` role (BYPASSRLS) the scan is instance-global (all orgs),
     matching the GLOBAL partial unique index (migration 0158, FAR-464 option a);
     when it is the app session (RLS-scoped) the scan is limited to the org(s)
     the session can see. ``_org_id`` is retained in the signature for call-site
@@ -145,7 +145,7 @@ async def get_provider_by_provider_id(session: AsyncSession, provider_id: str) -
     """Resolve a provider by its URL slug (global lookup — no org filter).
 
     Pre-auth SSO routes have no user/org context, so providers are resolved
-    globally through the ``modulo_system`` role (BYPASSRLS). ``provider_id`` is
+    globally through the ``farna_control_system`` role (BYPASSRLS). ``provider_id`` is
     GLOBALLY unique (migration 0158, FAR-464 option a), so the system-session
     slug resolution is deterministic. ``.limit(1)`` is a defensive guard: if
     data somehow contains duplicate slugs (e.g. a pre-0158 fixture or a manual
@@ -220,7 +220,7 @@ async def create_provider(session: AsyncSession, **config: Unpack[CreateProvider
     pid = _slugify_provider_id(provider_id) if provider_id else _slugify_provider_id(name)
 
     # provider_id is GLOBALLY unique (migration 0158, FAR-464 option a) so a
-    # cross-org create must not collide. The caller hands us a modulo_system
+    # cross-org create must not collide. The caller hands us a farna_control_system
     # (BYPASSRLS) session so ALL orgs' existing slugs are visible; we only use
     # it when the system role is actually provisioned (MODULO_SYSTEM_DATABASE_URL
     # set) — otherwise a zero-row fallback read would silently break the
@@ -234,7 +234,7 @@ async def create_provider(session: AsyncSession, **config: Unpack[CreateProvider
             logger.warning("sso_provider.settings_unavailable", exc_info=True)
 
     if scan_session is system_session:
-        # The modulo_system session factory is built with autobegin=False, so the
+        # The farna_control_system session factory is built with autobegin=False, so the
         # slug scan needs an explicit transaction — the read paths
         # (_read_system_oidc_provider, _get_enabled_saml_global, ...) all wrap
         # their system reads in `async with system_session.begin():`. Without it,

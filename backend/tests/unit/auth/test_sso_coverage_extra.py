@@ -440,9 +440,7 @@ async def test_callback_groups_not_a_list() -> None:
             new_callable=AsyncMock,
             return_value=(MagicMock(), uuid.uuid4(), "viewer"),
         ),
-        patch(
-            "farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}
-        ) as issue_mock,
+        patch("farna.auth.sso.issue_sso_tokens", new_callable=AsyncMock, return_value={"access_token": "a"}) as issue_mock,
     ):
         await oidc_process_callback(
             "code",
@@ -461,9 +459,7 @@ async def test_callback_applies_group_mappings() -> None:
     settings = _override()
     session = _mock_session()
     signed = sign_state("google:state", settings.secret_key)
-    db_provider = SimpleNamespace(
-        group_mappings=[{"idp_group": "g1", "team_id": str(uuid.uuid4()), "team_role": "editor"}]
-    )
+    db_provider = SimpleNamespace(group_mappings=[{"idp_group": "g1", "team_id": str(uuid.uuid4()), "team_role": "editor"}])
     with (
         patch(
             "farna.auth.sso._resolve_oidc_provider",
@@ -626,13 +622,7 @@ async def test_saml_get_auth_url_handler_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-_VALID_METADATA = (
-    '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="idp">'
-    "<md:IDPSSODescriptor>"
-    '<md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" '
-    'Location="https://idp.example/sso"/>'
-    "</md:IDPSSODescriptor></md:EntityDescriptor>"
-)
+_VALID_METADATA = '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="idp"><md:IDPSSODescriptor><md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://idp.example/sso"/></md:IDPSSODescriptor></md:EntityDescriptor>'
 
 
 async def test_saml_process_response_metadata_parse_error() -> None:
@@ -749,10 +739,7 @@ async def test_saml_process_response_applies_group_mappings() -> None:
 
 
 def test_saml_parse_idp_metadata_no_sso_service() -> None:
-    xml = (
-        '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" '
-        'entityID="idp"><md:IDPSSODescriptor></md:IDPSSODescriptor></md:EntityDescriptor>'
-    )
+    xml = '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="idp"><md:IDPSSODescriptor></md:IDPSSODescriptor></md:EntityDescriptor>'
     with pytest.raises(ValueError, match="No SAML SingleSignOnService"):
         _saml_parse_idp_metadata(xml)
 
@@ -865,9 +852,7 @@ async def test_resolve_oidc_provider_app_fallback_opens_transaction() -> None:
         patch("farna.auth.sso._set_default_rls_org", new_callable=AsyncMock) as mock_default_org,
         patch("farna.auth.sso.get_provider_by_provider_id", new_callable=AsyncMock, return_value=db_provider),
     ):
-        client_id, _secret, _discovery, _scopes, provider = await _resolve_oidc_provider(
-            "google", None, session, settings
-        )
+        client_id, _secret, _discovery, _scopes, provider = await _resolve_oidc_provider("google", None, session, settings)
 
     assert client_id == "cid"
     assert provider is db_provider

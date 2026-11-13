@@ -192,9 +192,7 @@ async def test_enforce_break_glass_live_returns_true() -> None:
     ],
 )
 @pytest.mark.asyncio
-async def test_enforce_break_glass_deny_raises_401_and_records_failure(
-    expires_at: datetime | None, deactivated_at: datetime | None, active: bool
-) -> None:
+async def test_enforce_break_glass_deny_raises_401_and_records_failure(expires_at: datetime | None, deactivated_at: datetime | None, active: bool) -> None:
     user = _make_user(is_break_glass=True, expires_at=expires_at, deactivated_at=deactivated_at, active=active)
     limiter = _FakeLimiter()
     with pytest.raises(HTTPException) as exc_info:
@@ -293,34 +291,19 @@ def _cas_session(rowcount: int | None) -> AsyncMock:
 @pytest.mark.asyncio
 async def test_cas_helper_rowcount_1() -> None:
     session = _cas_session(1)
-    assert (
-        await consume_break_glass_credential(
-            session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new"
-        )
-        == 1
-    )
+    assert await consume_break_glass_credential(session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new") == 1
 
 
 @pytest.mark.asyncio
 async def test_cas_helper_rowcount_0() -> None:
     session = _cas_session(0)
-    assert (
-        await consume_break_glass_credential(
-            session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new"
-        )
-        == 0
-    )
+    assert await consume_break_glass_credential(session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new") == 0
 
 
 @pytest.mark.asyncio
 async def test_cas_helper_rowcount_none_is_zero() -> None:
     session = _cas_session(None)
-    assert (
-        await consume_break_glass_credential(
-            session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new"
-        )
-        == 0
-    )
+    assert await consume_break_glass_credential(session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new") == 0
 
 
 @pytest.mark.asyncio
@@ -328,9 +311,7 @@ async def test_cas_helper_emits_raw_update_with_shared_live_predicate() -> None:
     """The CAS is a raw UPDATE against accounts whose WHERE is emitted from the
     shared builder, and it never touches updated_at (no TimestampMixin onupdate)."""
     session = _cas_session(1)
-    await consume_break_glass_credential(
-        session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new"
-    )
+    await consume_break_glass_credential(session, account_id=_USER_ID, current_password_hash="old", new_password_hash="new")
     stmt = session.execute.await_args.args[0]
     assert isinstance(stmt, TextClause)
     sql = str(stmt)

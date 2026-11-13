@@ -66,9 +66,7 @@ def test_input_hash_uses_compact_separators():
 def test_input_hash_default_str_for_non_serializable():
     """Non-JSON-serialisable values fall back to ``str`` instead of raising."""
     payload = {"ts": datetime(2024, 1, 1, tzinfo=UTC)}
-    expected = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
-    ).hexdigest()
+    expected = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     assert _input_hash(payload) == expected
     assert _input_hash(payload) == "691064efc26716e470ce0fc328efa5c98e3b82c67d8456481b0255e47b8a5bda"
 

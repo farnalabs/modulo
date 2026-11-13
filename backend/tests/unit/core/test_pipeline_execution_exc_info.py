@@ -28,9 +28,7 @@ async def test_resolve_result_status_read_failure() -> None:
     ):
         status = await pe._resolve_result_status(exec_result, MagicMock(), "run", "org", rid)
     assert status is None
-    log.warning.assert_called_once_with(
-        "run_executor_with_watchdog: could not read run status for %s", rid, exc_info=True
-    )
+    log.warning.assert_called_once_with("run_executor_with_watchdog: could not read run status for %s", rid, exc_info=True)
 
 
 async def test_resume_run_job_kwargs_stamp_failure() -> None:

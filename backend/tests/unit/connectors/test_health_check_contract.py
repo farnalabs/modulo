@@ -1367,9 +1367,7 @@ _HEALTH_SPECS = (
     _TEAMCITY,
 )
 
-_HEALTH_CASES: list[tuple[_HealthSpec, _HealthScenario]] = [
-    (spec, scenario) for spec in _HEALTH_SPECS for scenario in spec.scenarios
-]
+_HEALTH_CASES: list[tuple[_HealthSpec, _HealthScenario]] = [(spec, scenario) for spec in _HEALTH_SPECS for scenario in spec.scenarios]
 
 _CI_DOUBLES: list[tuple[str, Callable[[], object]]] = [
     ("buildkite", _BuildkiteTestDouble),

@@ -75,9 +75,7 @@ async def test_gh_health_check_fail(gh_runner):
 
 @respx.mock
 async def test_gh_trigger_run_workflow_dispatch(gh_runner):
-    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
-        return_value=httpx.Response(204)
-    )
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(return_value=httpx.Response(204))
     respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
         return_value=httpx.Response(
             200,
@@ -121,9 +119,7 @@ async def test_gh_trigger_run_unresolvable_run_fails_loud(gh_runner, monkeypatch
     from farna.connectors.ci_runner import github_actions as gh_mod
 
     monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
-    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
-        return_value=httpx.Response(204)
-    )
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(return_value=httpx.Response(204))
     runs_route = respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
         return_value=httpx.Response(200, json=["corrupt", "list"]),
     )
@@ -157,9 +153,7 @@ async def test_gh_trigger_run_never_hands_back_a_pre_dispatch_run(gh_runner, mon
     from farna.connectors.ci_runner import github_actions as gh_mod
 
     monkeypatch.setattr(gh_mod, "_LATEST_RUN_LOOKUP_RETRY_SECONDS", 0)
-    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(
-        return_value=httpx.Response(204)
-    )
+    respx.post("https://api.github.com/repos/owner/repo/actions/workflows/ci.yml/dispatches").mock(return_value=httpx.Response(204))
 
     previous_run = {
         "id": 111,
@@ -297,9 +291,7 @@ async def test_gh_get_run_status_invalid_id_raises(gh_runner):
 @respx.mock
 async def test_gh_get_run_logs(gh_runner):
     log_text = "line1\nline2\nline3\n"
-    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(
-        return_value=httpx.Response(200, text=log_text)
-    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(return_value=httpx.Response(200, text=log_text))
     logs = await gh_runner.get_run_logs("owner/repo/12345")
     assert len(logs.lines) == 3
     assert logs.lines[0] == "line1"
@@ -308,9 +300,7 @@ async def test_gh_get_run_logs(gh_runner):
 @respx.mock
 async def test_gh_get_run_logs_cursor_accumulates_offset(gh_runner):
     """next_cursor must keep the cumulative start_line offset, not reset it."""
-    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(
-        return_value=httpx.Response(200, text="line5\nline6\n")
-    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs/12345/logs").mock(return_value=httpx.Response(200, text="line5\nline6\n"))
     logs = await gh_runner.get_run_logs("owner/repo/12345", cursor="4")
     assert logs.lines == ["line5", "line6"]
     assert logs.next_cursor == "6"
@@ -361,9 +351,7 @@ async def test_gh_list_runs(gh_runner):
 @respx.mock
 async def test_gh_list_runs_corrupt_body_no_crash(gh_runner):
     """A corrupt/hostile non-dict body must degrade to an empty run list."""
-    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
-        return_value=httpx.Response(200, json=["not-a-dict"])
-    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(return_value=httpx.Response(200, json=["not-a-dict"]))
     runs = await gh_runner.list_runs(pipeline_id="owner/repo")
     assert runs == []
 
@@ -371,9 +359,7 @@ async def test_gh_list_runs_corrupt_body_no_crash(gh_runner):
 @respx.mock
 async def test_gh_list_runs_non_list_workflow_runs_no_crash(gh_runner):
     """A corrupt body placing a non-list in ``workflow_runs`` must fall back to an empty list."""
-    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(
-        return_value=httpx.Response(200, json={"workflow_runs": "corrupt"})
-    )
+    respx.get("https://api.github.com/repos/owner/repo/actions/runs").mock(return_value=httpx.Response(200, json={"workflow_runs": "corrupt"}))
     runs = await gh_runner.list_runs(pipeline_id="owner/repo")
     assert runs == []
 
@@ -409,9 +395,7 @@ async def test_gl_health_check_ok(gl_runner):
 
 @respx.mock
 async def test_gl_health_check_fail(gl_runner):
-    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get("https://gitlab.com/api/v4/projects?per_page=1").mock(return_value=httpx.Response(401, text="Unauthorized"))
     result = await gl_runner.health_check()
     assert result.ok is False
     assert "Authentication failed" in result.detail
@@ -525,12 +509,8 @@ async def test_gl_get_run_logs(gl_runner):
             ],
         )
     )
-    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(
-        return_value=httpx.Response(200, text="Build log line 1\nBuild log line 2\n")
-    )
-    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/222/trace").mock(
-        return_value=httpx.Response(200, text="Test log line 1\nTest log line 2\n")
-    )
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(return_value=httpx.Response(200, text="Build log line 1\nBuild log line 2\n"))
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/222/trace").mock(return_value=httpx.Response(200, text="Test log line 1\nTest log line 2\n"))
     logs = await gl_runner.get_run_logs("12345/67890")
     assert len(logs.lines) >= 6
     assert any("build" in line.lower() for line in logs.lines)
@@ -540,12 +520,8 @@ async def test_gl_get_run_logs(gl_runner):
 @respx.mock
 async def test_gl_get_run_logs_cursor_accumulates_offset(gl_runner):
     """next_cursor must add the previous cumulative offset, not reset it."""
-    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines/67890/jobs").mock(
-        return_value=httpx.Response(200, json=[{"id": 111, "name": "build"}])
-    )
-    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(
-        return_value=httpx.Response(200, text="line7\nline8\n")
-    )
+    respx.get("https://gitlab.com/api/v4/projects/12345/pipelines/67890/jobs").mock(return_value=httpx.Response(200, json=[{"id": 111, "name": "build"}]))
+    respx.get("https://gitlab.com/api/v4/projects/12345/jobs/111/trace").mock(return_value=httpx.Response(200, text="line7\nline8\n"))
     logs = await gl_runner.get_run_logs("12345/67890", cursor="5")
     assert logs.next_cursor == "9"
 

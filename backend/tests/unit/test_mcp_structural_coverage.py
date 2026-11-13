@@ -157,10 +157,7 @@ def test_registered_tool_names_equal_pinned_list() -> None:
 def test_every_registered_tool_is_scoped_or_read_only() -> None:
     registered = _registered_tool_names()
     for tool in registered:
-        assert tool in TOOL_SCOPE_REQUIREMENTS or tool in READ_ONLY_TOOLS, (
-            f"registered tool '{tool}' is neither permission-key mapped "
-            "nor on the read-only allowlist — it would be deny-by-default"
-        )
+        assert tool in TOOL_SCOPE_REQUIREMENTS or tool in READ_ONLY_TOOLS, f"registered tool '{tool}' is neither permission-key mapped nor on the read-only allowlist — it would be deny-by-default"
 
 
 def test_mutating_tools_all_have_permission_keys() -> None:
@@ -171,9 +168,7 @@ def test_mutating_tools_all_have_permission_keys() -> None:
 
 def test_read_only_tools_not_in_requirements() -> None:
     for tool in READ_ONLY_TOOLS:
-        assert tool not in TOOL_SCOPE_REQUIREMENTS, (
-            f"read-only tool '{tool}' should live on the allowlist, not the requirement map"
-        )
+        assert tool not in TOOL_SCOPE_REQUIREMENTS, f"read-only tool '{tool}' should live on the allowlist, not the requirement map"
 
 
 def test_scope_requirements_only_reference_registered_tools() -> None:
@@ -207,9 +202,7 @@ def test_every_registered_tool_has_a_valid_caller_scope_classification() -> None
     registered = _registered_tool_names()
     for tool in registered:
         classification = _classified_caller_scope(tool)
-        assert classification in _VALID_CLASSIFICATIONS, (
-            f"registered tool '{tool}' classified '{classification}' — must be one of {sorted(_VALID_CLASSIFICATIONS)}"
-        )
+        assert classification in _VALID_CLASSIFICATIONS, f"registered tool '{tool}' classified '{classification}' — must be one of {sorted(_VALID_CLASSIFICATIONS)}"
 
 
 def test_no_mutating_tool_classified_any_except_review_hitl_reachability_override() -> None:
@@ -224,10 +217,7 @@ def test_no_mutating_tool_classified_any_except_review_hitl_reachability_overrid
         if tool == "review_hitl":
             assert classification == _ANY
         else:
-            assert classification != _ANY, (
-                f"mutating tool '{tool}' classified '{_ANY}' — a mutating tool must never be "
-                "callable by every caller scope"
-            )
+            assert classification != _ANY, f"mutating tool '{tool}' classified '{_ANY}' — a mutating tool must never be callable by every caller scope"
 
 
 def test_caller_scope_requirements_reference_registered_tools() -> None:
@@ -243,9 +233,7 @@ def test_caller_scope_requirements_values_are_valid() -> None:
     from farna.core.mcp.scope_validator import CALLER_SCOPE_REQUIREMENTS
 
     for tool, classification in CALLER_SCOPE_REQUIREMENTS.items():
-        assert classification in _VALID_CLASSIFICATIONS, (
-            f"CALLER_SCOPE_REQUIREMENTS['{tool}'] = '{classification}' is not a valid classification"
-        )
+        assert classification in _VALID_CLASSIFICATIONS, f"CALLER_SCOPE_REQUIREMENTS['{tool}'] = '{classification}' is not a valid classification"
 
 
 def test_self_suffix_tools_are_registered_caller_scoped() -> None:
@@ -261,9 +249,7 @@ def test_self_suffix_tools_are_registered_caller_scoped() -> None:
         base = tool_key.split(":", 1)[0]
         registered = _registered_tool_names()
         assert base in registered, f".self tool '{base}' mapped but not registered"
-        assert classify_caller_scope(base, TOOL_SCOPE_REQUIREMENTS[tool_key]) == _CALLER_SCOPED, (
-            f".self tool '{tool_key}' must classify caller-scoped via the suffix derivation"
-        )
+        assert classify_caller_scope(base, TOOL_SCOPE_REQUIREMENTS[tool_key]) == _CALLER_SCOPED, f".self tool '{tool_key}' must classify caller-scoped via the suffix derivation"
 
 
 # ---------------------------------------------------------------------------
@@ -309,10 +295,7 @@ def test_account_row_lock_only_in_approved_sites() -> None:
     for path, source in iter_source_text(_SRC_ROOT):
         if pattern.search(source):
             found.add(path.relative_to(_SRC_ROOT))
-    assert found == _ACCOUNT_LOCK_ALLOWED, (
-        f"locked Account reads found outside the approved set: {sorted(map(str, found - _ACCOUNT_LOCK_ALLOWED))}; "
-        f"approved sites missing: {sorted(map(str, _ACCOUNT_LOCK_ALLOWED - found))}"
-    )
+    assert found == _ACCOUNT_LOCK_ALLOWED, f"locked Account reads found outside the approved set: {sorted(map(str, found - _ACCOUNT_LOCK_ALLOWED))}; approved sites missing: {sorted(map(str, _ACCOUNT_LOCK_ALLOWED - found))}"
 
 
 def test_account_preferences_writes_only_in_shared_helper() -> None:
@@ -325,10 +308,7 @@ def test_account_preferences_writes_only_in_shared_helper() -> None:
     for path, source in iter_source_text(_SRC_ROOT):
         if pattern.search(source):
             found.add(path.relative_to(_SRC_ROOT))
-    assert found == _PREFERENCES_WRITE_ALLOWED, (
-        f"direct Account.preferences writes found outside the shared helper: "
-        f"{sorted(map(str, found - _PREFERENCES_WRITE_ALLOWED))}"
-    )
+    assert found == _PREFERENCES_WRITE_ALLOWED, f"direct Account.preferences writes found outside the shared helper: {sorted(map(str, found - _PREFERENCES_WRITE_ALLOWED))}"
 
 
 def test_hitl_email_key_literal_confined_to_owner_and_reader() -> None:
@@ -340,9 +320,7 @@ def test_hitl_email_key_literal_confined_to_owner_and_reader() -> None:
     for path, text in iter_source_text(_SRC_ROOT):
         if '"hitl_email"' in text or "'hitl_email'" in text:
             found.add(path.relative_to(_SRC_ROOT))
-    assert found == _HITL_EMAIL_KEY_ALLOWED, (
-        f"'hitl_email' literal found outside the owner/reader pair: {sorted(map(str, found - _HITL_EMAIL_KEY_ALLOWED))}"
-    )
+    assert found == _HITL_EMAIL_KEY_ALLOWED, f"'hitl_email' literal found outside the owner/reader pair: {sorted(map(str, found - _HITL_EMAIL_KEY_ALLOWED))}"
 
 
 def test_create_api_key_classified_org_only() -> None:
@@ -439,11 +417,7 @@ def test_every_declared_system_admin_tool_is_enforced_by_the_shared_resolver() -
     declaration without the enforcement.
     """
     unenforced = _unenforced_system_admin_declarations(_system_admin_declared_tools())
-    assert not unenforced, (
-        f"declared system-admin tools with NO live enforcement in the shared "
-        f"resolver: {unenforced} — declare the tool in SYSTEM_ADMIN_TOOLS only "
-        f"when resolve_tool_access actually denies it without the claim"
-    )
+    assert not unenforced, f"declared system-admin tools with NO live enforcement in the shared resolver: {unenforced} — declare the tool in SYSTEM_ADMIN_TOOLS only when resolve_tool_access actually denies it without the claim"
 
 
 def test_structural_guard_catches_a_declaration_without_a_live_gate(
@@ -503,11 +477,7 @@ def test_system_admin_flag_is_inert_for_every_undeclared_tool() -> None:
                     kill_switch=True,
                     is_system_admin=False,
                 )
-                assert with_claim == without_claim, (
-                    f"tool '{tool}' decision changed with the system-admin flag "
-                    f"(role={role}, key_scope={key_scope}, auth_type={auth_type}); "
-                    f"it does not declare a requirement and must be unaffected"
-                )
+                assert with_claim == without_claim, f"tool '{tool}' decision changed with the system-admin flag (role={role}, key_scope={key_scope}, auth_type={auth_type}); it does not declare a requirement and must be unaffected"
 
 
 def test_system_admin_flag_is_read_only_by_the_shared_dispatch_wrapper() -> None:
@@ -520,12 +490,7 @@ def test_system_admin_flag_is_read_only_by_the_shared_dispatch_wrapper() -> None
     """
     path = _SRC_ROOT / "api" / "mcp_server.py"
     call_sites = len(re.findall(r"_ctx_is_system_admin_val\(\)", path.read_text(encoding="utf-8")))
-    assert call_sites == 2, (
-        f"expected exactly one _ctx_is_system_admin_val() call site (the shared "
-        f"wrapper) plus its definition in api/mcp_server.py, found {call_sites} — "
-        f"a per-tool system-admin gate has crept back in; enforce the "
-        f"requirement through SYSTEM_ADMIN_TOOLS instead"
-    )
+    assert call_sites == 2, f"expected exactly one _ctx_is_system_admin_val() call site (the shared wrapper) plus its definition in api/mcp_server.py, found {call_sites} — a per-tool system-admin gate has crept back in; enforce the requirement through SYSTEM_ADMIN_TOOLS instead"
 
 
 # ---------------------------------------------------------------------------
@@ -573,38 +538,14 @@ _RESOURCE_SCOPE_HELPER = "_resource_node_scope_error"
 # through it would newly impose the role/caller-scope/grant legs they have
 # never declared, so the node-scope leg is applied on its own.
 _TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT: dict[str, str] = {
-    "get_available_features": (
-        "legacy read-only plan/feature listing that declares no role/system-admin requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "get_integration_status": (
-        "legacy read-only connector/model-backend/trigger health summary; declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "get_pipeline_graph": (
-        "legacy read-only masked pipeline-graph read that declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "get_run_status": (
-        "legacy read-only run-status read that declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "list_pipelines": (
-        "legacy read-only pipeline list that declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "list_schemas": (
-        "legacy read-only schema list that declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "search_documentation": (
-        "static product-manifest search with no tenant data and no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
-    "validate_payload": (
-        "legacy read-only schema validation that declares no role requirement; "
-        "node allowed_tools enforced via _check_node_allowed_tools"
-    ),
+    "get_available_features": ("legacy read-only plan/feature listing that declares no role/system-admin requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "get_integration_status": ("legacy read-only connector/model-backend/trigger health summary; declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "get_pipeline_graph": ("legacy read-only masked pipeline-graph read that declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "get_run_status": ("legacy read-only run-status read that declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "list_pipelines": ("legacy read-only pipeline list that declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "list_schemas": ("legacy read-only schema list that declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "search_documentation": ("static product-manifest search with no tenant data and no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
+    "validate_payload": ("legacy read-only schema validation that declares no role requirement; node allowed_tools enforced via _check_node_allowed_tools"),
 }
 
 
@@ -638,11 +579,7 @@ _RESOURCE_TOOL_TWIN: dict[str, tuple[str, ...]] = {
 # must join one of these two maps — an unclassified resource fails the guard,
 # so a future duplicate of a gated tool cannot silently skip the helper.
 _RESOURCES_WITHOUT_TOOL_TWIN: dict[str, str] = {
-    "modulo://pipelines/{pipeline_id}/snapshots": (
-        "no gated tool lists a pipeline's snapshots: get_pipeline_diff only diffs "
-        "two identified snapshots and get_pipeline_graph returns the live graph; "
-        "this resource exposes snapshot ids/versions/tags, never graph content"
-    ),
+    "modulo://pipelines/{pipeline_id}/snapshots": ("no gated tool lists a pipeline's snapshots: get_pipeline_diff only diffs two identified snapshots and get_pipeline_graph returns the live graph; this resource exposes snapshot ids/versions/tags, never graph content"),
 }
 
 
@@ -739,12 +676,8 @@ def _build_call_graph() -> _CallGraph:
             if not isinstance(dec, ast.Call):
                 continue
             deco = dec.func
-            is_mcp_tool = (isinstance(deco, ast.Attribute) and deco.attr == "tool") or (
-                isinstance(deco, ast.Name) and deco.id == "tool"
-            )
-            is_mcp_resource = (isinstance(deco, ast.Attribute) and deco.attr == "resource") or (
-                isinstance(deco, ast.Name) and deco.id == "resource"
-            )
+            is_mcp_tool = (isinstance(deco, ast.Attribute) and deco.attr == "tool") or (isinstance(deco, ast.Name) and deco.id == "tool")
+            is_mcp_resource = (isinstance(deco, ast.Attribute) and deco.attr == "resource") or (isinstance(deco, ast.Name) and deco.id == "resource")
             if is_mcp_resource:
                 uri = dec.args[0].value if dec.args and isinstance(dec.args[0], ast.Constant) else None
                 if isinstance(uri, str):
@@ -783,12 +716,7 @@ def test_tools_not_routed_through_the_chokepoint_are_pinned() -> None:
     pinned: a future tool either gets wired, or is added here deliberately."""
     actual = _tools_not_reaching_chokepoint()
     pinned = set(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)
-    assert actual == pinned, (
-        f"the chokepoint-routing set changed — newly unrouted: "
-        f"{sorted(actual - pinned)}; newly routed "
-        f"(remove from the pinned exception set): "
-        f"{sorted(pinned - actual)}"
-    )
+    assert actual == pinned, f"the chokepoint-routing set changed — newly unrouted: {sorted(actual - pinned)}; newly routed (remove from the pinned exception set): {sorted(pinned - actual)}"
 
 
 def test_pinned_chokepoint_bypass_tools_carry_a_reason() -> None:
@@ -813,16 +741,8 @@ def test_every_chokepoint_bypassing_tool_enforces_node_allowed_tools() -> None:
     fails here.
     """
     graph = _build_call_graph()
-    missing = [
-        tool
-        for tool in sorted(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT)
-        if not graph.enforces_node_scope_under_own_name(tool)
-    ]
-    assert not missing, (
-        f"chokepoint-bypassing tools whose handler does not enforce node "
-        f"allowed_tools under their own name: {missing} — call "
-        f"{_NODE_SCOPE_HELPER}(<tool name>) at the top of the handler"
-    )
+    missing = [tool for tool in sorted(_TOOLS_NOT_ROUTED_THROUGH_CHOKEPOINT) if not graph.enforces_node_scope_under_own_name(tool)]
+    assert not missing, f"chokepoint-bypassing tools whose handler does not enforce node allowed_tools under their own name: {missing} — call {_NODE_SCOPE_HELPER}(<tool name>) at the top of the handler"
 
 
 def test_node_scope_guard_catches_a_handler_without_the_helper_call() -> None:
@@ -860,11 +780,7 @@ def test_every_resource_is_mapped_or_explicitly_unmapped() -> None:
     assert not overlap, f"resources both gated and exempted (ambiguous): {sorted(overlap)}"
     unclassified = _registered_resource_uris() - classified
     stale = classified - _registered_resource_uris()
-    assert not unclassified, (
-        f"unclassified MCP resources: {sorted(unclassified)} — map each to the "
-        f"gated tool whose data it exposes in _RESOURCE_TOOL_TWIN, or record why "
-        f"it has no tool twin in _RESOURCES_WITHOUT_TOOL_TWIN"
-    )
+    assert not unclassified, f"unclassified MCP resources: {sorted(unclassified)} — map each to the gated tool whose data it exposes in _RESOURCE_TOOL_TWIN, or record why it has no tool twin in _RESOURCES_WITHOUT_TOOL_TWIN"
     assert not stale, f"classification entries for resources that no longer exist: {sorted(stale)}"
 
 
@@ -898,17 +814,8 @@ def test_every_tool_backed_resource_enforces_node_allowed_tools() -> None:
     fails here as well as at runtime.
     """
     graph = _build_call_graph()
-    missing = [
-        f"{uri} (missing {tool})"
-        for uri, tools in sorted(_RESOURCE_TOOL_TWIN.items())
-        for tool in tools
-        if not graph.resource_enforces_node_scope(uri, tool)
-    ]
-    assert not missing, (
-        f"tool-backed resources that do not enforce a duplicated tool's node "
-        f"allowed_tools scope: {missing} — call {_NODE_SCOPE_HELPER}(<tool name>) "
-        f"at the top of the resource handler for EVERY declared twin"
-    )
+    missing = [f"{uri} (missing {tool})" for uri, tools in sorted(_RESOURCE_TOOL_TWIN.items()) for tool in tools if not graph.resource_enforces_node_scope(uri, tool)]
+    assert not missing, f"tool-backed resources that do not enforce a duplicated tool's node allowed_tools scope: {missing} — call {_NODE_SCOPE_HELPER}(<tool name>) at the top of the resource handler for EVERY declared twin"
 
 
 def test_resource_scope_adapter_routes_through_the_node_scope_leg() -> None:
@@ -957,10 +864,7 @@ def test_every_declared_system_admin_tool_routes_through_the_chokepoint() -> Non
     """
     graph = _build_call_graph()
     unwired = [tool for tool in sorted(_system_admin_declared_tools()) if not graph.reaches_chokepoint(tool)]
-    assert not unwired, (
-        f"declared system-admin tools whose handler never routes through "
-        f"{_CHOKEPOINT}: {unwired} — the declaration is silently unenforced"
-    )
+    assert not unwired, f"declared system-admin tools whose handler never routes through {_CHOKEPOINT}: {unwired} — the declaration is silently unenforced"
 
 
 def test_declared_system_admin_tools_are_gated_under_their_own_name() -> None:
@@ -974,10 +878,7 @@ def test_declared_system_admin_tools_are_gated_under_their_own_name() -> None:
     """
     graph = _build_call_graph()
     not_by_name = [tool for tool in sorted(_system_admin_declared_tools()) if not graph.gates_under_own_name(tool)]
-    assert not not_by_name, (
-        f"declared system-admin tools not gated under their own name: {not_by_name} — "
-        f"the call reaches {_CHOKEPOINT} but not with this tool's name"
-    )
+    assert not not_by_name, f"declared system-admin tools not gated under their own name: {not_by_name} — the call reaches {_CHOKEPOINT} but not with this tool's name"
 
 
 def test_structural_guard_catches_a_declaration_without_wiring(
@@ -1024,9 +925,7 @@ def test_public_views_are_derived_from_the_unified_registry() -> None:
     import farna.core.mcp.scope_validator as sv
 
     requirements = sv._TOOL_REQUIREMENTS
-    assert dict(sv.TOOL_SCOPE_REQUIREMENTS) == {
-        key: req.permission_key for key, req in requirements.items() if req.permission_key is not None
-    }
+    assert dict(sv.TOOL_SCOPE_REQUIREMENTS) == {key: req.permission_key for key, req in requirements.items() if req.permission_key is not None}
     assert frozenset(key for key, req in requirements.items() if req.permission_key is None) == sv.READ_ONLY_TOOLS
     assert frozenset(key for key, req in requirements.items() if req.system_admin) == sv.SYSTEM_ADMIN_TOOLS
 

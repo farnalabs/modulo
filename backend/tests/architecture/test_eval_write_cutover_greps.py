@@ -242,10 +242,7 @@ def test_from_run_does_not_return_501() -> None:
             insert_fn_body.append(line)
 
     body_text = "\n".join(insert_fn_body)
-    assert "set_rls_org" in body_text, (
-        "_insert_eval_definition (from-run path) must call set_rls_org before DB write "
-        "(501 RLS envelope bug regression)"
-    )
+    assert "set_rls_org" in body_text, "_insert_eval_definition (from-run path) must call set_rls_org before DB write (501 RLS envelope bug regression)"
 
 
 # ---------------------------------------------------------------------------

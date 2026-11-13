@@ -129,9 +129,7 @@ def _assert_bound_precedes_update(session: _PgSession, update_marker: str) -> in
     update_at = _update_statements(session, update_marker)
     assert bound_at, f"no transaction-local lock_timeout bound issued; statements={session.statements}"
     assert update_at, f"the writer's UPDATE never ran; statements={session.statements}"
-    assert bound_at[0] < update_at[0], (
-        f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
-    )
+    assert bound_at[0] < update_at[0], f"the bound must be set BEFORE the row lock (lock_timeout at {bound_at[0]}, UPDATE at {update_at[0]})"
     # SET LOCAL semantics: set_config(..., is_local => true).
     assert ", true)" in session.statements[bound_at[0]]
     # The value comes from the operator knob, not a hardcoded literal.
@@ -426,9 +424,7 @@ class TestSandboxIdStoreDeliberatelyUnbounded:
             attempt_key="run:run-1:node:n1:0",
             provider="e2b",
         )
-        assert not _bound_statements(session), (
-            f"the sandbox-id store must stay unbounded (FAR-1611); statements={session.statements}"
-        )
+        assert not _bound_statements(session), f"the sandbox-id store must stay unbounded (FAR-1611); statements={session.statements}"
         assert _update_statements(session, "UPDATE runs SET sandbox_dispatch_state")
 
     async def test_sandbox_id_store_propagates_a_lock_timeout(self) -> None:

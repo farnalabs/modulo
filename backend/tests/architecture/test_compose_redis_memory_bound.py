@@ -37,10 +37,7 @@ def _redis_command(path: Path, service: str) -> list[str]:
         compose = yaml.safe_load(fh)
     service_def = compose["services"][service]
     command = service_def.get("command")
-    assert isinstance(command, list), (
-        f"{path.relative_to(_REPO_ROOT)} services.{service}.command must be the list form "
-        "(a shell-form string would not pin the flags reliably)"
-    )
+    assert isinstance(command, list), f"{path.relative_to(_REPO_ROOT)} services.{service}.command must be the list form (a shell-form string would not pin the flags reliably)"
     return [str(part) for part in command]
 
 
@@ -52,15 +49,9 @@ def _redis_command(path: Path, service: str) -> list[str]:
 def test_shipped_redis_has_a_maxmemory_bound(compose_path: Path, service: str) -> None:
     """A shipped Redis without maxmemory is the FAR-2002 unbounded default."""
     command = _redis_command(compose_path, service)
-    assert "--maxmemory" in command, (
-        f"{compose_path.relative_to(_REPO_ROOT)} services.{service} sets no --maxmemory; "
-        "Redis would run noeviction and fail enqueue writes once the host fills (FAR-2002)"
-    )
+    assert "--maxmemory" in command, f"{compose_path.relative_to(_REPO_ROOT)} services.{service} sets no --maxmemory; Redis would run noeviction and fail enqueue writes once the host fills (FAR-2002)"
     maxmemory = command[command.index("--maxmemory") + 1]
-    assert maxmemory.startswith("${REDIS_MAXMEMORY:-"), (
-        f"{compose_path.relative_to(_REPO_ROOT)} services.{service} must default the bound while "
-        f"allowing an operator override, got {maxmemory!r}"
-    )
+    assert maxmemory.startswith("${REDIS_MAXMEMORY:-"), f"{compose_path.relative_to(_REPO_ROOT)} services.{service} must default the bound while allowing an operator override, got {maxmemory!r}"
 
 
 @pytest.mark.parametrize(
@@ -75,13 +66,6 @@ def test_shipped_redis_policy_only_evicts_repairable_keys(compose_path: Path, se
     and zset keys, which the reconciler cannot detect or repair.
     """
     command = _redis_command(compose_path, service)
-    assert "--maxmemory-policy" in command, (
-        f"{compose_path.relative_to(_REPO_ROOT)} services.{service} sets no --maxmemory-policy "
-        "(Redis's default policy is noeviction)"
-    )
+    assert "--maxmemory-policy" in command, f"{compose_path.relative_to(_REPO_ROOT)} services.{service} sets no --maxmemory-policy (Redis's default policy is noeviction)"
     policy = command[command.index("--maxmemory-policy") + 1]
-    assert policy.startswith("volatile-"), (
-        f"{compose_path.relative_to(_REPO_ROOT)} services.{service} uses policy {policy!r}; "
-        "only a volatile-* policy confines eviction to TTL-bearing job hashes the reconciler "
-        "can re-dispatch (FAR-2002)"
-    )
+    assert policy.startswith("volatile-"), f"{compose_path.relative_to(_REPO_ROOT)} services.{service} uses policy {policy!r}; only a volatile-* policy confines eviction to TTL-bearing job hashes the reconciler can re-dispatch (FAR-2002)"

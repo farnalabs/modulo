@@ -37,20 +37,12 @@ async def _setup_org(engine: AsyncEngine):
         )
         acc_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
         )
         pipe_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipe_id), "oid": str(org_id), "n": f"{slug}-pipe", "aid": str(acc_id)},
         )
     return org_id, acc_id, pipe_id
@@ -60,11 +52,7 @@ async def _insert_eval(engine, org_id, pipe_id, acc_id, node_id, eval_type="rege
     eval_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, account_id, "
-                "node_id, eval_type, config_json, version) "
-                "VALUES (:id, :oid, :pid, :aid, :nid, :et, '{}'::json, 1)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, account_id, node_id, eval_type, config_json, version) VALUES (:id, :oid, :pid, :aid, :nid, :et, '{}'::json, 1)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -81,10 +69,7 @@ async def _insert_gate(engine, org_id, eval_id, node_id, action="warn"):
     review_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                "action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version) VALUES (:id, :oid, :eid, :nid, :a, 1)"),
             {"id": str(review_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "a": action},
         )
     return review_id
@@ -106,11 +91,7 @@ async def _insert_decision_full(
     decision_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id, "
-                "resolved_action, error_detail, node_id, eval_result_id, run_id, policy_gate_version) "
-                "VALUES (:id, :oid, :pgid, :eid, :ra, :ed, :nid, :erid, :rid, :gv)"
-            ),
+            text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id, resolved_action, error_detail, node_id, eval_result_id, run_id, policy_gate_version) VALUES (:id, :oid, :pgid, :eid, :ra, :ed, :nid, :erid, :rid, :gv)"),
             {
                 "id": str(decision_id),
                 "oid": str(org_id),
@@ -144,9 +125,7 @@ class TestC8PayloadColumns:
     @pytest.mark.asyncio
     async def test_columns_present_in_schema(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as connection:
-            columns = await connection.run_sync(
-                lambda conn: {c["name"] for c in inspect(conn).get_columns("policy_gate_decisions")}
-            )
+            columns = await connection.run_sync(lambda conn: {c["name"] for c in inspect(conn).get_columns("policy_gate_decisions")})
         expected = {
             "resolved_action",
             "error_detail",
@@ -176,10 +155,7 @@ class TestC8PayloadColumns:
             row = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT resolved_action, error_detail, node_id, eval_result_id, run_id, "
-                            "policy_gate_version FROM policy_gate_decisions WHERE id = :id"
-                        ),
+                        text("SELECT resolved_action, error_detail, node_id, eval_result_id, run_id, policy_gate_version FROM policy_gate_decisions WHERE id = :id"),
                         {"id": str(did)},
                     )
                 )
@@ -200,19 +176,13 @@ class TestC8PayloadColumns:
         decision_id = uuid.uuid4()
         async with db_engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) "
-                    "VALUES (:id, :oid, :pgid, :eid)"
-                ),
+                text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id) VALUES (:id, :oid, :pgid, :eid)"),
                 {"id": str(decision_id), "oid": str(org_id), "pgid": str(review_id), "eid": str(eval_id)},
             )
             row = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT resolved_action, policy_gate_version, error_detail "
-                            "FROM policy_gate_decisions WHERE id = :id"
-                        ),
+                        text("SELECT resolved_action, policy_gate_version, error_detail FROM policy_gate_decisions WHERE id = :id"),
                         {"id": str(decision_id)},
                     )
                 )
@@ -248,9 +218,7 @@ class TestC9ResolvedActionCheck:
     @pytest.mark.asyncio
     async def test_check_constraint_present_in_schema(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as connection:
-            ck_names = await connection.run_sync(
-                lambda conn: {ck["name"] for ck in inspect(conn).get_check_constraints("policy_gate_decisions")}
-            )
+            ck_names = await connection.run_sync(lambda conn: {ck["name"] for ck in inspect(conn).get_check_constraints("policy_gate_decisions")})
         assert "ck_policy_gate_decisions_resolved_action" in ck_names
 
 
@@ -263,9 +231,7 @@ class TestC10EventIdentityUniquenessIndex:
     @pytest.mark.asyncio
     async def test_permanent_index_present_and_unique(self, db_engine: AsyncEngine) -> None:
         async with db_engine.connect() as connection:
-            indexes = await connection.run_sync(
-                lambda conn: {ix["name"]: ix for ix in inspect(conn).get_indexes("policy_gate_decisions")}
-            )
+            indexes = await connection.run_sync(lambda conn: {ix["name"]: ix for ix in inspect(conn).get_indexes("policy_gate_decisions")})
         assert "uq_policy_gate_decisions_eval_result_id" in indexes
         assert indexes["uq_policy_gate_decisions_eval_result_id"]["unique"] is True
         cols = indexes["uq_policy_gate_decisions_eval_result_id"]["column_names"]
@@ -275,9 +241,7 @@ class TestC10EventIdentityUniquenessIndex:
     async def test_temporary_bridge_index_is_gone(self, db_engine: AsyncEngine) -> None:
         """FAR-1108 chunk 8b replaced chunk 4's temporary bridge index."""
         async with db_engine.connect() as connection:
-            indexes = await connection.run_sync(
-                lambda conn: {ix["name"] for ix in inspect(conn).get_indexes("policy_gate_decisions")}
-            )
+            indexes = await connection.run_sync(lambda conn: {ix["name"] for ix in inspect(conn).get_indexes("policy_gate_decisions")})
         assert "ix_tmp_policy_gate_decisions_run_gate_result" not in indexes
 
     @pytest.mark.asyncio
@@ -408,10 +372,7 @@ class TestC1F1RowExistenceProof:
             row = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT resolved_action, error_detail, run_id, policy_gate_version "
-                            "FROM policy_gate_decisions WHERE id = :id"
-                        ),
+                        text("SELECT resolved_action, error_detail, run_id, policy_gate_version FROM policy_gate_decisions WHERE id = :id"),
                         {"id": str(decision_id)},
                     )
                 )
@@ -444,12 +405,7 @@ class TestC1F1OuterTransactionCommits:
         session_factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
         async with session_factory() as session, session.begin(), session.begin_nested():
             await session.execute(
-                text(
-                    "INSERT INTO policy_gate_decisions "
-                    "(id, organisation_id, policy_gate_id, eval_id, resolved_action, "
-                    "error_detail, node_id, run_id, policy_gate_version) "
-                    "VALUES (:id, :oid, :pgid, :eid, :ra, :ed, :nid, :rid, :gv)"
-                ),
+                text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id, resolved_action, error_detail, node_id, run_id, policy_gate_version) VALUES (:id, :oid, :pgid, :eid, :ra, :ed, :nid, :rid, :gv)"),
                 {
                     "id": str(uuid.uuid4()),
                     "oid": str(org_id),
@@ -465,9 +421,7 @@ class TestC1F1OuterTransactionCommits:
 
         # Read back with a fresh connection — proves outer transaction committed
         async with db_engine.begin() as conn:
-            result = await conn.execute(
-                text("SELECT COUNT(*) FROM policy_gate_decisions WHERE error_detail = 'outer_txn_test'")
-            )
+            result = await conn.execute(text("SELECT COUNT(*) FROM policy_gate_decisions WHERE error_detail = 'outer_txn_test'"))
             count = result.scalar()
         assert count == 1
 

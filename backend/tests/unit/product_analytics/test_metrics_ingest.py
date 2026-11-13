@@ -85,12 +85,8 @@ def client(mock_session: AsyncMock) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
     app.dependency_overrides[get_plan_context] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -452,7 +448,5 @@ class TestRouteSanitizer:
         # nested router tree or it would never match a registered template and
         # would degrade every api_error route to "unknown".
         payload = _inserted_payload(mock_session)
-        assert payload["route"] == "/api/v1/metrics/events", (
-            f"registered route template must be preserved, got {payload.get('route')!r}"
-        )
+        assert payload["route"] == "/api/v1/metrics/events", f"registered route template must be preserved, got {payload.get('route')!r}"
         assert payload["status"] == 500, "non-route fields must be preserved"

@@ -41,7 +41,7 @@ _ORG_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 def _make_settings() -> SimpleNamespace:
     return SimpleNamespace(
-        modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@localhost:5432/modulo",
+        modulo_break_glass_database_url="postgresql+asyncpg://bg:bg@localhost:5432/farna_control",
         modulo_break_glass_secret="p" * 32,
         modulo_break_glass_standby_secret="s" * 32,
         modulo_break_glass_ttl_minutes=60,
@@ -468,13 +468,13 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_control_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value="function-ref")),
             ]
         )
         result = await smoke(session)
         assert result["connectivity"] == "ok"
-        assert result["session_user"] == "farna_breakglass"
+        assert result["session_user"] == "farna_control_breakglass"
 
     async def test_probe_returns_wrong_value(self) -> None:
         session = _mock_session()
@@ -490,7 +490,7 @@ class TestSmoke:
                 MagicMock(scalar_one=MagicMock(return_value="postgres")),
             ]
         )
-        with pytest.raises(SmokeFailureError, match="farna_breakglass"):
+        with pytest.raises(SmokeFailureError, match="farna_control_breakglass"):
             await smoke(session)
 
     async def test_function_missing(self) -> None:
@@ -498,7 +498,7 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_control_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value=None)),
             ]
         )
@@ -601,7 +601,7 @@ class TestEngineSslPosture:
     @pytest.mark.parametrize(
         ("url", "expected_ssl"),
         [
-            pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo", False, id="no-sslmode-explicit-false"),
+            pytest.param("postgresql+asyncpg://bg:bg@h:5432/farna_control", False, id="no-sslmode-explicit-false"),
             pytest.param("postgresql+asyncpg://bg:bg@h:5432/modulo?sslmode=disable", False, id="disable-explicit-false"),
         ],
     )

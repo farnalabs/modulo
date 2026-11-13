@@ -238,9 +238,7 @@ def test_get_providers_success(api: tuple[TestClient, AsyncMock], monkeypatch: p
         pytest.param(123, None, id="non-list"),
     ],
 )
-def test_get_providers_scopes_validator(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, scopes: object, expected: object
-) -> None:
+def test_get_providers_scopes_validator(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, scopes: object, expected: object) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "list_providers", AsyncMock(return_value=[_provider(scopes=scopes)]))
     resp = client.get("/api/v1/admin/sso/providers")
@@ -263,9 +261,7 @@ _MASKED_SECRET = "\u2022\u2022\u2022\u2022\u2022\u2022"
         pytest.param(b"raw-bytes", _MASKED_SECRET, id="bytes"),
     ],
 )
-def test_get_providers_client_secret_validator(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, secret: object, expected: object
-) -> None:
+def test_get_providers_client_secret_validator(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, secret: object, expected: object) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "list_providers", AsyncMock(return_value=[_provider(client_secret=secret)]))
     resp = client.get("/api/v1/admin/sso/providers")
@@ -273,9 +269,7 @@ def test_get_providers_client_secret_validator(
     assert resp.json()[0]["client_secret"] == expected
 
 
-def test_get_providers_client_secret_unsupported_type_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_providers_client_secret_unsupported_type_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """A corrupted row (non-str secret) fails response serialisation as 500."""
     client, _ = api
     monkeypatch.setattr(admin_sso, "list_providers", AsyncMock(return_value=[_provider(client_secret=123)]))
@@ -284,9 +278,7 @@ def test_get_providers_client_secret_unsupported_type_500(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_get_providers_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_get_providers_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "list_providers", AsyncMock(side_effect=exc))
     resp = client.get("/api/v1/admin/sso/providers")
@@ -315,9 +307,7 @@ def test_create_provider_value_error_409(api: tuple[TestClient, AsyncMock], monk
     assert resp.json()["detail"] == "bad config"
 
 
-def test_create_provider_integrity_error_provider_id_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_provider_integrity_error_provider_id_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("duplicate key uq_sso_providers_provider_id"))
     monkeypatch.setattr(admin_sso, "create_provider", AsyncMock(side_effect=exc))
@@ -326,9 +316,7 @@ def test_create_provider_integrity_error_provider_id_409(
     assert "provider ID" in resp.json()["detail"]
 
 
-def test_create_provider_integrity_error_name_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_provider_integrity_error_name_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("duplicate key value violates unique constraint"))
     monkeypatch.setattr(admin_sso, "create_provider", AsyncMock(side_effect=exc))
@@ -338,9 +326,7 @@ def test_create_provider_integrity_error_name_409(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_create_provider_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_create_provider_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "create_provider", AsyncMock(side_effect=exc))
     resp = client.post("/api/v1/admin/sso/providers", json=_create_payload())
@@ -380,9 +366,7 @@ def test_update_provider_value_error_409(api: tuple[TestClient, AsyncMock], monk
     assert resp.status_code == 409
 
 
-def test_update_provider_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_update_provider_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("duplicate key"))
     monkeypatch.setattr(admin_sso, "update_provider", AsyncMock(side_effect=exc))
@@ -392,9 +376,7 @@ def test_update_provider_integrity_error_409(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_update_provider_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_update_provider_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "update_provider", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}", json={"name": "Renamed"})
@@ -411,9 +393,7 @@ def test_delete_provider_not_found_404(api: tuple[TestClient, AsyncMock], monkey
     assert resp.status_code == 404
 
 
-def test_delete_provider_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_provider_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("fk violation"))
     monkeypatch.setattr(admin_sso, "delete_provider", AsyncMock(side_effect=exc))
@@ -422,9 +402,7 @@ def test_delete_provider_integrity_error_409(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_delete_provider_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_delete_provider_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "delete_provider", AsyncMock(side_effect=exc))
     resp = client.delete(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}")
@@ -449,9 +427,7 @@ def test_toggle_provider_success(api: tuple[TestClient, AsyncMock], monkeypatch:
     assert resp.json()["enabled"] is False
 
 
-def test_toggle_provider_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_toggle_provider_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("fk violation"))
     monkeypatch.setattr(admin_sso, "toggle_provider", AsyncMock(side_effect=exc))
@@ -460,9 +436,7 @@ def test_toggle_provider_integrity_error_409(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_toggle_provider_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_toggle_provider_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "toggle_provider", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/toggle")
@@ -481,10 +455,7 @@ def _patch_oidc_fetch(
 ) -> MagicMock:
     validate = AsyncMock(side_effect=validate_error) if validate_error else AsyncMock()
     monkeypatch.setattr(admin_sso, "validate_outbound_url_async", validate)
-    if client_error is not None:
-        fetch = AsyncMock(side_effect=client_error)
-    else:
-        fetch = AsyncMock(return_value=client if client is not None else _http_client())
+    fetch = AsyncMock(side_effect=client_error) if client_error is not None else AsyncMock(return_value=client if client is not None else _http_client())
     monkeypatch.setattr(admin_sso, "pinned_async_client", fetch)
     return fetch
 
@@ -503,9 +474,7 @@ def _oidc_provider(**overrides: object) -> MagicMock:
     return _provider(provider_type="oidc", **overrides)
 
 
-def test_test_connection_provider_missing_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_provider_missing_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=None))
     resp = client.post(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/test")
@@ -513,9 +482,7 @@ def test_test_connection_provider_missing_404(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_test_connection_db_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_test_connection_db_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(side_effect=exc))
     resp = client.post(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/test")
@@ -534,9 +501,7 @@ def test_test_connection_oidc_success(api: tuple[TestClient, AsyncMock], monkeyp
     assert data["provider_info"]["client_id_validated"] is True
 
 
-def test_test_connection_oidc_missing_discovery_url(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_oidc_missing_discovery_url(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=_oidc_provider(discovery_url=None)))
     resp = client.post(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/test")
@@ -568,9 +533,7 @@ def test_test_connection_oidc_fetch_failure(api: tuple[TestClient, AsyncMock], m
     assert data["message"] == "Failed to fetch discovery document"
 
 
-def test_test_connection_oidc_missing_authorization_endpoint(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_oidc_missing_authorization_endpoint(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=_oidc_provider()))
     _patch_oidc_fetch(monkeypatch, client=_http_client(get_json={"issuer": "https://idp"}))
@@ -581,9 +544,7 @@ def test_test_connection_oidc_missing_authorization_endpoint(
     assert "authorization_endpoint" in data["message"]
 
 
-def test_test_connection_generic_exception_reported(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_generic_exception_reported(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=_oidc_provider()))
     _patch_oidc_fetch(monkeypatch, client_error=RuntimeError("explode"))
@@ -601,9 +562,7 @@ def _saml_provider(**overrides: object) -> MagicMock:
     return _provider(provider_type="saml", **overrides)
 
 
-def test_test_connection_saml_success_with_metadata_xml(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_success_with_metadata_xml(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=_SAML_XML_WITH_BINDING)
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -616,9 +575,7 @@ def test_test_connection_saml_success_with_metadata_xml(
     assert data["provider_info"]["certificates"][0]["use"] == "signing"
 
 
-def test_test_connection_saml_redirect_binding_fallback(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_redirect_binding_fallback(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=_SAML_XML_NO_BINDING)
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -629,9 +586,7 @@ def test_test_connection_saml_redirect_binding_fallback(
     assert data["provider_info"]["sso_url"] == "https://idp.example.com/sso-post"
 
 
-def test_test_connection_saml_no_metadata_422_message(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_no_metadata_422_message(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=None, metadata_url=None)
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -642,9 +597,7 @@ def test_test_connection_saml_no_metadata_422_message(
     assert "Metadata URL or Metadata XML is required" in data["message"]
 
 
-def test_test_connection_saml_metadata_url_fetch_success(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_metadata_url_fetch_success(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=None, metadata_url="https://idp.example.com/metadata")
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -656,9 +609,7 @@ def test_test_connection_saml_metadata_url_fetch_success(
     assert data["provider_info"]["entity_id"] == "https://idp.example.com/entity"
 
 
-def test_test_connection_saml_metadata_url_ssrf_rejected(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_metadata_url_ssrf_rejected(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=None, metadata_url="https://idp.example.com/metadata")
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -670,9 +621,7 @@ def test_test_connection_saml_metadata_url_ssrf_rejected(
     assert "Rejected" in data["message"]
 
 
-def test_test_connection_saml_metadata_url_fetch_failure(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_metadata_url_fetch_failure(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=None, metadata_url="https://idp.example.com/metadata")
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -695,9 +644,7 @@ def test_test_connection_saml_invalid_xml(api: tuple[TestClient, AsyncMock], mon
     assert "Failed to parse metadata XML" in data["message"]
 
 
-def test_test_connection_saml_no_sso_descriptor(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_test_connection_saml_no_sso_descriptor(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     provider = _saml_provider(metadata_xml=_SAML_XML_NO_DESCRIPTOR)
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(return_value=provider))
@@ -737,9 +684,7 @@ def test_set_group_mappings_not_found_404(api: tuple[TestClient, AsyncMock], mon
     assert resp.status_code == 404
 
 
-def test_set_group_mappings_integrity_error_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_group_mappings_integrity_error_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     exc = IntegrityError("stmt", {}, Exception("fk violation"))
     monkeypatch.setattr(admin_sso, "set_group_mappings", AsyncMock(side_effect=exc))
@@ -751,9 +696,7 @@ def test_set_group_mappings_integrity_error_409(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_set_group_mappings_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_set_group_mappings_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "set_group_mappings", AsyncMock(side_effect=exc))
     resp = client.put(
@@ -781,9 +724,7 @@ def test_get_group_mappings_not_found_404(api: tuple[TestClient, AsyncMock], mon
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_get_group_mappings_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_get_group_mappings_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_sso, "get_provider", AsyncMock(side_effect=exc))
     resp = client.get(f"/api/v1/admin/sso/providers/{_PROVIDER_ID}/group-mappings")

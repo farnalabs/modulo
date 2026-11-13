@@ -93,11 +93,7 @@ def _make_settings(modulo_dev_mode: bool = True, modulo_license_key: str = "") -
 
 def _sign_license_payload(payload: dict[str, Any], private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 

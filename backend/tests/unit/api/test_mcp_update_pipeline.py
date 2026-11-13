@@ -67,9 +67,7 @@ class TestUpdatePipeline(_AuthContext):
         ms._ctx_team_id.set(_TEAM_A)
         try:
             with patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_B)):
-                result = await ms.update_pipeline(
-                    pipeline_id=str(_PIPELINE_ID), environment_profile_id=str(_PROFILE_ID)
-                )
+                result = await ms.update_pipeline(pipeline_id=str(_PIPELINE_ID), environment_profile_id=str(_PROFILE_ID))
         finally:
             ms._ctx_team_id.set(None)
         assert result["error"] == "team_boundary_violation"

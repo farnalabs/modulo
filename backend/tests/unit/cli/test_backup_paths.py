@@ -439,9 +439,7 @@ class TestPreviewRestore:
     def test_key_changed_with_previous_key_lines(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         settings = self._settings()
         settings.fernet_key = "new-key"
-        (tmp_path / "credentials_references.json").write_text(
-            '{"model_backends": [{"credentials_ciphertext": "aa"}, {"credentials_ciphertext": ""}]}'
-        )
+        (tmp_path / "credentials_references.json").write_text('{"model_backends": [{"credentials_ciphertext": "aa"}, {"credentials_ciphertext": ""}]}')
         manifest = {"fernet_key_hash": "old-hash"}
         with patch(
             "farna.cli.backup._fernet_key_hash",

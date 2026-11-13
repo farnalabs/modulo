@@ -3,7 +3,7 @@
 The backend is the SOLE bucketing authority: day/hour/ISO-week bucketing and
 zero-fill happen in the shared service (``modulo.core.analytics.service``),
 never on the client. Tenant isolation relies on the EXPLICIT
-``organisation_id = :org`` predicate injected by the SQL builder (modulo_app is
+``organisation_id = :org`` predicate injected by the SQL builder (farna_control_app is
 NOBYPASSRLS on Postgres and the ORM tenant filter is NOT registered there) — RLS
 via ``set_rls_org`` is a further defense-in-depth, and the explicit predicate is
 the control on the analytics writes. Every request sets a
@@ -918,15 +918,7 @@ async def _scan_body(
     pre-stream errors (validation/rate-limit/migration/database) as a proper
     HTTP status; it is re-emitted here so no row is lost.
     """
-    if format == "csv":
-        body = reemit_primed_stream(
-            stream,
-            first,
-            lambda item: _csv_stream_line(header=False, item=item),
-            header=_csv_stream_line(header=True),
-        )
-    else:
-        body = reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
+    body = reemit_primed_stream(stream, first, lambda item: _csv_stream_line(header=False, item=item), header=_csv_stream_line(header=True)) if format == "csv" else reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
     async for chunk in body:
         yield chunk
 

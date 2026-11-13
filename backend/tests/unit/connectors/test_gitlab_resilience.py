@@ -390,9 +390,7 @@ async def test_query_429_exhausted_surfaces_request_id(connector):
 @respx.mock
 async def test_health_check_401_surfaces_request_id(connector):
     """Health-check failures should include the request id when GitLab reports one."""
-    respx.get(f"{_API}/user").mock(
-        return_value=httpx.Response(401, text="unauthorized", headers={"X-Request-Id": "req_401"})
-    )
+    respx.get(f"{_API}/user").mock(return_value=httpx.Response(401, text="unauthorized", headers={"X-Request-Id": "req_401"}))
     result = await connector.health_check()
     assert result.ok is False
     assert "req_401" in result.detail
@@ -402,13 +400,9 @@ async def test_health_check_401_surfaces_request_id(connector):
 async def test_self_hosted_health_check_reports_version(connector):
     """Self-hosted health checks report the instance version for diagnostics."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "myuser"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(200, json={"version": "16.9.2-ee", "revision": "deadbeef"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(200, json={"version": "16.9.2-ee", "revision": "deadbeef"}))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
@@ -419,13 +413,9 @@ async def test_self_hosted_health_check_reports_version(connector):
 async def test_self_hosted_health_check_version_probe_failure_non_fatal(connector):
     """A failing /version probe must not fail the health check (diagnostic only)."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "myuser"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(403, json={"error": "forbidden"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(403, json={"error": "forbidden"}))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
@@ -436,13 +426,9 @@ async def test_self_hosted_health_check_version_probe_failure_non_fatal(connecto
 async def test_self_hosted_health_check_version_probe_non_object_body_non_fatal(connector):
     """A 2xx /version probe with a non-object JSON body must not fail the health check."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "myuser"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
-    respx.get("https://gitlab.example.com/api/v4/version").mock(
-        return_value=httpx.Response(200, json=["unexpected", "array"])
-    )
+    respx.get("https://gitlab.example.com/api/v4/version").mock(return_value=httpx.Response(200, json=["unexpected", "array"]))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))
     result = await custom.health_check()
     assert result.ok is True
@@ -453,9 +439,7 @@ async def test_self_hosted_health_check_version_probe_non_object_body_non_fatal(
 async def test_self_hosted_health_check_version_probe_network_error_non_fatal(connector):
     """A network error on the version probe must not fail the health check."""
     custom = GitLabConnector(token=TOKEN, base_url="https://gitlab.example.com/api/v4")
-    respx.get("https://gitlab.example.com/api/v4/user").mock(
-        return_value=httpx.Response(200, json={"username": "myuser"})
-    )
+    respx.get("https://gitlab.example.com/api/v4/user").mock(return_value=httpx.Response(200, json={"username": "myuser"}))
     respx.get("https://gitlab.example.com/api/v4/projects").mock(return_value=httpx.Response(200, json=[{"id": 1}]))
     respx.get("https://gitlab.example.com/api/v4/version").mock(side_effect=httpx.ConnectError("Connection refused"))
     respx.get(_SELF_TOKEN_INFO).mock(return_value=httpx.Response(200, json=_FULL_SCOPES))

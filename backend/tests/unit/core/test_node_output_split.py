@@ -59,9 +59,7 @@ def _sandbox_envelope(
     }
     if extra_telemetry:
         inner.update(extra_telemetry)
-    outer = {
-        key: value for key, value in inner.items() if key not in ("output_json", "changed_files", "pr_url", "exit_code")
-    }
+    outer = {key: value for key, value in inner.items() if key not in ("output_json", "changed_files", "pr_url", "exit_code")}
     return {
         "artifacts": [{"node_id": "sandbox-1", "status": status, "output": inner}],
         "output": outer,
@@ -291,11 +289,7 @@ def test_split_dispatch_failure_without_provenance_keys_is_a_noop() -> None:
 
 def test_split_gate_approved() -> None:
     decision = {"action": "approved"}
-    envelope = {
-        "artifacts": [
-            {"node_id": "hitl_review_a_b", "status": "interrupted", "result": "approved", "human_data": decision}
-        ]
-    }
+    envelope = {"artifacts": [{"node_id": "hitl_review_a_b", "status": "interrupted", "result": "approved", "human_data": decision}]}
     value, telemetry = split_node_output(envelope, NODE_TYPE_GATE, None)
     assert value == decision
     assert telemetry["status"] == "interrupted"
@@ -329,20 +323,14 @@ def test_split_gate_deliver_manual_pinned() -> None:
 
 def test_split_gate_detected_by_shape_without_type() -> None:
     decision = {"action": "rejected"}
-    envelope = {
-        "artifacts": [
-            {"node_id": "hitl_review_x_y", "status": "interrupted", "result": "rejected", "human_data": decision}
-        ]
-    }
+    envelope = {"artifacts": [{"node_id": "hitl_review_x_y", "status": "interrupted", "result": "rejected", "human_data": decision}]}
     value, telemetry = split_node_output(envelope, None, None)
     assert value == decision
     assert telemetry["result"] == "rejected"
 
 
 def test_split_gate_no_human_data_returns_none() -> None:
-    envelope = {
-        "artifacts": [{"node_id": "hitl_review_a_b", "status": "auto_approved", "autonomy": "fully_autonomous"}]
-    }
+    envelope = {"artifacts": [{"node_id": "hitl_review_a_b", "status": "auto_approved", "autonomy": "fully_autonomous"}]}
     value, telemetry = split_node_output(envelope, NODE_TYPE_GATE, None)
     assert value is None
     assert telemetry["status"] == "auto_approved"
@@ -875,6 +863,4 @@ def test_split_node_output_never_yields_a_legacy_row_for_splittable_types() -> N
         outputs_present = "n" in merged_outputs
         telemetry_present = "n" in merged_telemetry
         assert telemetry_present is True, f"writer dropped the telemetry side for {node_type}"
-        assert stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present) is False, (
-            node_type
-        )
+        assert stored_row_is_legacy(outputs_present=outputs_present, telemetry_present=telemetry_present) is False, node_type

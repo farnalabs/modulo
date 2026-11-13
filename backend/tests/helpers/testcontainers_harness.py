@@ -122,10 +122,7 @@ class ContainerHandle:
     @property
     def base_url(self) -> str:
         if self.host_port is None:
-            raise Tier1bFixtureError(
-                f"container {self.spec.image} was started without a port mapping "
-                "(container_port=None); base_url is not addressable"
-            )
+            raise Tier1bFixtureError(f"container {self.spec.image} was started without a port mapping (container_port=None); base_url is not addressable")
         return f"http://127.0.0.1:{self.host_port}"
 
     def exec(self, args: list[str], user: str | None = None, *, timeout_seconds: float | None = None) -> str:
@@ -275,9 +272,7 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
         # every dependent test instead of skipping it (observed on PR #773).
         with contextlib.suppress(Exception):
             container.stop()
-        raise Tier1bFixtureError(
-            f"Fixture {spec.image!r} could not be started on this Docker host: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise Tier1bFixtureError(f"Fixture {spec.image!r} could not be started on this Docker host: {type(exc).__name__}: {exc}") from exc
 
     # An image pull/start failure is retried when it is transient: the
     # container is configured once above (re-configuring would duplicate the
@@ -293,10 +288,7 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
             with contextlib.suppress(Exception):
                 container.stop()
             if not transient or attempt == TIER1B_START_ATTEMPTS:
-                raise Tier1bFixtureError(
-                    f"Fixture {spec.image!r} could not be started on this Docker host "
-                    f"after {attempt} attempt(s): {type(exc).__name__}: {exc}"
-                ) from exc
+                raise Tier1bFixtureError(f"Fixture {spec.image!r} could not be started on this Docker host after {attempt} attempt(s): {type(exc).__name__}: {exc}") from exc
             logger.warning(
                 "Tier 1b fixture %r failed to start (attempt %d/%d, transient): %s: %s - retrying",
                 spec.image,
@@ -337,10 +329,7 @@ def start_tier1b_container(spec: ContainerSpec) -> ContainerHandle:
                 logs_tail = ""
                 with contextlib.suppress(Exception):
                     logs_tail = f"\n--- {spec.image!r} container logs (tail) ---\n{handle.logs(tail=40)}"
-                raise Tier1bFixtureError(
-                    f"Fixture {spec.image!r} did not become ready within "
-                    f"{spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}{logs_tail}"
-                )
+                raise Tier1bFixtureError(f"Fixture {spec.image!r} did not become ready within {spec.ready_timeout_seconds:.0f}s. Last probe failure: {last_reason}{logs_tail}")
         return handle
     except Exception:  # teardown must fire on ANY failure above (pytest.skip's Skipped is an Exception subclass)
         with contextlib.suppress(Exception):

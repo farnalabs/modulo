@@ -120,9 +120,7 @@ async def test_query_single_issue_with_fields(connector):
     with respx.mock:
         issue = {"id": "1-1", "idReadable": "PRJ-42"}
         respx.get(f"{_BASE}/issues/PRJ-42").mock(return_value=httpx.Response(200, json=issue))
-        result = await connector.query(
-            ConnectorQuery(resource="issue", filters={"issue_id": "PRJ-42", "fields": "id,idReadable"})
-        )
+        result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_id": "PRJ-42", "fields": "id,idReadable"}))
     assert len(result.records) == 1
 
 

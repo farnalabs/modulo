@@ -362,9 +362,7 @@ class TestDeleteComponent:
     def test_delete_happy_path(self, client: TestClient) -> None:
         comp = _make_component()
         with ExitStack() as stack:
-            stack.enter_context(
-                patch(f"{_PREFIX}soft_delete_cost_component", new_callable=AsyncMock, return_value=comp)
-            )
+            stack.enter_context(patch(f"{_PREFIX}soft_delete_cost_component", new_callable=AsyncMock, return_value=comp))
             stack.enter_context(_rls_cm())
             stack.enter_context(patch(f"{_PREFIX}append_audit_event", new_callable=AsyncMock))
             resp = client.delete(f"/api/v1/admin/costs/components/{_COMPONENT_ID}")
@@ -372,9 +370,7 @@ class TestDeleteComponent:
 
     def test_delete_not_found_returns_404(self, client: TestClient) -> None:
         with ExitStack() as stack:
-            stack.enter_context(
-                patch(f"{_PREFIX}soft_delete_cost_component", new_callable=AsyncMock, return_value=None)
-            )
+            stack.enter_context(patch(f"{_PREFIX}soft_delete_cost_component", new_callable=AsyncMock, return_value=None))
             stack.enter_context(_rls_cm())
             resp = client.delete(f"/api/v1/admin/costs/components/{_COMPONENT_ID}")
         assert resp.status_code == 404

@@ -218,7 +218,7 @@ async def _scope_app_session_org(
 ) -> uuid.UUID | None:
     """Scope the app session RLS for JIT writes and return the ``default_org_id``.
 
-    The app session runs as ``modulo_app`` (NOBYPASSRLS), so the JIT writes
+    The app session runs as ``farna_control_app`` (NOBYPASSRLS), so the JIT writes
     (Account / OrgMembership) must be RLS-scoped to the org the user is being
     provisioned into. When a DB provider was resolved (its ``organisation_id``
     is the org owning that provider), scope to it and return it as the default
@@ -685,10 +685,10 @@ async def _read_system_oidc_provider(
     system_session: AsyncSession | None,
     provider_id: str,
 ) -> SsoProvider | None:
-    """Global (cross-org) OIDC provider read via the ``modulo_system`` role.
+    """Global (cross-org) OIDC provider read via the ``farna_control_system`` role.
 
     Returns ``None`` when the system role is unprovisioned (falls back to the
-    regular engine running as ``modulo_app`` NOBYPASSRLS, which returns zero
+    regular engine running as ``farna_control_app`` NOBYPASSRLS, which returns zero
     rows) or the provider genuinely does not exist.
     """
     if system_session is None:
@@ -745,7 +745,7 @@ async def _oidc_config_from_db_provider(
     return (
         db_provider.client_id,
         # NOSCOPE: instance-global OIDC IdP config, NOT tenant data. The
-        # provider is read through the modulo_system role (BYPASSRLS) for
+        # provider is read through the farna_control_system role (BYPASSRLS) for
         # pre-auth SSO routes that carry no user/org claim, so there is no
         # per-request RLS org to bind the decrypt to — org-scoping here would
         # be a cross-context error, not a hardening gain. Kept on the pure
@@ -769,7 +769,7 @@ async def _resolve_oidc_provider(
 
     The pre-auth SSO routes have no user/org claim. Provider config is
     instance-global (not tenant data), so the primary read goes through the
-    ``modulo_system`` role (BYpassRLS) which sees every org. When the system
+    ``farna_control_system`` role (BYpassRLS) which sees every org. When the system
     read returns nothing (system role unprovisioned -> zero rows, or the
     provider genuinely absent), we fall back to the app session scoped to the
     first org (single-org self-hosted behaviour) before the env-var fallback.
@@ -823,7 +823,7 @@ async def oidc_get_authorize_url(
 
     Resolves IdP config from the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var providers for backward
-    compatibility. Provider resolution uses the system session (``modulo_system``
+    compatibility. Provider resolution uses the system session (``farna_control_system``
     role, instance-global) so multi-org deployments resolve the correct provider
     regardless of org; the app session is used only for the single-org fallback.
 
@@ -1046,7 +1046,7 @@ async def oidc_process_callback(
 ) -> dict[str, str]:
     """Exchange auth code for tokens, JIT provision account, return JWT pair.
 
-    Provider resolution uses the system session (``modulo_system`` role,
+    Provider resolution uses the system session (``farna_control_system`` role,
     instance-global) so the correct provider is resolved across orgs. JIT
     provisioning writes via the app session, RLS-scoped to the resolved
     provider's org (or the first-org fallback for the env/single-org path).
@@ -1241,7 +1241,7 @@ def _decode_id_token_claims(id_token: str) -> dict[str, object]:
 
 
 async def _read_system_saml_provider(system_session: AsyncSession | None) -> SsoProvider | None:
-    """Global (cross-org) SAML provider read via the ``modulo_system`` role.
+    """Global (cross-org) SAML provider read via the ``farna_control_system`` role.
 
     Returns ``None`` when the system role is unprovisioned (returns zero rows)
     or no enabled SAML provider exists. Pre-auth SAML is a single-provider flow,
@@ -1257,7 +1257,7 @@ async def _read_system_saml_provider_by_slug(
     system_session: AsyncSession | None,
     provider_id: str,
 ) -> SsoProvider | None:
-    """Global (cross-org) SAML provider read by slug via the ``modulo_system`` role.
+    """Global (cross-org) SAML provider read by slug via the ``farna_control_system`` role.
 
     Returns ``None`` when the system role is unprovisioned (zero rows), the slug
     does not match any provider, or the matched provider is not an enabled SAML
@@ -1284,7 +1284,7 @@ async def _resolve_saml_provider(
     provider globally (legacy single-tenant convenience).
 
     The pre-auth SAML routes have no user/org claim. IdP config is
-    instance-global, so the primary read goes through the ``modulo_system`` role
+    instance-global, so the primary read goes through the ``farna_control_system`` role
     (BYPASSRLS) which sees every org. When the system read returns nothing, fall
     back to the app session scoped to the first org (single-org self-hosted
     behaviour). Returns ``None`` when no DB row applies, so the caller can use
@@ -1336,10 +1336,7 @@ async def _saml_config_from_db(
     # Per-provider entity_id default (FAR-1001): when the DB provider
     # has no entity_id set, default to {public_url}/saml/{provider_id}
     # for per-provider routes, or the legacy env setting for singleton.
-    if provider_id is not None:
-        default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}"
-    else:
-        default_entity = settings.modulo_saml_entity_id or "modulo"
+    default_entity = f"{get_public_url(settings).rstrip('/')}/api/v1/auth/saml/{provider_id}" if provider_id is not None else settings.modulo_saml_entity_id or "modulo"
     entity_id = db_saml.entity_id or default_entity
     sp_key = settings.modulo_saml_sp_private_key or None
     sp_cert = settings.modulo_saml_sp_x509_cert or None
@@ -1432,7 +1429,7 @@ async def saml_get_auth_url(
 
     Resolves IdP config through the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var config for backward
-    compatibility. Provider resolution uses the system session (``modulo_system``
+    compatibility. Provider resolution uses the system session (``farna_control_system``
     role, instance-global) so multi-org deployments resolve the correct IdP.
     """
     idp_metadata, entity_id, sp_key, sp_cert, _db_saml = await _resolve_saml_config(system_session, app_session, settings, provider_id=provider_id)
@@ -1626,7 +1623,7 @@ async def saml_process_response(
 
     Resolves IdP metadata from the sso_providers DB table first (preferred, since
     the admin UI writes there); falls back to env-var config for backward
-    compatibility. Provider resolution uses the system session (``modulo_system``
+    compatibility. Provider resolution uses the system session (``farna_control_system``
     role, instance-global); JIT provisioning writes via the app session,
     RLS-scoped to the resolved provider's org (or first-org fallback).
 

@@ -83,10 +83,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"{label}-{account_id.hex[:12]}@example.com",
@@ -94,10 +91,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -326,9 +320,7 @@ async def test_contended_clone_degrades_to_a_bounded_409(
         detail = resp.json()["detail"]
         assert "Timed out waiting for a lock" in detail, detail
         # The wait really happened (it did not resolve instantly)...
-        assert elapsed >= expected_seconds * 0.5, (
-            f"the clone returned after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
-        )
+        assert elapsed >= expected_seconds * 0.5, f"the clone returned after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
         # ...and it was really BOUNDED (the holder never released the lock).
         assert elapsed < bounded_ceiling, f"the clone did NOT degrade - {elapsed:.2f}s for a held source-row lock"
     finally:

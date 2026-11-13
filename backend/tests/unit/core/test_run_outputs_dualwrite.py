@@ -338,18 +338,11 @@ async def _seed_run(
 ) -> None:
     async with maker() as session, session.begin():
         await session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, 'mark-run-failed org', :slug, '{}', '{}')"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, 'mark-run-failed org', :slug, '{}', '{}')"),
             {"id": org_id_text or organisation_id.hex, "slug": f"mark-run-failed-{organisation_id.hex[:12]}"},
         )
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, :tok, 0)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, :tok, 0)"),
             {
                 "id": run_id_text or run_id.hex,
                 "oid": org_id_text or organisation_id.hex,
@@ -852,9 +845,7 @@ class TestRedisHelpers:
         with patch("farna.core.run_outputs_dualwrite._open_redis", return_value=client):
             count = await _redis_incr_window("k", 60)
         assert count == 1
-        assert client.expire_calls == [{"key": "k", "ttl": 60, "nx": True}], (
-            "the NX expiry-in-gap heal must run after every increment"
-        )
+        assert client.expire_calls == [{"key": "k", "ttl": 60, "nx": True}], "the NX expiry-in-gap heal must run after every increment"
 
     @pytest.mark.asyncio
     async def test_incr_window_failure_between_set_and_incr_still_expires(self) -> None:

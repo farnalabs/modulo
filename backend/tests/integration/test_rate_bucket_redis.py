@@ -247,12 +247,8 @@ async def test_shared_budget_enforced_across_workers_real_redis(
     redis_prefix: str,
 ) -> None:
     """Two limiter instances (two workers) share ONE real Redis budget."""
-    a = PerDestinationRateLimiter(
-        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix
-    )
-    b = PerDestinationRateLimiter(
-        rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix
-    )
+    a = PerDestinationRateLimiter(rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix)
+    b = PerDestinationRateLimiter(rate=0.0001, burst=3, redis_client=redis_client, tenant_id="org-1", key_prefix=redis_prefix)
     results: list[bool] = []
     for _ in range(5):
         results.append(await a.consume("api.example.com/x"))
@@ -267,12 +263,8 @@ async def test_per_tenant_budgets_separated_real_redis(
     redis_prefix: str,
 ) -> None:
     """Different tenants get independent shared budgets for the same destination."""
-    tenant_a = PerDestinationRateLimiter(
-        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-A", key_prefix=redis_prefix
-    )
-    tenant_b = PerDestinationRateLimiter(
-        rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-B", key_prefix=redis_prefix
-    )
+    tenant_a = PerDestinationRateLimiter(rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-A", key_prefix=redis_prefix)
+    tenant_b = PerDestinationRateLimiter(rate=0.0001, burst=2, redis_client=redis_client, tenant_id="org-B", key_prefix=redis_prefix)
     for _ in range(2):
         assert await tenant_a.consume("dest") is True
     assert await tenant_a.consume("dest") is False  # org-A exhausted

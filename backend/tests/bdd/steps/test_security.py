@@ -111,9 +111,7 @@ def check_fernet_token(saved_credential: dict[str, Any]) -> None:
     # A valid Fernet token can be decoded without error.
     f = Fernet(saved_credential["fernet_key"])
     decrypted = f.decrypt(token)
-    assert decrypted == saved_credential["plaintext"].encode(), (
-        f"Round-trip mismatch: got {decrypted!r}, expected {saved_credential['plaintext']!r}"
-    )
+    assert decrypted == saved_credential["plaintext"].encode(), f"Round-trip mismatch: got {decrypted!r}, expected {saved_credential['plaintext']!r}"
 
 
 @then(
@@ -166,12 +164,8 @@ def attempt_decrypt(credential_key_a: dict[str, Any], wrong_key: bytes) -> Excep
 
 @then("attempting to decrypt raises InvalidToken")
 def check_invalid_token(decrypt_error: Exception | None) -> None:
-    assert decrypt_error is not None, (
-        "Expected InvalidToken when decrypting with wrong key, but no exception was raised"
-    )
-    assert isinstance(decrypt_error, InvalidToken), (
-        f"Expected InvalidToken, got {type(decrypt_error).__name__}: {decrypt_error}"
-    )
+    assert decrypt_error is not None, "Expected InvalidToken when decrypting with wrong key, but no exception was raised"
+    assert isinstance(decrypt_error, InvalidToken), f"Expected InvalidToken, got {type(decrypt_error).__name__}: {decrypt_error}"
 
 
 # ===========================================================================
@@ -336,17 +330,13 @@ def step_access_pipelines(org: str, client, alt_org_client, mock_session):
 
     test_client = alt_org_client if org == "other-org" else client
     with patch("farna.api.routes.pipelines.list_pipelines") as mock_list:
-        mock_list.return_value = SimpleNamespace(
-            items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False
-        )
+        mock_list.return_value = SimpleNamespace(items=[], total=0, page=1, page_size=20, next_cursor=None, has_more=False)
         return test_client.get("/api/v1/pipelines")
 
 
 @then("the response status is 200")
 def step_status_200(pipeline_response) -> None:
-    assert pipeline_response.status_code == 200, (
-        f"Expected 200, got {pipeline_response.status_code}: {pipeline_response.text}"
-    )
+    assert pipeline_response.status_code == 200, f"Expected 200, got {pipeline_response.status_code}: {pipeline_response.text}"
 
 
 # -- Scenario: Cross-org pipeline access returns 404 ------------------------
@@ -367,9 +357,7 @@ def step_access_cross_org_pipeline(pipeline_id: str, org: str, alt_org_client, m
 
 @then("the response status is 404")
 def step_status_404(pipeline_response) -> None:
-    assert pipeline_response.status_code == 404, (
-        f"Expected 404, got {pipeline_response.status_code}: {pipeline_response.text}"
-    )
+    assert pipeline_response.status_code == 404, f"Expected 404, got {pipeline_response.status_code}: {pipeline_response.text}"
 
 
 # -- Scenario: Unauthenticated request returns 401 --------------------------
@@ -383,9 +371,7 @@ def step_unauthenticated_access(unauth_client):
 
 @then("the response status is 401")
 def step_status_401(pipeline_response) -> None:
-    assert pipeline_response.status_code == 401, (
-        f"Expected 401, got {pipeline_response.status_code}: {pipeline_response.text}"
-    )
+    assert pipeline_response.status_code == 401, f"Expected 401, got {pipeline_response.status_code}: {pipeline_response.text}"
 
 
 # -- Scenario: Viewer role cannot create pipelines --------------------------
@@ -411,9 +397,7 @@ def step_viewer_create_pipeline(name: str, viewer_client):
 
 @then("the viewer pipeline creation is rejected")
 def step_viewer_rejected(create_response) -> None:
-    assert create_response.status_code == 403, (
-        f"Expected 403 for viewer, got {create_response.status_code}: {create_response.text}"
-    )
+    assert create_response.status_code == 403, f"Expected 403 for viewer, got {create_response.status_code}: {create_response.text}"
 
 
 # -- Scenario: RLS context requires an active transaction -------------------

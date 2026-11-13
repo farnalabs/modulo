@@ -80,17 +80,9 @@ _BASELINE_HEADER = """\
 # fails on a stale entry so this list can only shrink.
 """
 
-_ROUTE_HINT = (
-    'add dependencies=[Depends(audited("<event_type>", "<resource_type>", '
-    "principal_dep=<the route's principal dependency>))] to the route, "
-    "then regenerate the baseline with: uv run python scripts/audit_coverage.py --update"
-)
+_ROUTE_HINT = 'add dependencies=[Depends(audited("<event_type>", "<resource_type>", principal_dep=<the route\'s principal dependency>))] to the route, then regenerate the baseline with: uv run python scripts/audit_coverage.py --update'
 
-_MCP_HINT = (
-    'add @mcp_audited("<event_type>", "<resource_type>", fail_closed=...) directly under '
-    "@mcp.tool(...) on the tool (fail-closed for destructive/credential tools), "
-    "then regenerate the baseline with: uv run python scripts/audit_coverage.py --update"
-)
+_MCP_HINT = 'add @mcp_audited("<event_type>", "<resource_type>", fail_closed=...) directly under @mcp.tool(...) on the tool (fail-closed for destructive/credential tools), then regenerate the baseline with: uv run python scripts/audit_coverage.py --update'
 
 
 def _called_name(func: ast.expr) -> str | None:
@@ -271,12 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     mcp_violations = set(unannotated) - route_violations
     total_routes = _count_mutating_routes()
     total_mcp_tools = _count_mutating_mcp_tools()
-    print(
-        f"audit-coverage: {total_routes} mutating route(s), "
-        f"{total_routes - len(route_violations)} audited; "
-        f"{total_mcp_tools} mutating MCP tool(s), {total_mcp_tools - len(mcp_violations)} audited; "
-        f"baseline {len(baseline)}"
-    )
+    print(f"audit-coverage: {total_routes} mutating route(s), {total_routes - len(route_violations)} audited; {total_mcp_tools} mutating MCP tool(s), {total_mcp_tools - len(mcp_violations)} audited; baseline {len(baseline)}")
 
     if stale_entries:
         print(f"\n{len(stale_entries)} baseline entr(ies) are now annotated — regenerate the baseline:")
@@ -309,9 +296,7 @@ def _count_mutating_routes(routes_dir: Path = ROUTES_DIR) -> int:
         except (SyntaxError, OSError, UnicodeDecodeError):  # pragma: no cover
             continue
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-                _is_mutating_route_decorator(d) for d in node.decorator_list
-            ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(_is_mutating_route_decorator(d) for d in node.decorator_list):
                 total += 1
     return total
 
@@ -322,13 +307,7 @@ def _count_mutating_mcp_tools(mcp_path: Path = MCP_SERVER_PATH) -> int:
         tree = ast.parse(mcp_path.read_text(encoding="utf-8"), filename=str(mcp_path))
     except (SyntaxError, OSError, UnicodeDecodeError):  # pragma: no cover
         return 0
-    return sum(
-        1
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and _is_mutating_mcp_tool(node.name)
-        and any(_is_mcp_tool_decorator(d) for d in node.decorator_list)
-    )
+    return sum(1 for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_mutating_mcp_tool(node.name) and any(_is_mcp_tool_decorator(d) for d in node.decorator_list))
 
 
 if __name__ == "__main__":

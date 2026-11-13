@@ -131,9 +131,7 @@ class TestPartialDistributionRegression:
         ],
         ids=["noul", "choice", "score"],
     )
-    def test_a_partial_distribution_errors_rather_than_renormalising(
-        self, question: dict[str, Any], payload: dict[str, Any]
-    ) -> None:
+    def test_a_partial_distribution_errors_rather_than_renormalising(self, question: dict[str, Any], payload: dict[str, Any]) -> None:
         judge, _ = _judge(json.dumps(payload))
 
         result = EvalEngine().evaluate_result({"output": "x"}, _eval_def(question), model_judge_callable=judge)

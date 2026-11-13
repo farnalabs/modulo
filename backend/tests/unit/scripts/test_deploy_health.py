@@ -253,9 +253,7 @@ def test_job_to_stage_matches_deploy_yml_display_names() -> None:
 
 def test_first_failed_job_in_deployment_order_wins() -> None:
     """An earlier failure is the blocker even when a later stage also failed."""
-    stage = health._classify_failure_stage(
-        _job_map(deploy_staging="success", integration_tests="failure", staging_e2e="failure")
-    )
+    stage = health._classify_failure_stage(_job_map(deploy_staging="success", integration_tests="failure", staging_e2e="failure"))
     assert stage == "integration_test"
 
 
@@ -567,9 +565,7 @@ def test_every_verdict_field_is_classified_as_an_input_or_derived() -> None:
     fields = set(health.Verdict.__dataclass_fields__)
 
     unclassified = sorted(fields - classified - health.DERIVED_VERDICT_FIELDS)
-    assert not unclassified, (
-        "verdict field(s) with no input classification and no DERIVED_VERDICT_FIELDS entry: " + ", ".join(unclassified)
-    )
+    assert not unclassified, "verdict field(s) with no input classification and no DERIVED_VERDICT_FIELDS entry: " + ", ".join(unclassified)
     dangling = sorted((classified | health.DERIVED_VERDICT_FIELDS) - fields)
     assert not dangling, "classification names verdict field(s) that do not exist: " + ", ".join(dangling)
     assert not (classified & health.DERIVED_VERDICT_FIELDS), "a verdict field cannot be both an input and derived"
@@ -585,10 +581,7 @@ def test_every_classified_input_exists_on_the_availability_record() -> None:
 def test_required_inputs_are_derived_from_the_classification() -> None:
     """The policy list is computed from the registry, so the two cannot drift."""
     assert {spec.classification for spec in health.INPUT_CLASSIFICATION} <= {health.REQUIRED, health.ADVISORY}
-    assert (
-        frozenset(spec.input_name for spec in health.INPUT_CLASSIFICATION if spec.classification == health.REQUIRED)
-        == health.REQUIRED_INPUTS
-    )
+    assert frozenset(spec.input_name for spec in health.INPUT_CLASSIFICATION if spec.classification == health.REQUIRED) == health.REQUIRED_INPUTS
     assert frozenset({"main_sha", "prod_sha", "deploy_runs"}) == health.REQUIRED_INPUTS
     # The advisory inputs must never block a verdict on their own.
     assert not ({"prod_build_ts", "deploy_jobs"} & health.REQUIRED_INPUTS)
@@ -1110,9 +1103,7 @@ def test_measured_step_shapes_drive_exactly_one_transition() -> None:
     """
     healthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="skipped"))
     unhealthy_previous = health.parse_previous_verdict(_measured_run(verdict_conclusion="failure"))
-    unmeasured_previous = health.parse_previous_verdict(
-        _jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8))
-    )
+    unmeasured_previous = health.parse_previous_verdict(_jobs(_api_step(health.UNKNOWN_VERDICT_STEP_NAME, "success", 8)))
 
     # unhealthy -> unhealthy: the incident is already open, so no second email.
     assert health.resolve_action(False, unhealthy_previous) == "none"

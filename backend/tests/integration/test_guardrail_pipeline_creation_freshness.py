@@ -53,10 +53,7 @@ async def _org_level_rows_for_pipeline(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT name FROM evals "
-                "WHERE organisation_id = :oid AND pipeline_id = :pid "
-                "AND eval_type = 'guardrail' AND node_id IS NULL AND deleted_at IS NULL "
-                "ORDER BY name",
+                "SELECT name FROM evals WHERE organisation_id = :oid AND pipeline_id = :pid AND eval_type = 'guardrail' AND node_id IS NULL AND deleted_at IS NULL ORDER BY name",
             ),
             {"oid": str(org_id), "pid": str(pipeline_id)},
         )

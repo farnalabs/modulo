@@ -45,9 +45,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {
                 "id": str(account_id),
@@ -57,8 +55,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -296,9 +293,7 @@ async def test_check_and_record_spend_enforces_org_limit(
         )
         await session.execute(text("SET session_replication_role = replica"))
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, 1, :hash, :cost)"  # noqa: E501
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, 'manual', :thread, 1, :hash, :cost)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org),
@@ -375,9 +370,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         await session.execute(text("SET session_replication_role = replica"))
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 1, :hash, :cost)"  # noqa: E501
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 1, :hash, :cost)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org),
@@ -410,9 +403,7 @@ async def test_check_and_record_spend_with_team_enforces_team_limit(
         )
         await session.execute(text("SET session_replication_role = replica"))
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 2, :hash, :cost)"  # noqa: E501
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, owner_team_id, trigger_type, langgraph_thread_id, run_number, input_hash, total_cost_usd) VALUES (:id, :oid, :pid, :sid, :tid, 'manual', :thread, 2, :hash, :cost)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org),
@@ -555,10 +546,7 @@ async def test_get_cost_report_by_team_resolves_soft_deleted_team_name(
         report = await get_cost_report(session, org_id=org, group_by="team", period="month")
 
     assert len(report) == 1, f"expected the single team row, got {report!r}"
-    assert report[0]["entity_name"] == "SoftDeleted Report Team", (
-        "a soft-deleted team's NAME must resolve on the historical cost report "
-        f"(not 'Unknown'), got {report[0]['entity_name']!r}"
-    )
+    assert report[0]["entity_name"] == "SoftDeleted Report Team", f"a soft-deleted team's NAME must resolve on the historical cost report (not 'Unknown'), got {report[0]['entity_name']!r}"
     assert report[0]["total_spend_usd"] == 42.0
 
 
@@ -628,9 +616,7 @@ async def test_unique_constraint_enforced(
         with pytest.raises(DBAPIError):
             await session.execute(
                 text(
-                    "INSERT INTO org_daily_run_counts "
-                    "(id, organisation_id, team_id, run_date, run_count, total_spend_usd) "
-                    "VALUES (:id, :oid, :tid, :d, 1, 0)",
+                    "INSERT INTO org_daily_run_counts (id, organisation_id, team_id, run_date, run_count, total_spend_usd) VALUES (:id, :oid, :tid, :d, 1, 0)",
                 ),
                 {
                     "id": str(uuid.uuid4()),

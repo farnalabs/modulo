@@ -69,10 +69,7 @@ async def _seed_org(
         org_settings.update(settings)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, CAST(:settings AS json))"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, CAST(:settings AS json))"),
             {
                 "id": str(org_id),
                 "name": name,
@@ -87,10 +84,7 @@ async def _seed_account(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -230,11 +224,7 @@ async def _seed_root_checkpoint(
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         await session.execute(
-            text(
-                "INSERT INTO checkpoints "
-                "(organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) "
-                "VALUES (:oid, :tid, '', :cid, CAST(:cp AS jsonb), CAST(:md AS jsonb))"
-            ),
+            text("INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) VALUES (:oid, :tid, '', :cid, CAST(:cp AS jsonb), CAST(:md AS jsonb))"),
             {
                 "oid": str(org_id),
                 "tid": thread_id,
@@ -388,11 +378,7 @@ async def test_gate_flag_on_default_caps_docker_tier_only(
     # The tier-less shape predates D8/FAR-995, so it is seeded as raw JSON —
     # build_dispatch_marker now requires an explicit provider.
     for _idx, provider in enumerate((None, None, None, RUNNER_PROVIDER_DOCKER)):
-        marker = (
-            json.dumps({"state": "dispatching", "attempt_key": f"run:x:node:n:{_idx}"})
-            if provider is None
-            else build_dispatch_marker(f"run:x:node:n:{_idx}", provider)
-        )
+        marker = json.dumps({"state": "dispatching", "attempt_key": f"run:x:node:n:{_idx}"}) if provider is None else build_dispatch_marker(f"run:x:node:n:{_idx}", provider)
         run_id = await _seed_run(db_engine, org_id, pipe, snap, marker=marker)
         _ = run_id
     # 2 e2b markers: NOT counted into the Docker-tier default bucket.
@@ -412,9 +398,7 @@ async def test_gate_flag_on_default_caps_docker_tier_only(
 
     # A 6th E2B dispatch is NOT denied (the default bucket is Docker-tier only).
     sixth = await _seed_run(db_engine, org_id, pipe, snap)
-    slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_id, run_id=str(sixth), claim_token=f"tok-{sixth.hex[:12]}", node_id="n1", provider="e2b"
-    )
+    slot = await acquire_runner_dispatch_slot(factory, org_id=org_id, run_id=str(sixth), claim_token=f"tok-{sixth.hex[:12]}", node_id="n1", provider="e2b")
     assert slot.status == "acquired"
 
 
@@ -433,12 +417,8 @@ async def test_gate_excludes_own_marker_on_redispatch(
     factory = async_sessionmaker(db_engine, expire_on_commit=False, autobegin=False)
 
     claim = "tok-self-1"
-    run_id = await _seed_run(
-        db_engine, org_id, pipe, snap, marker=build_dispatch_marker("old", "e2b"), claim_token=claim
-    )
-    slot = await acquire_runner_dispatch_slot(
-        factory, org_id=org_id, run_id=str(run_id), claim_token=claim, node_id="n1", provider="e2b"
-    )
+    run_id = await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("old", "e2b"), claim_token=claim)
+    slot = await acquire_runner_dispatch_slot(factory, org_id=org_id, run_id=str(run_id), claim_token=claim, node_id="n1", provider="e2b")
     assert slot.status == "acquired"
 
 
@@ -486,9 +466,7 @@ async def test_hitl_tombstone_is_written_and_capacity_neutral(
 
     claim = "tok-tomb"
     parked = await _seed_run(db_engine, org_id, pipe, snap, marker=build_dispatch_marker("k", "e2b"), claim_token=claim)
-    tombstoned = await mark_runner_dispatch_cleared_at_hitl(
-        factory, org_id=org_id, run_id=str(parked), claim_token=claim
-    )
+    tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=org_id, run_id=str(parked), claim_token=claim)
     assert tombstoned is True
     row = await _run_row(db_engine, org_id, parked)
     assert row["marker"] is not None
@@ -590,9 +568,7 @@ async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
 
     async def _dispatch_leg() -> str:
         try:
-            slot = await acquire_runner_dispatch_slot(
-                factory, org_id=org_id, run_id=str(run_id), claim_token=claim, node_id="n1", provider="e2b"
-            )
+            slot = await acquire_runner_dispatch_slot(factory, org_id=org_id, run_id=str(run_id), claim_token=claim, node_id="n1", provider="e2b")
             return slot.status
         except RunnerCapacityDeniedError:
             return "denied"
@@ -609,9 +585,7 @@ async def test_same_run_concurrent_dispatch_and_resume_no_deadlock(
                 )
                 await session.execute(text("SELECT pg_advisory_xact_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
                 await session.execute(
-                    text(
-                        "SELECT count(*) FROM runs WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL"
-                    ),
+                    text("SELECT count(*) FROM runs WHERE organisation_id = :oid AND sandbox_dispatch_state IS NOT NULL"),
                     {"oid": str(org_id)},
                 )
             return "resumed"
@@ -687,9 +661,7 @@ async def test_sweep_recoverable_runs_keep_markers(
     snap = await _seed_snapshot(db_engine, org_id, pipe)
     stale = datetime.now(UTC) - timedelta(minutes=30)
     marker = build_dispatch_marker("k", "e2b")
-    run_id = await _seed_run(
-        db_engine, org_id, pipe, snap, marker=marker, dispatcher="saq", heartbeat_at=stale, started_at=stale
-    )
+    run_id = await _seed_run(db_engine, org_id, pipe, snap, marker=marker, dispatcher="saq", heartbeat_at=stale, started_at=stale)
 
     await _sweep(db_engine)
     row = await _run_row(db_engine, org_id, run_id)
@@ -708,9 +680,7 @@ async def test_sweep_terminal_anomaly_codes_exempt(
     pipe = await _seed_pipeline(db_engine, org_id, "PipeAnom", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
     marker = build_dispatch_marker("k", "e2b")
-    run_id = await _seed_run(
-        db_engine, org_id, pipe, snap, status="failed", error_code="script.side_effect_unknown", marker=marker
-    )
+    run_id = await _seed_run(db_engine, org_id, pipe, snap, status="failed", error_code="script.side_effect_unknown", marker=marker)
 
     await _sweep(db_engine)
     row = await _run_row(db_engine, org_id, run_id)
@@ -760,9 +730,7 @@ async def test_sweep_clears_terminal_non_fence_and_transitions_stale_running(
     pipe = await _seed_pipeline(db_engine, org_id, "PipeClear", user_id)
     snap = await _seed_snapshot(db_engine, org_id, pipe)
 
-    terminal_run = await _seed_run(
-        db_engine, org_id, pipe, snap, status="complete", marker=build_dispatch_marker("k", "e2b")
-    )
+    terminal_run = await _seed_run(db_engine, org_id, pipe, snap, status="complete", marker=build_dispatch_marker("k", "e2b"))
     stale_running = await _seed_run(
         db_engine,
         org_id,
@@ -776,9 +744,7 @@ async def test_sweep_clears_terminal_non_fence_and_transitions_stale_running(
     # executor has a stale heartbeat_at, so seed that too.
     await _backdate_updated_at(db_engine, org_id, stale_running, hours=30)
     await _set_heartbeat(db_engine, org_id, stale_running, hours=30)
-    stale_tombstone = json.dumps(
-        {"state": "cleared_at_hitl", "written_at": (datetime.now(UTC) - timedelta(hours=30)).isoformat()}
-    )
+    stale_tombstone = json.dumps({"state": "cleared_at_hitl", "written_at": (datetime.now(UTC) - timedelta(hours=30)).isoformat()})
     stale_awaiting = await _seed_run(
         db_engine,
         org_id,
@@ -1016,9 +982,7 @@ async def test_gate_flag_off_population_matches_live_running_markers(
         )
 
     # Flag-off tombstone is a NO-OP: the marker survives the park untouched.
-    tombstoned = await mark_runner_dispatch_cleared_at_hitl(
-        factory, org_id=org_id, run_id=str(parked), claim_token=claim
-    )
+    tombstoned = await mark_runner_dispatch_cleared_at_hitl(factory, org_id=org_id, run_id=str(parked), claim_token=claim)
     assert tombstoned is False
     row = await _run_row(db_engine, org_id, parked)
     assert row["marker"] is not None
@@ -1420,12 +1384,7 @@ async def test_sweep_far1808_watchdog_write_noops_after_reclaim(
     async with factory() as session, session.begin():
         await set_rls_org(session, org_id)
         result = await session.execute(
-            text(
-                "UPDATE runs SET status = 'complete', completed_at = now() "
-                "WHERE id = :rid AND organisation_id = :oid "
-                "AND claim_token = :tok AND status = 'running' "
-                "RETURNING id"
-            ),
+            text("UPDATE runs SET status = 'complete', completed_at = now() WHERE id = :rid AND organisation_id = :oid AND claim_token = :tok AND status = 'running' RETURNING id"),
             {"rid": str(run_id), "oid": str(org_id), "tok": claim},
         )
         assert result.fetchone() is None, "the status guard must make the late write a no-op"

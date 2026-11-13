@@ -2,7 +2,7 @@
 
 Covers the pure derivation helpers extracted from the container-startup script:
 ``fix_database_url`` (async scheme conversion, per-family sslmode handling) and
-``derive_system_database_url`` (username swap to ``modulo_system``). The boot
+``derive_system_database_url`` (username swap to ``farna_control_system``). The boot
 side effects (env writes, the alembic_version bootstrap connection, /tmp file
 writes) are exercised only via ``main()``'s warning path with those side
 effects patched out.
@@ -36,32 +36,32 @@ def bootstrap_db():
     [
         # password containing @ — rpartition must split on the LAST @
         (
-            "postgresql+asyncpg://modulo:p@ss:word@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo_system:p@ss:word@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:p@ss:word@db.internal:5432/farna_control",
+            "postgresql+asyncpg://farna_control_system:p@ss:word@db.internal:5432/farna_control",
         ),
         # password with %40 escape
         (
-            "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/modulo",
-            "postgresql+asyncpg://modulo_system:p%40ss@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:p%40ss@db.internal:5432/farna_control",
+            "postgresql+asyncpg://farna_control_system:p%40ss@db.internal:5432/farna_control",
         ),
-        # no password — cannot derive a matching modulo_system credential
+        # no password — cannot derive a matching farna_control_system credential
         (
-            "postgresql+asyncpg://modulo@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo@db.internal:5432/farna_control",
             "",
         ),
         # explicit empty password (user:@host) — same as no password
         (
-            "postgresql+asyncpg://modulo:@db.internal:5432/modulo",
+            "postgresql+asyncpg://modulo:@db.internal:5432/farna_control",
             "",
         ),
         # query-string preserved unchanged
         (
             "postgresql+asyncpg://modulo:pw@db.internal:5432/modulo?connect_timeout=10",
-            "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?connect_timeout=10",
+            "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo?connect_timeout=10",
         ),
         # no userinfo@ separator — nothing to swap, returns empty (caller skips)
         (
-            "postgresql+asyncpg://db.internal:5432/modulo",
+            "postgresql+asyncpg://db.internal:5432/farna_control",
             "",
         ),
     ],
@@ -82,13 +82,13 @@ def test_main_warns_when_system_url_derivation_fails(
     # A DATABASE_URL with no usable password/userinfo cannot derive the system
     # URL; main() must warn (accurately — the real cause is missing userinfo,
     # not a missing password) instead of silently leaving system crons to fall
-    # back to modulo_app.
+    # back to farna_control_app.
     monkeypatch.setenv(
         "DATABASE_ADMIN_URL",
-        "postgresql+asyncpg://admin:pw@db.internal:5432/modulo",
+        "postgresql+asyncpg://admin:pw@db.internal:5432/farna_control",
     )
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/modulo")
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/farna_control")
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
 
     def _skip_bootstrap(coro) -> None:
         # Avoid the "coroutine was never awaited" RuntimeWarning (a CI error).
@@ -157,9 +157,9 @@ def test_fix_database_url_scheme_and_sslmode(
 
 
 def test_set_path_fixes_system_url_like_database_url(bootstrap_db) -> None:
-    # MODULO_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
-    set_url = "postgres://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require"
-    assert bootstrap_db.fix_database_url(set_url) == ("postgresql+asyncpg://modulo_system:s3cret@db.internal:5432/modulo?sslmode=require")
+    # FARNA_CONTROL_SYSTEM_DATABASE_URL set explicitly is fixed exactly like DATABASE_URL.
+    set_url = "postgres://farna_control_system:s3cret@db.internal:5432/modulo?sslmode=require"
+    assert bootstrap_db.fix_database_url(set_url) == ("postgresql+asyncpg://farna_control_system:s3cret@db.internal:5432/modulo?sslmode=require")
 
 
 def test_derivation_runs_on_the_fixed_database_url(bootstrap_db) -> None:
@@ -167,4 +167,4 @@ def test_derivation_runs_on_the_fixed_database_url(bootstrap_db) -> None:
     # from the fixed value (password and host/port preserved, username swapped).
     fixed = bootstrap_db.fix_database_url("postgres://modulo:pw@db.internal:5432/modulo?sslmode=require")
     derived = bootstrap_db.derive_system_database_url(fixed)
-    assert derived == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo?sslmode=require"
+    assert derived == "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo?sslmode=require"

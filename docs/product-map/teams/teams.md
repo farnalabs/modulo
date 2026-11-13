@@ -23,7 +23,6 @@ unit-tests:
   - backend/tests/unit/mcp/test_team_scope_enforcement.py
   - backend/tests/unit/api/test_mcp_set_resource_owner_team.py
   - backend/tests/integration/test_rls_isolation.py
-  - backend/tests/unit/db/test_migration_team_visibility_rls.py
   - backend/tests/architecture/test_team_scope_wiring.py
 bdd:
   - backend/tests/bdd/features/teams/team_create.feature
@@ -129,7 +128,6 @@ org profile, and is the product-map home for user roles.
       code runs, so extra request-time gates would be redundant transactions.
       Policy-DDL only, existence-guarded (idempotent), Postgres-only
       (`tests/integration/test_rls_isolation.py`,
-      `tests/unit/db/test_migration_team_visibility_rls.py`,
       `tests/architecture/test_team_scope_wiring.py`)
 - [x] MCP `set_resource_owner_team` (FAR-2298) sets or clears `owner_team_id` on a
       pipeline, model backend or connector (`resource_type`, `resource_id`,

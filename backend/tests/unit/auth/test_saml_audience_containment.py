@@ -44,16 +44,7 @@ def _get_cert_b64() -> str:
 
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test IdP")])
-        cert = (
-            x509.CertificateBuilder()
-            .subject_name(name)
-            .issuer_name(name)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(dt.datetime.now(dt.UTC))
-            .not_valid_after(dt.datetime.now(dt.UTC) + dt.timedelta(days=365))
-            .sign(key, hashes.SHA256())
-        )
+        cert = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(dt.datetime.now(dt.UTC)).not_valid_after(dt.datetime.now(dt.UTC) + dt.timedelta(days=365)).sign(key, hashes.SHA256())
         raw = cert.public_bytes(serialization.Encoding.PEM).decode()
         _CERT_B64 = "".join(line for line in raw.splitlines() if not line.startswith("-----"))
     return _CERT_B64

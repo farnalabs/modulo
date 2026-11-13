@@ -603,9 +603,7 @@ async def test_list_users_connection_error(connector):
 @respx.mock
 async def test_verify_scopes_ok(connector):
     respx.get("https://slack.com/api/auth.test").mock(
-        return_value=httpx.Response(
-            200, json={"ok": True, "user_id": "U001", "team": "T001", "url": "https://example.slack.com"}
-        ),
+        return_value=httpx.Response(200, json={"ok": True, "user_id": "U001", "team": "T001", "url": "https://example.slack.com"}),
     )
     result = await connector.verify_scopes()
     assert result["user_id"] == "U001"
@@ -1586,10 +1584,7 @@ async def test_query_message_search_non_finite_paging_does_not_crash(connector):
     respx.get("https://slack.com/api/search.messages").mock(
         return_value=httpx.Response(
             200,
-            text=(
-                '{"ok": true, "messages": {"matches": [{"ts": "123456", "text": "match", "user": "U001"}],'
-                ' "paging": {"count": 100, "total": 1, "page": 1e999, "pages": 1}}}'
-            ),
+            text=('{"ok": true, "messages": {"matches": [{"ts": "123456", "text": "match", "user": "U001"}], "paging": {"count": 100, "total": 1, "page": 1e999, "pages": 1}}}'),
         ),
     )
     result = await connector.query(

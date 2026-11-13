@@ -74,7 +74,7 @@ def test_promoted_bootstrap_main_writes_fixed_env_files(
     monkeypatch.setenv("DATABASE_URL", "postgres://app:pw@db.internal:5432/modulo")
     # Pre-registering via setenv guarantees monkeypatch restores whatever
     # main() writes directly into os.environ (it mutates the env, not a copy).
-    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
+    monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", "")
 
     def _skip_bootstrap(coro: Any) -> None:
         coro.close()  # avoid the "coroutine was never awaited" RuntimeWarning
@@ -90,18 +90,18 @@ def test_promoted_bootstrap_main_writes_fixed_env_files(
     # carries no sslmode; the system URL derives from the fixed DATABASE_URL.
     assert written["/tmp/database_admin_url.env"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
     assert written["/tmp/database_url.env"] == "postgresql+asyncpg://app:pw@db.internal:5432/modulo"
-    assert written["/tmp/system_database_url.env"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
+    assert written["/tmp/system_database_url.env"] == "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo"
     assert os.environ["DATABASE_ADMIN_URL"] == "postgresql+asyncpg://admin:pw@db.internal:5432/modulo?sslmode=require"
-    assert os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] == "postgresql+asyncpg://modulo_system:pw@db.internal:5432/modulo"
+    assert os.environ["FARNA_CONTROL_SYSTEM_DATABASE_URL"] == "postgresql+asyncpg://farna_control_system:pw@db.internal:5432/modulo"
 
 
 def test_promoted_main_warns_when_system_url_derivation_fails(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setenv("DATABASE_ADMIN_URL", "postgresql+asyncpg://admin:pw@db.internal:5432/modulo")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/modulo")
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_ADMIN_URL", "postgresql+asyncpg://admin:pw@db.internal:5432/farna_control")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://db.internal:5432/farna_control")
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
 
     def _skip_bootstrap(coro: Any) -> None:
         coro.close()
@@ -200,7 +200,7 @@ def _capture_connect(store: list[tuple[tuple[object, ...], dict[str, object]]]) 
 def _patch_bootstrap_env(monkeypatch: pytest.MonkeyPatch, admin_url: str) -> None:
     monkeypatch.setenv("DATABASE_ADMIN_URL", admin_url)
     monkeypatch.setenv("DATABASE_URL", "postgres://app:pw@db.internal:5432/modulo")
-    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
+    monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", "")
     monkeypatch.setattr(bootstrap_module, "_write_env_file", lambda _path, _content: None)
 
 
@@ -239,7 +239,7 @@ def test_promoted_main_passes_explicit_false_when_sslmode_disabled(
 def test_promoted_main_passes_no_ssl_kwarg_for_non_postgres_admin_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_bootstrap_env(monkeypatch, "mysql://admin:pw@db.internal:3306/modulo")
+    _patch_bootstrap_env(monkeypatch, "mysql://admin:pw@db.internal:3306/farna_control")
     captured: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr(bootstrap_module.asyncpg, "connect", _capture_connect(captured))
 

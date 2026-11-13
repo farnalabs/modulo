@@ -100,9 +100,7 @@ async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
         yield s
 
 
-def _seed_pipeline(
-    session: AsyncSession, *, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID, name: str = "pipeline"
-) -> None:
+def _seed_pipeline(session: AsyncSession, *, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID, name: str = "pipeline") -> None:
     session.add(Pipeline(id=pipeline_id, organisation_id=_ORG, name=name, account_id=_ACCOUNT, visibility="org"))
     session.add(
         PipelineSnapshot(
@@ -200,9 +198,7 @@ async def test_clean_run_with_guardrails_identical_to_no_guardrails(session: Asy
     # never written post-B1).
     for run in (with_gr, without_gr):
         assert run.started_at is None
-        store_rows = (
-            (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run.id))).scalars().all()
-        )
+        store_rows = (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run.id))).scalars().all()
         assert not store_rows
         assert run.claim_count == 0
         assert run.node_attempt_count == 0

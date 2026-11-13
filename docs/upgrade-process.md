@@ -181,7 +181,7 @@ For the operator upgrade itself:
 TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml pull modulo
 
 # 2. Restart with that immutable image (runs migrations on startup).
-TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d modulo
+TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d farna_control
 
 # 3. Verify migration completed and readiness is healthy.
 TAG=<new-version> docker compose -f deploy/compose/docker-compose.prod.yml logs modulo | grep -i alembic
@@ -271,7 +271,7 @@ The manual playbook. Run it when either trigger fires:
    smoke runs against the exact artifact before Merge Queue can bless it.
 4. **Operator-side recovery.** Any operator already holding the bad
    bundle restores from their pre-upgrade snapshot: the upgrade refusal
-   output prints the snapshot dir and the exact `modulo restore` command.
+   output prints the snapshot dir and the exact `farna-control restore` command.
 
 **Triggers rule:** if the canary is red and no customer report exists,
 treat 1-3 as REQUIRED, not optional - an endangered release stays listed

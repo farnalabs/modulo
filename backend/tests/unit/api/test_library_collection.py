@@ -267,9 +267,7 @@ class TestCreateCollectionEndpoint:
         assert data["manifest_pins"] == [{"slug": "my-schema", "version": "1.0"}]
         # The pins must be persisted under the CANONICAL ``manifest_pins`` key —
         # the one the install/upgrade readers look for — not the legacy ``pins``.
-        assert create_mock.call_args.kwargs["content_json"] == {
-            "manifest_pins": [{"slug": "my-schema", "version": "1.0"}]
-        }
+        assert create_mock.call_args.kwargs["content_json"] == {"manifest_pins": [{"slug": "my-schema", "version": "1.0"}]}
 
     def test_create_collection_duplicate_slug(self, client: TestClient) -> None:
         existing = _make_collection_primitive()
@@ -587,9 +585,7 @@ class TestPublishCollectionErrorPaths:
         ],
         ids=["501", "503", "500"],
     )
-    def test_publish_pin_lookup_db_error_maps_by_class_never_422(
-        self, client: TestClient, exc: Exception, expected: int
-    ) -> None:
+    def test_publish_pin_lookup_db_error_maps_by_class_never_422(self, client: TestClient, exc: Exception, expected: int) -> None:
         """FAR-1483: a pin-lookup DB failure is mapped by its class, never to 422.
 
         ``_lookup_pin_primitive`` used to swallow ``SQLAlchemyError`` and return
@@ -877,10 +873,7 @@ class TestInstallCollectionEndpoint:
         with patch(
             "farna.api.routes.library.install_collection",
             new_callable=AsyncMock,
-            side_effect=GitContentRefError(
-                "Agent 'Ref Agent' prompt_template git content ref "
-                "'git+https://github.com/org/repo#prompts/ref.md' is not pinned"
-            ),
+            side_effect=GitContentRefError("Agent 'Ref Agent' prompt_template git content ref 'git+https://github.com/org/repo#prompts/ref.md' is not pinned"),
         ):
             resp = client.post(
                 f"/api/v1/libraries/collections/{coll_id}/install",
@@ -2009,11 +2002,7 @@ class TestSeedPrReviewAgent:
         assert "pr" in agent.tags
         assert "github" in agent.tags
         assert agent.content_json["output_schema"] == "pr-review-decision"
-        github_refs = [
-            ref
-            for ref in agent.content_json["connector_type_refs"]
-            if isinstance(ref, dict) and ref.get("connector_type") == "github"
-        ]
+        github_refs = [ref for ref in agent.content_json["connector_type_refs"] if isinstance(ref, dict) and ref.get("connector_type") == "github"]
         assert github_refs, "PR Review Agent must declare a github connector type ref"
         assert "code_review" in github_refs[0]["capabilities"]
 

@@ -122,9 +122,7 @@ async def seed_suite(session, org_id: uuid.UUID) -> tuple[EvalSuite, EvalDataset
     return suite, dataset, [regex_def], backend
 
 
-async def seed_cases(
-    session, org_id: uuid.UUID, dataset: EvalDataset, payloads: list[dict[str, Any]]
-) -> list[EvalCase]:
+async def seed_cases(session, org_id: uuid.UUID, dataset: EvalDataset, payloads: list[dict[str, Any]]) -> list[EvalCase]:
     from farna.db.models.eval_dataset import compute_input_hash
 
     cases = []
@@ -170,9 +168,7 @@ async def test_execute_suite_run_executes_discovery_adapter_not_input_echo(sessi
 
     case = (await session.execute(select(EvalCase).where(EvalCase.dataset_id == dataset.id))).scalar_one()
     case.expected_output = expected
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
     stats = await execute_suite_run(session, run)
     await session.flush()
@@ -204,9 +200,7 @@ async def test_non_custom_definition_with_discovery_function_uses_declared_evalu
         _unexpected_discovery,
     )
 
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     stats = await execute_suite_run(session, run)
 
     assert stats["state"] == SuiteRunState.COMPLETED.value
@@ -251,11 +245,7 @@ async def test_execute_suite_run_completes_and_persists_results(session) -> None
     # ``suite_run_daily_spend_used`` pool sums is actually written.
     assert run.total_cost_usd == Decimal(0)
 
-    rows = list(
-        (
-            await session.execute(__import__("sqlalchemy").select(EvalResult).where(EvalResult.suite_run_id == run.id))
-        ).scalars()
-    )
+    rows = list((await session.execute(__import__("sqlalchemy").select(EvalResult).where(EvalResult.suite_run_id == run.id))).scalars())
     assert len(rows) == 2
     for row in rows:
         assert row.suite_run_id == run.id
@@ -269,9 +259,7 @@ async def test_execute_suite_run_rejects_empty_dataset(session) -> None:
     # A dataset with zero active cases is refused LOUDLY at construction — never
     # a silent pass (artifact contract).
     with pytest.raises(SuiteRunEmptyDatasetError, match="no active cases"):
-        await build_suite_run(
-            session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
 
 async def test_partial_run_keeps_one_row_per_definition_per_case(session) -> None:
@@ -298,9 +286,7 @@ async def test_partial_run_keeps_one_row_per_definition_per_case(session) -> Non
             raise JudgeExecutionError(JudgeErrorCode.JUDGE_UNAVAILABLE, "judge unavailable for this case")
         return {"passed": True, "score": 1.0, "detail": "ok"}
 
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
     stats = await execute_suite_run(session, run, model_judge_callable=_judge)
 
@@ -340,9 +326,7 @@ async def test_model_judge_without_callable_persists_error_and_fails_run(session
     await session.flush()
     suite.eval_definition_ids = [*suite.eval_definition_ids, str(judge_def.id)]
 
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
     stats = await execute_suite_run(session, run)
 
@@ -389,9 +373,7 @@ async def test_execute_suite_run_runs_model_judge_when_callable_provided(session
         calls.append(eval_def.id)
         return {"passed": True, "score": 0.66, "detail": "stub judge"}
 
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     stats = await execute_suite_run(session, run, model_judge_callable=_callable)
     await session.flush()
 
@@ -428,9 +410,7 @@ async def test_failure_sink_ingests_error_event(session, monkeypatch) -> None:
 
     monkeypatch.setattr("farna.core.error_tracking.ErrorIngestionService", _FakeIngestionService)
 
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     # No definitions -> orchestration error -> failure sink.
     for d in (await session.execute(__import__("sqlalchemy").select(Eval))).scalars():
         await session.delete(d)
@@ -459,9 +439,7 @@ async def test_execute_suite_run_rejects_no_definitions(session) -> None:
 
     # build_suite_run refuses a suite with no active definitions (never silent).
     with pytest.raises(SuiteRunExecutionError):
-        await build_suite_run(
-            session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
 
 # --------------------------------------------------------------------------- #
@@ -506,9 +484,7 @@ async def test_suite_run_completion_writes_only_eval_results(session) -> None:
     org = await _org()
     suite, dataset, _, backend = await seed_suite(session, org)
     await seed_cases(session, org, dataset, [{"category": "billing"}])
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     from farna.core.eval_engine.execute_suite_run import _suite_run_transition
 
     await _suite_run_transition(session, run, SuiteRunState.RUNNING)
@@ -549,9 +525,7 @@ async def test_execute_suite_run_from_pending_self_transitions_to_running(sessio
     suite, dataset, _, backend = await seed_suite(session, org)
     await seed_cases(session, org, dataset, [{"category": "billing"}])
     # build_suite_run leaves the run PENDING — exactly the fire_path state.
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
     assert run.state == SuiteRunState.PENDING.value
     # NO manual _suite_run_transition to RUNNING here — the runner must do it.
     stats = await execute_suite_run(session, run, eval_definition_version=1)

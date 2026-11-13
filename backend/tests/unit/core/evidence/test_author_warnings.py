@@ -578,9 +578,7 @@ class _EvidenceStoreFailingSession:
         return await self._inner.execute(stmt, *args, **kwargs)
 
 
-async def test_evidence_store_query_failure_falls_back_to_recent_undefined(
-    session: AsyncSession, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_evidence_store_query_failure_falls_back_to_recent_undefined(session: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
     """When the evidence-store read fails the check warns ``recent_undefined``
     (cannot determine → warn) instead of silently skipping condition (c)."""
     org_id, pipeline_id = await _seed_pipeline(session)

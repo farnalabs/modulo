@@ -292,16 +292,12 @@ class TestNodeStartedIsNotNodelessZombie:
                 return
 
         router_session = _CaptureSession()
-        await ch._terminalize_aged_nodeless_zombies(
-            router_session, uuid.uuid4(), max_age_minutes=135, summary=ch._dispatcher_summary(), max_rows=None
-        )
+        await ch._terminalize_aged_nodeless_zombies(router_session, uuid.uuid4(), max_age_minutes=135, summary=ch._dispatcher_summary(), max_rows=None)
         assert router_session.calls
         assert router_session.calls[0][1]["first_node_phase"] == PHASE_FIRST_NODE_DISPATCHED
 
         age_gate_session = _CaptureSession()
-        routed = await ch._terminalize_mid_graph_wedges(
-            age_gate_session, uuid.uuid4(), max_age_minutes=135, max_rows=None
-        )
+        routed = await ch._terminalize_mid_graph_wedges(age_gate_session, uuid.uuid4(), max_age_minutes=135, max_rows=None)
         assert routed == []
         assert age_gate_session.calls
         assert age_gate_session.calls[0][1]["first_node_phase"] == PHASE_FIRST_NODE_DISPATCHED

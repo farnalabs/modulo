@@ -98,9 +98,7 @@ class TestCreateNotification:
 class TestGetNotification:
     async def test_without_user_id_returns_org_notification(self, mock_session: AsyncMock) -> None:
         notification = _make_notification()
-        mock_session.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=notification))
-        )
+        mock_session.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=notification)))
         from farna.db.crud.notifications import get_notification
 
         assert await get_notification(mock_session, org_id=_ORG_ID, notification_id=_NOTIF_ID) is notification
@@ -150,9 +148,7 @@ class TestDashboardNotifications:
         await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=0)
         assert "LIMIT 1" in _sql_of(0)
 
-        await get_dashboard_notifications(
-            mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=DASHBOARD_LIMIT_MAX + 100
-        )
+        await get_dashboard_notifications(mock_session, org_id=_ORG_ID, user_id=_USER_ID, limit=DASHBOARD_LIMIT_MAX + 100)
         assert f"LIMIT {DASHBOARD_LIMIT_MAX}" in _sql_of(1)
 
     async def test_in_range_limit_passed_through_untouched(self, mock_session: AsyncMock) -> None:
@@ -415,9 +411,7 @@ class TestDismissNotification:
         # (notification_id, dismissed_by_user_id)).
         mock_session.add.assert_not_called()
 
-    async def test_escalation_is_refused_when_the_privilege_gate_refuses_a_fresh_scope_dismiss(
-        self, mock_session: AsyncMock
-    ) -> None:
+    async def test_escalation_is_refused_when_the_privilege_gate_refuses_a_fresh_scope_dismiss(self, mock_session: AsyncMock) -> None:
         """The privilege gate runs BEFORE the escalation branch, so escalating
         through a gate the actor cannot pass is impossible."""
         from farna.db.crud.notifications import dismiss_notification

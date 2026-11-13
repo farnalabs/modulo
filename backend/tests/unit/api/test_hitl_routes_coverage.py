@@ -386,9 +386,7 @@ def test_list_run_pending_gates_unknown_run_returns_404(client: tuple[TestClient
 
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (RuntimeError("kaboom"), 500)])
-def test_list_run_pending_gates_error_mapping(
-    client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
-) -> None:
+def test_list_run_pending_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
     http, _session = client
     with patch("farna.api.routes.hitl.get_run", new=AsyncMock(side_effect=exc)):
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
@@ -599,9 +597,7 @@ def test_list_org_pending_gates_resolves_claimant_names(
 
 
 @pytest.mark.parametrize(("exc", "expected"), [(_PROG, 501), (RuntimeError("kaboom"), 500)])
-def test_list_org_pending_gates_error_mapping(
-    client: tuple[TestClient, AsyncMock], exc: Exception, expected: int
-) -> None:
+def test_list_org_pending_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc: Exception, expected: int) -> None:
     http, _session = client
     with patch("farna.api.routes.hitl.HITLManager.list_pending", new=AsyncMock(side_effect=exc)):
         resp = http.get("/api/v1/hitl/pending")
@@ -1029,9 +1025,7 @@ def test_list_org_gates_status_filter_compiles_the_right_where(
 
 
 @pytest.mark.parametrize("status_param", ["undecided", "pending", "claimed"])
-def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(
-    client: tuple[TestClient, AsyncMock], status_param: str
-) -> None:
+def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(client: tuple[TestClient, AsyncMock], status_param: str) -> None:
     """Pending-work statuses are fenced like HITLManager.list_pending
     (FAR-612/FAR-604): joined to runs and restricted to actionable run
     statuses, so orphaned undecided gates on terminal runs never surface —
@@ -1056,9 +1050,7 @@ def test_list_org_gates_pending_work_statuses_join_and_fence_to_actionable_runs(
 
 
 @pytest.mark.parametrize("status_param", ["approved", "rejected", "all"])
-def test_list_org_gates_history_statuses_are_not_run_fenced(
-    client: tuple[TestClient, AsyncMock], status_param: str
-) -> None:
+def test_list_org_gates_history_statuses_are_not_run_fenced(client: tuple[TestClient, AsyncMock], status_param: str) -> None:
     """Decided history (approved/rejected) and the `all` audit view are
     deliberately unfenced: a decided gate's run has legitimately moved past
     awaiting_human, and the audit view must surface data-rot rows."""
@@ -1226,9 +1218,7 @@ def test_list_org_gates_error_mapping(client: tuple[TestClient, AsyncMock], exc:
 # ---------------------------------------------------------------------------
 
 
-_CHOICE_CONFIG = {
-    "response_contract": {"kind": "choice", "options": [{"id": "ship", "label": "Ship"}, {"id": "fix", "label": "Fix"}]}
-}
+_CHOICE_CONFIG = {"response_contract": {"kind": "choice", "options": [{"id": "ship", "label": "Ship"}, {"id": "fix", "label": "Fix"}]}}
 
 
 def _modify_patches(side_effect: object) -> list:
@@ -1250,9 +1240,7 @@ def _modify_patches(side_effect: object) -> list:
     ],
     ids=["missing-answer", "unknown-option", "wrong-kind"],
 )
-def test_modify_approve_choice_gate_requires_valid_answer(
-    client: tuple[TestClient, AsyncMock], answer: dict | None, expected: int, fragment: str
-) -> None:
+def test_modify_approve_choice_gate_requires_valid_answer(client: tuple[TestClient, AsyncMock], answer: dict | None, expected: int, fragment: str) -> None:
     """A choice gate cannot be approve-with-modification'd without a valid
     option selection (FAR-907) — missing/unknown/mismatched all 422."""
     http, _session = client
@@ -1597,9 +1585,7 @@ def test_viewer_org_pending_gates_query_contains_account_team_scope(
     resp = http.get("/api/v1/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    assert any("team_memberships" in str(stmt) for stmt in captured), (
-        "a viewer pending-gate read must be bounded by the account's team memberships"
-    )
+    assert any("team_memberships" in str(stmt) for stmt in captured), "a viewer pending-gate read must be bounded by the account's team memberships"
 
 
 def test_viewer_run_pending_gates_query_contains_account_team_scope(
@@ -1619,9 +1605,7 @@ def test_viewer_run_pending_gates_query_contains_account_team_scope(
         resp = http.get(f"/api/v1/runs/{_RUN_ID}/hitl/pending")
 
     assert resp.status_code == 200, resp.text
-    assert any("team_memberships" in str(stmt) for stmt in captured), (
-        "a viewer run-level pending read must be bounded by the account's team memberships"
-    )
+    assert any("team_memberships" in str(stmt) for stmt in captured), "a viewer run-level pending read must be bounded by the account's team memberships"
 
 
 def test_viewer_run_pending_foreign_team_run_maps_to_not_found(
@@ -1675,9 +1659,7 @@ def test_viewer_reviews_query_contains_account_team_scope(
     resp = http.get("/api/v1/hitl/reviews")
 
     assert resp.status_code == 200, resp.text
-    assert any("team_memberships" in str(stmt) for stmt in captured), (
-        "both the count and the page query must carry the viewer membership clamp"
-    )
+    assert any("team_memberships" in str(stmt) for stmt in captured), "both the count and the page query must carry the viewer membership clamp"
 
 
 def test_viewer_reviews_unfenced_status_still_carries_account_team_scope(
@@ -1712,9 +1694,7 @@ def _async_session_context(session: AsyncMock) -> MagicMock:
 
 
 async def test_f6a_candidate_false_when_run_missing() -> None:
-    assert (
-        await _session_row_is_f6a_reconcile_candidate(_candidate_session(None), org_id=_ORG_ID, run_id=_RUN_ID) is False
-    )
+    assert await _session_row_is_f6a_reconcile_candidate(_candidate_session(None), org_id=_ORG_ID, run_id=_RUN_ID) is False
 
 
 async def test_f6a_candidate_false_for_non_hitl_status() -> None:

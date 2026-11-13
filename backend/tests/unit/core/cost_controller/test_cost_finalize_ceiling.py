@@ -141,9 +141,7 @@ async def test_spend_ceiling_gate_takes_cost_state_advisory_lock_not_org_row() -
     lock_cost.assert_awaited_once_with(session, org.id)
     # The only org-row statement is a plain SELECT — no FOR UPDATE / FOR NO KEY
     # UPDATE anywhere in the compiled SQL.
-    org_statements = [
-        str(stmt.compile(dialect=postgresql.dialect())) for stmt in captured if "organisations" in str(stmt)
-    ]
+    org_statements = [str(stmt.compile(dialect=postgresql.dialect())) for stmt in captured if "organisations" in str(stmt)]
     assert org_statements, "the org row must still be read for existence"
     assert all("FOR UPDATE" not in sql and "FOR NO KEY UPDATE" not in sql for sql in org_statements)
 

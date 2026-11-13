@@ -147,35 +147,13 @@ def test_resolve_graph_pinned_ref_skips_resolver() -> None:
     def _boom(_ref) -> str:
         raise AssertionError("resolver must not run for a pinned ref")
 
-    entity = _pipeline_entity().model_copy(
-        update={
-            "graph": _pipeline_entity().graph.model_copy(
-                update={
-                    "nodes": [
-                        n.model_copy(update={"agent_prompt": f"git+{_REPO}@{_SHA_A.upper()}#prompts/x.md"})
-                        for n in _pipeline_entity().graph.nodes
-                    ]
-                }
-            )
-        }
-    )
+    entity = _pipeline_entity().model_copy(update={"graph": _pipeline_entity().graph.model_copy(update={"nodes": [n.model_copy(update={"agent_prompt": f"git+{_REPO}@{_SHA_A.upper()}#prompts/x.md"}) for n in _pipeline_entity().graph.nodes]})})
     graph = pipeline_apply.resolve_graph(entity, {}, git_resolver=_boom)
     assert graph["nodes"][0]["agent_prompt"] == _PINNED_PROMPT_A
 
 
 def test_resolve_graph_malformed_ref_is_resolution_error() -> None:
-    entity = _pipeline_entity().model_copy(
-        update={
-            "graph": _pipeline_entity().graph.model_copy(
-                update={
-                    "nodes": [
-                        n.model_copy(update={"agent_prompt": "git+https://github.com/example/repo"})
-                        for n in _pipeline_entity().graph.nodes
-                    ]
-                }
-            )
-        }
-    )
+    entity = _pipeline_entity().model_copy(update={"graph": _pipeline_entity().graph.model_copy(update={"nodes": [n.model_copy(update={"agent_prompt": "git+https://github.com/example/repo"}) for n in _pipeline_entity().graph.nodes]})})
     with pytest.raises(ApplyEntityResolutionError, match="git content ref"):
         pipeline_apply.resolve_graph(entity, {}, git_resolver=_resolver(_SHA_A))
 
@@ -356,20 +334,12 @@ def test_write_payload_carries_pinned_sha(monkeypatch: pytest.MonkeyPatch) -> No
         "farna.core.pipeline_engine.git_content.default_git_content_resolver",
         lambda ref: _SHA_A,
     )
-    respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": [], "total": 0, "page": 1, "page_size": 100}
-    )
-    respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": [], "total": 0, "page": 1, "page_size": 100}
-    )
-    respx.get("https://api.test/api/v1/pipelines", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": [], "total": 0, "page": 1, "page_size": 100}
-    )
+    respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+    respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
+    respx.get("https://api.test/api/v1/pipelines", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
     created_id = str(uuid.uuid4())
     respx.post("https://api.test/api/v1/pipelines").respond(json={"id": created_id, "name": "git-content"})
-    patch_route = respx.patch(f"https://api.test/api/v1/pipelines/{created_id}").respond(
-        json={"id": created_id, "name": "git-content"}
-    )
+    patch_route = respx.patch(f"https://api.test/api/v1/pipelines/{created_id}").respond(json={"id": created_id, "name": "git-content"})
 
     config = parse_apply_documents(CONFIG_TEXT)
     with httpx.Client() as client:

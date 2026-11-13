@@ -89,10 +89,7 @@ async def _seed_admin(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"far1109-{account_id.hex[:10]}@example.com",
@@ -100,9 +97,7 @@ async def _seed_admin(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -202,10 +197,7 @@ async def _resolve_runtime_gate(
 async def _gate_rows(db_engine: AsyncEngine, eval_id: uuid.UUID) -> list:
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT id, action, version, deleted_at IS NOT NULL AS is_deleted "
-                "FROM policy_gates WHERE eval_id = :e ORDER BY created_at"
-            ),
+            text("SELECT id, action, version, deleted_at IS NOT NULL AS is_deleted FROM policy_gates WHERE eval_id = :e ORDER BY created_at"),
             {"e": str(eval_id)},
         )
         return result.all()
@@ -268,9 +260,7 @@ async def _write_graph(integration_client: AsyncClient, scenario: dict, yaml_tex
     )
     assert response.status_code == 200, response.text
     # The block must survive the server read path (round-trip).
-    stored = await integration_client.get(
-        f"/api/v1/pipelines/{scenario['pipeline_id']}/graph", headers=scenario["headers"]
-    )
+    stored = await integration_client.get(f"/api/v1/pipelines/{scenario['pipeline_id']}/graph", headers=scenario["headers"])
     assert stored.status_code == 200, stored.text
     policy_gate = graph["nodes"][0].get("policy_gate")
     stored_node = next(n for n in stored.json()["nodes"] if str(n["id"]) == str(_NODE_ID))
@@ -285,9 +275,7 @@ async def _write_graph(integration_client: AsyncClient, scenario: dict, yaml_tex
 # ---------------------------------------------------------------------------
 
 
-async def test_declared_gate_governs_run_then_removal_stops_governing(
-    integration_client: AsyncClient, db_engine: AsyncEngine
-) -> None:
+async def test_declared_gate_governs_run_then_removal_stops_governing(integration_client: AsyncClient, db_engine: AsyncEngine) -> None:
     """A YAML-declared gate creates a live row that ENFORCES; removing it
     soft-deletes the row and the run stops being governed."""
     scenario = await _scenario(integration_client, db_engine)
@@ -353,9 +341,7 @@ async def test_declared_gate_governs_run_then_removal_stops_governing(
     assert len(final_live) == 1, f"re-add must leave exactly one live gate: {final_rows}"
     assert final_live[0].action == "block"
     assert final_live[0].id != block_gate_id, "re-add must create a fresh row, not undelete the old one"
-    assert any(row.id == block_gate_id and row.is_deleted for row in final_rows), (
-        "the previously soft-deleted gate must remain soft-deleted"
-    )
+    assert any(row.id == block_gate_id and row.is_deleted for row in final_rows), "the previously soft-deleted gate must remain soft-deleted"
 
     regoverned_dto, _ = await _resolve_runtime_gate(db_engine, scenario["org_id"], pipeline_id, _NODE_ID)
     assert regoverned_dto.failure_behaviour == "block"
@@ -426,9 +412,7 @@ async def _mcp_write_graph(
         ms._ctx_role.reset(tokens[2])
 
 
-async def test_mcp_declared_gate_creates_row_and_enforces_then_removal_soft_deletes(
-    integration_client: AsyncClient, db_engine: AsyncEngine
-) -> None:
+async def test_mcp_declared_gate_creates_row_and_enforces_then_removal_soft_deletes(integration_client: AsyncClient, db_engine: AsyncEngine) -> None:
     """A gate declared through the MCP graph tool CREATES a live row that
     ENFORCES; an MCP removal SOFT-deletes it and the run stops being governed."""
     scenario = await _scenario(integration_client, db_engine)

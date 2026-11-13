@@ -133,7 +133,7 @@ http POST /api/v1/auth/login "$(python3 -c '
 import json, sys
 print(json.dumps({"email": sys.argv[1], "password": sys.argv[2]}))' "$EMAIL" "$PASSWORD")"
 if [[ "$HTTP_CODE" != "200" ]]; then
-  fail "login as ${EMAIL} returned HTTP ${HTTP_CODE}" "check MODULO_USERS in your .env and \`docker compose logs backend\`"
+  fail "login as ${EMAIL} returned HTTP ${HTTP_CODE}" "check FARNA_CONTROL_USERS in your .env and \`docker compose logs backend\`"
 fi
 TOKEN="$(json_get access_token)"
 if [[ -z "$TOKEN" ]]; then

@@ -204,6 +204,4 @@ class TestSeedEvidenceRedactionCatchAll:
 
         assert org.name == "Survivor Org"
         assert org.slug == "survivor-org"
-        assert any(
-            "seed.evidence_redaction_catch_all_failed_for_new_org" in record.getMessage() for record in caplog.records
-        )
+        assert any("seed.evidence_redaction_catch_all_failed_for_new_org" in record.getMessage() for record in caplog.records)

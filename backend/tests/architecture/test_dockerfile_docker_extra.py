@@ -63,10 +63,7 @@ def test_saq_worker_images_install_docker_extra() -> None:
             if "--extra docker" not in command:
                 violations.append(f"{rel}: {command}")
     assert not violations, (
-        "uv sync must pass --extra docker (FAR-1201): the SAQ system worker's "
-        "runner_workspace_reconcile / runner_health_probe crons import aiodocker, "
-        "which ships only via the docker extra — without it the advisory "
-        f"/healthz/ready check degrades with ModuleNotFoundError. Violations: {violations}"
+        f"uv sync must pass --extra docker (FAR-1201): the SAQ system worker's runner_workspace_reconcile / runner_health_probe crons import aiodocker, which ships only via the docker extra — without it the advisory /healthz/ready check degrades with ModuleNotFoundError. Violations: {violations}"
     )
 
 
@@ -74,6 +71,4 @@ def test_docker_extra_declares_aiodocker() -> None:
     """``--extra docker`` must actually pull aiodocker (the flag is not a no-op)."""
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     docker_extra = data["project"]["optional-dependencies"]["docker"]
-    assert any(req.startswith("aiodocker") for req in docker_extra), (
-        f"[project.optional-dependencies].docker must declare aiodocker, got: {docker_extra}"
-    )
+    assert any(req.startswith("aiodocker") for req in docker_extra), f"[project.optional-dependencies].docker must declare aiodocker, got: {docker_extra}"

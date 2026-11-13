@@ -234,9 +234,7 @@ class TestDispatcherReconcileTimeoutAttribution:
             budget = 95
             max_rows = 500
             summary["status"] = "timeout"
-            summary["last_error"] = (
-                f"TimeoutError: inner deadline fired after {elapsed:.1f}s (budget={budget}s, max_rows={max_rows})"
-            )[:200]
+            summary["last_error"] = (f"TimeoutError: inner deadline fired after {elapsed:.1f}s (budget={budget}s, max_rows={max_rows})")[:200]
 
         assert summary["status"] == "timeout"
         assert "TimeoutError:" in summary["last_error"]
@@ -1022,9 +1020,7 @@ class TestPerOrgTimeBound:
         summary = ch._dispatcher_summary()
         terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]] = []
 
-        async def fake_reconcile_org(
-            *, org_id: uuid.UUID, terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]], **_kwargs: Any
-        ) -> int:
+        async def fake_reconcile_org(*, org_id: uuid.UUID, terminalized_run_ids: list[tuple[uuid.UUID, uuid.UUID]], **_kwargs: Any) -> int:
             if org_id == hang_org:
                 # Work the org did before the bound fired — all of it rolls back.
                 summary["scanned"] += 5

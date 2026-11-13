@@ -444,7 +444,7 @@ Behavior-tracker entries in this directory. Infra-only surfaces (no UI route in
 > `backend/tests/integration/auth/test_oidc_rls_resolution.py` (mirroring
 > `test_saml_rls_resolution.py`), driving the REAL `farna.auth.sso`
 > `_resolve_oidc_provider` seam and the REAL `GET /oidc/{provider}/login` route
-> through the real `modulo_system` (BYPASSRLS) / `modulo_app` (NOBYPASSRLS)
+> through the real `farna_control_system` (BYPASSRLS) / `farna_control_app` (NOBYPASSRLS)
 > roles – the system leg resolves an OIDC provider owned by a NON-first org,
 > unknown slugs fail closed all-None (never RuntimeError→500), the app fallback
 > resolves first-org-only inside a scoped transaction, an unbound app session

@@ -171,7 +171,7 @@ async def test_get_subscribed_endpoints_filters_auto_disabled_in_query() -> None
 async def test_get_subscribed_endpoints_sets_rls_org_context() -> None:
     """FAR-523 regression: the endpoint read must activate the org's RLS
     context. ``notification_endpoints`` carries the ``rls_org_isolation``
-    policy and ``modulo_app`` is NOBYPASSRLS, so a query without
+    policy and ``farna_control_app`` is NOBYPASSRLS, so a query without
     ``app.organisation_id`` set silently matches ZERO rows — dispatch would
     deliver to nobody."""
     ep = _fake_endpoint()
@@ -404,11 +404,7 @@ async def test_dispatch_masks_secrets_in_response_body(notifier: Notifier, caplo
     """SEC-004 regression: secrets in webhook response body must be masked in logs and last_error."""
     ep = _fake_endpoint()
     # Response body contains AWS key, GitHub PAT (36+ chars), and a generic token
-    secret_body = (
-        '{"error": "invalid_token", "access_key": "AKIAIOSFODNN7EXAMPLE", '
-        '"github_pat": "ghp_abcdefghijklmnopqrstuvwxyz123456789012", '
-        '"api_token": "sk-1234567890abcdef1234"}'
-    )
+    secret_body = '{"error": "invalid_token", "access_key": "AKIAIOSFODNN7EXAMPLE", "github_pat": "ghp_abcdefghijklmnopqrstuvwxyz123456789012", "api_token": "sk-1234567890abcdef1234"}'
 
     with (
         patch.object(notifier, "_record_delivery", AsyncMock()) as mock_record,
@@ -1028,11 +1024,7 @@ async def test_dispatch_rejects_ssrf_rebind_to_metadata(notifier: Notifier) -> N
     ep = _fake_endpoint()
 
     async def _fake_pinned(_url: str) -> httpx.AsyncClient:
-        raise ValueError(
-            "URL hostname hooks.example.com resolves to a private/internal address "
-            "(169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow "
-            "this target, or use a public URL."
-        )
+        raise ValueError("URL hostname hooks.example.com resolves to a private/internal address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL.")
 
     with (
         patch.object(notifier, "_get_subscribed_endpoints", AsyncMock(return_value=[ep])),
@@ -1148,9 +1140,7 @@ async def test_team_scoped_dispatch(notifier: Notifier, team_id, expected_team_i
 # ---------------------------------------------------------------------------
 
 
-def _make_session_factory(
-    endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]
-) -> MagicMock:
+def _make_session_factory(endpoints_by_team: list[NotificationEndpoint], endpoints_org: list[NotificationEndpoint]) -> MagicMock:
     """Build a session factory that returns team endpoints first, then org-wide on second call."""
     call_count = 0
 
@@ -1176,9 +1166,7 @@ def _make_session_factory(
         (None, [_fake_endpoint(team_id=None)], [], 1, None),
     ],
 )
-async def test_get_subscribed_endpoints(
-    notifier: Notifier, team_id, team_endpoints, org_endpoints, expected_count, expected_team
-) -> None:
+async def test_get_subscribed_endpoints(notifier: Notifier, team_id, team_endpoints, org_endpoints, expected_count, expected_team) -> None:
     factory = _make_session_factory(team_endpoints, org_endpoints)
     with patch.object(notifier, "_session_factory", factory):
         found = await notifier._get_subscribed_endpoints(_ORG, "hitl_awaiting", team_id=team_id)

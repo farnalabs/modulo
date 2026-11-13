@@ -58,10 +58,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -149,22 +146,12 @@ async def _seed_run(
     async with engine.connect() as conn, conn.begin():
         if claim_token is None:
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st)"),
                 base_params,
             )
         else:
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status, claim_token) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :tok)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :tok)"),
                 {**base_params, "tok": claim_token},
             )
     return run_id
@@ -339,9 +326,7 @@ async def test_check_node_start_present_proceeds(db_engine: AsyncEngine, test_or
     factory = await _make_session_factory(db_engine)
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-Present", test_user)
     profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["sandbox.e2b"])
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
-    )
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"])
     result = await check_node_start(
         factory,
         org_id=test_org,
@@ -355,16 +340,12 @@ async def test_check_node_start_present_proceeds(db_engine: AsyncEngine, test_or
     assert result.state == "present"
 
 
-async def test_check_node_start_absent_blocks_fail_closed(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_check_node_start_absent_blocks_fail_closed(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     factory = await _make_session_factory(db_engine)
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-Absent", test_user)
     # Active profile WITHOUT the required capability -> confirmed absent.
     profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
-    )
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"])
     result = await check_node_start(
         factory,
         org_id=test_org,
@@ -378,18 +359,12 @@ async def test_check_node_start_absent_blocks_fail_closed(
     assert result.state == "unknown"
 
 
-async def test_check_node_start_inactive_profile_blocks_fail_closed(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_check_node_start_inactive_profile_blocks_fail_closed(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     factory = await _make_session_factory(db_engine)
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-Inactive", test_user)
     # Profile deactivated mid-run -> its capabilities are no longer granted.
-    profile = await _seed_environment_profile(
-        db_engine, test_org, test_user, capabilities=["sandbox.e2b"], status="inactive"
-    )
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
-    )
+    profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["sandbox.e2b"], status="inactive")
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"])
     result = await check_node_start(
         factory,
         org_id=test_org,
@@ -403,15 +378,11 @@ async def test_check_node_start_inactive_profile_blocks_fail_closed(
     assert result.state == "unknown"
 
 
-async def test_check_node_start_advisory_never_blocks(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_check_node_start_advisory_never_blocks(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     factory = await _make_session_factory(db_engine)
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-Warn", test_user)
     profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="warn-cap", action="warn", required_capabilities=["sandbox.e2b"]
-    )
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="warn-cap", action="warn", required_capabilities=["sandbox.e2b"])
     result = await check_node_start(
         factory,
         org_id=test_org,
@@ -442,17 +413,13 @@ async def test_check_node_start_zero_claim_fast_path(db_engine: AsyncEngine, tes
     assert result.claimed is False
 
 
-async def test_check_node_start_rls_same_org_visible(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_check_node_start_rls_same_org_visible(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     """A block guardrail bound to the org's OWN pipeline is visible under the
     non-superuser RLS role — ``set_rls_org`` inside the transaction scopes the
     read correctly so the org's own guardrails are enforced."""
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-RLS-Own", test_user)
     profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
-    )
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"])
     factory = await _make_session_factory(app_engine)  # non-superuser role: RLS filters rows
     result = await check_node_start(
         factory,
@@ -467,18 +434,14 @@ async def test_check_node_start_rls_same_org_visible(
     assert result.claimed is True
 
 
-async def test_check_node_start_rls_cross_org_hidden(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-):
+async def test_check_node_start_rls_cross_org_hidden(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID):
     """A block guardrail bound to ANOTHER org's pipeline is invisible to this
     org's node-start check under the RLS role — no cross-tenant leakage, so the
     check falls through to the zero-claim fast path instead of blocking on a
     foreign guardrail."""
     pipe = await _seed_pipeline(db_engine, test_org, "CNS-RLS-Foreign", test_user)
     profile = await _seed_environment_profile(db_engine, test_org, test_user, capabilities=["git"])
-    await _seed_guardrail(
-        db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"]
-    )
+    await _seed_guardrail(db_engine, test_org, pipe, test_user, name="block-cap", action="block", required_capabilities=["sandbox.e2b"])
     other_org = await _seed_org(db_engine, "CNS-RLS-Other")
     other_user = await _seed_account(db_engine, other_org, "cns-rls-other@test.local")
     other_pipe = await _seed_pipeline(db_engine, other_org, "CNS-RLS-Other-Pipe", other_user)
@@ -520,9 +483,7 @@ async def test_full_run_conformance_block_routes_to_hitl(
     # The node's bound EnvironmentProfile does NOT grant the capability the
     # block guardrail requires -> the node must be blocked at start.
     profile = await _seed_environment_profile(db_engine, org_id, account_id, capabilities=["git"])
-    snap = await _seed_snapshot(
-        db_engine, org_id, pipe, _one_agent_graph(node_id, backend_id), environment_profile_id=profile
-    )
+    snap = await _seed_snapshot(db_engine, org_id, pipe, _one_agent_graph(node_id, backend_id), environment_profile_id=profile)
     await _seed_guardrail(
         db_engine,
         org_id,
@@ -534,9 +495,7 @@ async def test_full_run_conformance_block_routes_to_hitl(
     )
     run_id = await _seed_run(db_engine, org_id, pipe, snap, status="pending")
 
-    final_status = await _dispatch_and_execute(
-        db_engine, app_engine, migrated_db_url, org_id, pipe, snap, run_id, backend_id
-    )
+    final_status = await _dispatch_and_execute(db_engine, app_engine, migrated_db_url, org_id, pipe, snap, run_id, backend_id)
     assert final_status == "awaiting_human"
     assert await _run_status(db_engine, run_id) == "awaiting_human"
 
@@ -554,13 +513,9 @@ async def test_full_run_no_conformance_claim_completes(
     node_id = "n1"
     backend_id = str(uuid.uuid4())
     snap = await _seed_snapshot(db_engine, org_id, pipe, _one_agent_graph(node_id, backend_id))
-    await _seed_guardrail(
-        db_engine, org_id, pipe, account_id, name="plain-block", action="block", required_capabilities=[]
-    )
+    await _seed_guardrail(db_engine, org_id, pipe, account_id, name="plain-block", action="block", required_capabilities=[])
     run_id = await _seed_run(db_engine, org_id, pipe, snap, status="pending")
 
-    final_status = await _dispatch_and_execute(
-        db_engine, app_engine, migrated_db_url, org_id, pipe, snap, run_id, backend_id
-    )
+    final_status = await _dispatch_and_execute(db_engine, app_engine, migrated_db_url, org_id, pipe, snap, run_id, backend_id)
     assert final_status == "complete"
     assert await _run_status(db_engine, run_id) == "complete"

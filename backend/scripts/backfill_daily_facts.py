@@ -48,9 +48,7 @@ from farna.core.analytics.maintenance import backfill_facts, backfill_ledger, re
 def _normalise_async_url(raw: str) -> str:
     """Ensure the URL carries an async driver usable by ``create_async_engine``."""
     if raw.startswith(("postgresql://", "postgresql+psycopg://")):
-        return raw.replace("postgresql://", "postgresql+asyncpg://").replace(
-            "postgresql+psycopg://", "postgresql+asyncpg://"
-        )
+        return raw.replace("postgresql://", "postgresql+asyncpg://").replace("postgresql+psycopg://", "postgresql+asyncpg://")
     if raw.startswith(("mysql://", "mysql+pymysql://")):
         return raw.replace("mysql://", "mysql+aiomysql://").replace("mysql+pymysql://", "mysql+aiomysql://")
     return raw
@@ -129,10 +127,7 @@ def _print_summary(results: list[dict[str, Any]], apply: bool, out: Any) -> None
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="backfill_daily_facts.py",
-        description=(
-            "Idempotent per-day repair+backfill of run_daily_facts and the org spend "
-            "ledger (same functions the analytics_facts_maintenance cron runs)."
-        ),
+        description=("Idempotent per-day repair+backfill of run_daily_facts and the org spend ledger (same functions the analytics_facts_maintenance cron runs)."),
     )
     parser.add_argument(
         "--apply",

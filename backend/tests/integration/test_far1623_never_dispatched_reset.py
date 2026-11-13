@@ -77,8 +77,7 @@ async def _seed_env(db_engine: AsyncEngine) -> _Env:
         )
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {"id": str(account_id), "email": f"far1623-{account_id.hex[:8]}@test.local", "name": "FAR-1623 User"},
         )
@@ -156,8 +155,7 @@ async def _fetch_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> dict[str, obj
     async with db_engine.connect() as conn:
         result = await conn.execute(
             text(
-                "SELECT status, error_code, dispatched_at, dispatcher, heartbeat_at, claim_count "
-                "FROM runs WHERE id = :id",
+                "SELECT status, error_code, dispatched_at, dispatcher, heartbeat_at, claim_count FROM runs WHERE id = :id",
             ),
             {"id": str(run_id)},
         )

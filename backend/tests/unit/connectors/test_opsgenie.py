@@ -94,9 +94,7 @@ async def test_query_alerts_with_cursor(connector: OpsgenieConnector) -> None:
 
 @respx.mock
 async def test_query_alerts_corrupt_total_inf(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts").mock(
-        return_value=httpx.Response(200, content=b'{"data": [{"id": "A1"}], "totalCount": 1e999}')
-    )
+    respx.get(f"{_BASE}/alerts").mock(return_value=httpx.Response(200, content=b'{"data": [{"id": "A1"}], "totalCount": 1e999}'))
     result = await connector.query(ConnectorQuery(resource="alerts"))
     assert len(result.records) == 1
     assert result.total == 0
@@ -172,9 +170,7 @@ async def test_query_alerts_garbage_offset_cursor(connector: OpsgenieConnector) 
 
 @respx.mock
 async def test_query_teams_corrupt_total_inf(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/teams").mock(
-        return_value=httpx.Response(200, content=b'{"data": [{"id": "T1"}], "totalCount": 1e999}')
-    )
+    respx.get(f"{_BASE}/teams").mock(return_value=httpx.Response(200, content=b'{"data": [{"id": "T1"}], "totalCount": 1e999}'))
     result = await connector.query(ConnectorQuery(resource="teams"))
     assert len(result.records) == 1
     assert result.total == 0
@@ -293,9 +289,7 @@ async def test_query_alert_notes(connector: OpsgenieConnector) -> None:
         {"id": "N1", "note": "Investigating", "owner": "Alice"},
         {"id": "N2", "note": "Escalated", "owner": "Bob"},
     ]
-    respx.get(f"{_BASE}/alerts/abc-123/notes").mock(
-        return_value=httpx.Response(200, json={"data": notes, "totalCount": 2})
-    )
+    respx.get(f"{_BASE}/alerts/abc-123/notes").mock(return_value=httpx.Response(200, json={"data": notes, "totalCount": 2}))
     result = await connector.query(ConnectorQuery(resource="alert_notes", filters={"id": "abc-123"}))
     assert len(result.records) == 2
     assert result.records[0]["note"] == "Investigating"
@@ -312,9 +306,7 @@ async def test_query_alert_notes_missing_id(connector: OpsgenieConnector) -> Non
 @respx.mock
 async def test_query_alert_logs(connector: OpsgenieConnector) -> None:
     logs = [{"log": "Alert created", "loggedAt": "2026-01-01T00:00:00Z"}]
-    respx.get(f"{_BASE}/alerts/abc-123/logs").mock(
-        return_value=httpx.Response(200, json={"data": logs, "totalCount": 1})
-    )
+    respx.get(f"{_BASE}/alerts/abc-123/logs").mock(return_value=httpx.Response(200, json={"data": logs, "totalCount": 1}))
     result = await connector.query(ConnectorQuery(resource="alert_logs", filters={"id": "abc-123"}))
     assert len(result.records) == 1
     assert result.records[0]["log"] == "Alert created"
@@ -416,9 +408,7 @@ async def test_query_escalations(connector: OpsgenieConnector) -> None:
         {"id": "E1", "name": "Critical Escalation"},
         {"id": "E2", "name": "Standard Escalation"},
     ]
-    respx.get(f"{_BASE}/escalations").mock(
-        return_value=httpx.Response(200, json={"data": escalations, "totalCount": 2})
-    )
+    respx.get(f"{_BASE}/escalations").mock(return_value=httpx.Response(200, json={"data": escalations, "totalCount": 2}))
     result = await connector.query(ConnectorQuery(resource="escalations"))
     assert len(result.records) == 2
     assert result.records[0]["name"] == "Critical Escalation"
@@ -511,18 +501,14 @@ async def test_write_alert_missing_message(connector: OpsgenieConnector) -> None
 
 @respx.mock
 async def test_write_acknowledge(connector: OpsgenieConnector) -> None:
-    respx.post(f"{_BASE}/alerts/ALERT1/acknowledge").mock(
-        return_value=httpx.Response(200, json={"data": {"success": True}})
-    )
+    respx.post(f"{_BASE}/alerts/ALERT1/acknowledge").mock(return_value=httpx.Response(200, json={"data": {"success": True}}))
     result = await connector.write(ConnectorPayload(resource="alert_acknowledge", data={"id": "ALERT1"}))
     assert result["success"] is True
 
 
 @respx.mock
 async def test_write_acknowledge_with_note(connector: OpsgenieConnector) -> None:
-    respx.post(f"{_BASE}/alerts/ALERT1/acknowledge").mock(
-        return_value=httpx.Response(200, json={"data": {"success": True}})
-    )
+    respx.post(f"{_BASE}/alerts/ALERT1/acknowledge").mock(return_value=httpx.Response(200, json={"data": {"success": True}}))
     result = await connector.write(
         ConnectorPayload(
             resource="alert_acknowledge",
@@ -569,9 +555,7 @@ async def test_write_close_missing_id(connector: OpsgenieConnector) -> None:
 
 @respx.mock
 async def test_write_note(connector: OpsgenieConnector) -> None:
-    respx.post(f"{_BASE}/alerts/ALERT1/notes").mock(
-        return_value=httpx.Response(201, json={"data": {"id": "N1", "note": "Checking logs"}})
-    )
+    respx.post(f"{_BASE}/alerts/ALERT1/notes").mock(return_value=httpx.Response(201, json={"data": {"id": "N1", "note": "Checking logs"}}))
     result = await connector.write(
         ConnectorPayload(
             resource="alert_note",
@@ -670,9 +654,7 @@ async def test_query_alerts_empty(connector: OpsgenieConnector) -> None:
 
 @respx.mock
 async def test_query_alert_not_found(connector: OpsgenieConnector) -> None:
-    respx.get(f"{_BASE}/alerts/unknown", params={"identifierType": "id"}).mock(
-        return_value=httpx.Response(200, json={"data": {}})
-    )
+    respx.get(f"{_BASE}/alerts/unknown", params={"identifierType": "id"}).mock(return_value=httpx.Response(200, json={"data": {}}))
     result = await connector.query(ConnectorQuery(resource="alert", filters={"id": "unknown"}))
     assert not result.records
 

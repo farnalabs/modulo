@@ -53,12 +53,7 @@ DAILY_STREAM = [
     "20260713",
 ]
 
-MONTHLY_STREAM = [
-    make_backup(date(y, m, 1).strftime("%Y%m%d"))
-    for y in (2025, 2026)
-    for m in range(1, 13)
-    if date(2025, 1, 1) <= date(y, m, 1) <= date(2026, 6, 1)
-]
+MONTHLY_STREAM = [make_backup(date(y, m, 1).strftime("%Y%m%d")) for y in (2025, 2026) for m in range(1, 13) if date(2025, 1, 1) <= date(y, m, 1) <= date(2026, 6, 1)]
 
 
 # ---------------------------------------------------------------------------
@@ -310,9 +305,7 @@ def test_parse_args_overrides(monkeypatch):
 
 
 def _main_ns(backup_dir: str, dry_run: bool):
-    return prune.argparse.Namespace(
-        backup_dir=backup_dir, dry_run=dry_run, keep_daily=7, keep_weekly=4, keep_monthly=12
-    )
+    return prune.argparse.Namespace(backup_dir=backup_dir, dry_run=dry_run, keep_daily=7, keep_weekly=4, keep_monthly=12)
 
 
 def _write_backup_stream(tmp_path) -> None:

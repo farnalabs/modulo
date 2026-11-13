@@ -139,10 +139,7 @@ class TestRestPagination:
 
         def _route(method: str, path: str, headers: dict, body: bytes) -> tuple[int, dict, bytes]:
             call_count["n"] += 1
-            if call_count["n"] == 1:
-                data = {"data": {"items": [{"id": 1}], "next_cursor": "tok2"}}
-            else:
-                data = {"data": {"items": [{"id": 2}], "next_cursor": None}}
+            data = {"data": {"items": [{"id": 1}], "next_cursor": "tok2"}} if call_count["n"] == 1 else {"data": {"items": [{"id": 2}], "next_cursor": None}}
             return 200, {"Content-Type": "application/json"}, json.dumps(data).encode()
 
         rest_test_server.route_request = _route  # type: ignore[assignment]

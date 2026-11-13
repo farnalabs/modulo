@@ -141,9 +141,7 @@ async def test_filter_returns_only_substantive_kinds_under_a_run_streak(
         # Unfiltered page 1 is entirely run snapshots — the starvation shape.
         unfiltered, unfiltered_total = await list_snapshots(session, pipeline_id, page=1, page_size=100)
         # The chip's query: newest substantive version, one row.
-        filtered, filtered_total = await list_snapshots(
-            session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN
-        )
+        filtered, filtered_total = await list_snapshots(session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN)
 
     assert unfiltered_total == 152
     assert len(unfiltered) == 100
@@ -162,9 +160,7 @@ async def test_filter_total_counts_only_matching_rows(
     pipeline_id = await _seed(session_maker, run_count=5, substantive_versions=[1])
 
     async with session_maker() as session:
-        page_one, total = await list_snapshots(
-            session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN
-        )
+        page_one, total = await list_snapshots(session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN)
 
     assert total == 1
     assert [row.snapshot_version for row in page_one] == [1]
@@ -177,9 +173,7 @@ async def test_run_only_history_returns_nothing_rather_than_the_newest_run(
     pipeline_id = await _seed(session_maker, run_count=20, substantive_versions=[])
 
     async with session_maker() as session:
-        filtered, total = await list_snapshots(
-            session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN
-        )
+        filtered, total = await list_snapshots(session, pipeline_id, page=1, page_size=1, exclude_created_kinds=_EXCLUDE_RUN)
 
     assert total == 0
     assert filtered == []
@@ -212,9 +206,7 @@ async def test_explicit_empty_exclusion_is_identical_to_omitted(
 
     async with session_maker() as session:
         omitted, omitted_total = await list_snapshots(session, pipeline_id, page=1, page_size=100)
-        explicit, explicit_total = await list_snapshots(
-            session, pipeline_id, page=1, page_size=100, exclude_created_kinds=[]
-        )
+        explicit, explicit_total = await list_snapshots(session, pipeline_id, page=1, page_size=100, exclude_created_kinds=[])
 
     assert explicit_total == omitted_total
     assert [(row.id, row.created_kind) for row in explicit] == [(row.id, row.created_kind) for row in omitted]
@@ -256,12 +248,8 @@ async def test_exclude_drafts_keeps_an_autosave_from_becoming_the_current_versio
         )
 
     async with session_maker() as session:
-        with_draft, _ = await list_snapshots(
-            session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN
-        )
-        without_draft, _ = await list_snapshots(
-            session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN, exclude_drafts=True
-        )
+        with_draft, _ = await list_snapshots(session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN)
+        without_draft, _ = await list_snapshots(session, pipeline_id, page=1, page_size=2, exclude_created_kinds=_EXCLUDE_RUN, exclude_drafts=True)
 
     # The draft IS the newest non-run row when drafts are not excluded.
     assert with_draft[0].id == draft_id

@@ -1342,11 +1342,7 @@ async def test_gate_eval_validates_source_contract_output_for_sandbox_agent():
     )
 
     with pytest.raises(GraphInterrupt):
-        await node_fn(
-            _completed_sandbox_gate_state(
-                {"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}
-            )
-        )
+        await node_fn(_completed_sandbox_gate_state({"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}))
 
 
 async def test_gate_eval_blocks_on_contract_output_missing_pr_url():
@@ -1372,11 +1368,7 @@ async def test_gate_eval_without_type_map_keeps_whole_state_target():
     )
 
     with pytest.raises(EvalBlockedError, match="pr-review"):
-        await node_fn(
-            _completed_sandbox_gate_state(
-                {"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}
-            )
-        )
+        await node_fn(_completed_sandbox_gate_state({"status": "completed", "pr_url": "https://github.com/x/y/pull/1", "changed_files": ["a.py"]}))
 
 
 async def test_gate_eval_uses_sources_own_output_for_agent_in_fanout():
@@ -1472,9 +1464,7 @@ class TestBuildHitlReviewArtifact:
 
     def test_merges_extra_keys_into_artifact_entry(self) -> None:
         artifact = _build_hitl_review_artifact("g1", "skipped", autonomy="fully_autonomous", condition_result=False)
-        assert artifact["artifacts"] == [
-            {"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous", "condition_result": False}
-        ]
+        assert artifact["artifacts"] == [{"node_id": "g1", "status": "skipped", "autonomy": "fully_autonomous", "condition_result": False}]
 
 
 class TestHitlReviewConditionEvaluate:

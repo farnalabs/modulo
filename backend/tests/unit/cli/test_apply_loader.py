@@ -42,22 +42,7 @@ class TestSingleDoc:
 
 class TestMultiDoc:
     def test_multiple_documents_merged(self) -> None:
-        text = (
-            "---\n"
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: alpha\n"
-            "---\n"
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  model_backends:\n"
-            "    - name: beta\n"
-            "      display_name: Beta\n"
-            "      provider: openai\n"
-            "      model_id: gpt-x\n"
-            "      api_key: ${env:SK}\n"
-        )
+        text = "---\napi_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: alpha\n---\napi_version: modulo.dev/v1\nentities:\n  model_backends:\n    - name: beta\n      display_name: Beta\n      provider: openai\n      model_id: gpt-x\n      api_key: ${env:SK}\n"
         config = parse_apply_documents(text)
         assert [s.name for s in config.entities.schemas] == ["alpha"]
         assert [b.name for b in config.entities.model_backends] == ["beta"]
@@ -73,18 +58,7 @@ class TestMultiDoc:
         assert config.api_version == "modulo.dev/v1"
 
     def test_duplicate_name_across_documents_rejected(self) -> None:
-        text = (
-            "---\n"
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: dup\n"
-            "---\n"
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: dup\n"
-        )
+        text = "---\napi_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: dup\n---\napi_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: dup\n"
         with pytest.raises(ApplyLoadError):
             parse_apply_documents(text)
 

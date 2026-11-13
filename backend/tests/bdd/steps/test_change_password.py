@@ -142,6 +142,4 @@ def step_forced_change_pending(ctx: dict[str, Any]) -> None:
 def step_forced_change_flag_cleared(ctx: dict[str, Any]) -> None:
     mock_user = ctx.get("_mock_user")
     assert mock_user is not None, "No account mock found — was the When step run?"
-    assert mock_user.must_change_password is False, (
-        "the password change did not clear must_change_password — the post-login forced-change gate would stay armed"
-    )
+    assert mock_user.must_change_password is False, "the password change did not clear must_change_password — the post-login forced-change gate would stay armed"

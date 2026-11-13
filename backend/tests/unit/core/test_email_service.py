@@ -213,9 +213,7 @@ class TestSendEmail:
     def test_send_email_smtp_failure(self) -> None:
         settings = MockSettings()
         with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
-                "smtplib"
-            ).SMTPException("Connection refused")
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__("smtplib").SMTPException("Connection refused")
 
             with pytest.raises(EmailSendingError, match="Connection refused"):
                 send_email(
@@ -231,9 +229,7 @@ class TestSendEmail:
         only smtplib.SMTPException was handled."""
         settings = MockSettings()
         with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = ConnectionRefusedError(
-                111, "Connection refused"
-            )
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = ConnectionRefusedError(111, "Connection refused")
 
             with pytest.raises(EmailSendingError, match="Connection refused"):
                 send_email(
@@ -288,9 +284,7 @@ class TestSendEmail:
         server response — the raised EmailSendingError must redact them."""
         settings = MockSettings()
         with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
-                "smtplib"
-            ).SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted. user failed authentication")
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__("smtplib").SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted. user failed authentication")
 
             with pytest.raises(EmailSendingError) as exc_info:
                 send_email(
@@ -310,9 +304,7 @@ class TestSendEmail:
         the underlying exception embeds it."""
         settings = MockSettings()
         with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
-                "smtplib"
-            ).SMTPException("authentication failed for pass")
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__("smtplib").SMTPException("authentication failed for pass")
 
             with pytest.raises(EmailSendingError) as exc_info:
                 send_email(
@@ -462,9 +454,7 @@ class TestSendEmail:
         caplog.set_level(logging.ERROR, logger="farna.core.email_service")
 
         with patch("farna.core.email_service.smtplib.SMTP") as mock_smtp:
-            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__(
-                "smtplib"
-            ).SMTPException("authentication failed for pass")
+            mock_smtp.return_value.__enter__.return_value.send_message.side_effect = __import__("smtplib").SMTPException("authentication failed for pass")
 
             with pytest.raises(EmailSendingError):
                 send_email(

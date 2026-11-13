@@ -206,9 +206,7 @@ def _is_bdd_scenario_module(path: Path) -> bool:
     return "scenarios(" in source or "import pytest_bdd" in source or "from pytest_bdd" in source
 
 
-def _resolve_quarantine_target(
-    test_id: str, backend: Path | None = None, repo: Path | None = None
-) -> tuple[Path | None, str | None, str]:
+def _resolve_quarantine_target(test_id: str, backend: Path | None = None, repo: Path | None = None) -> tuple[Path | None, str | None, str]:
     """Return ``(file, test_name, error)`` for a quarantine ``test_id``.
 
     ``file`` is the resolved module path (or ``None`` when the nodeid is
@@ -254,10 +252,7 @@ def _quarantine_violations(quarantine_file: Path, backend: Path, repo: Path) -> 
             violations.append(f"  {test_id}: missing test name after '::'")
             continue
         if not _is_bdd_scenario_module(_path) and not _resolves_definitions(test_part, _collect_definitions(_path)):
-            violations.append(
-                f"  {test_id}: test symbol {_stripped_symbol(test_part)!r} not found in {_path} — "
-                "the test was renamed/deleted, so this quarantine entry protects nothing"
-            )
+            violations.append(f"  {test_id}: test symbol {_stripped_symbol(test_part)!r} not found in {_path} — the test was renamed/deleted, so this quarantine entry protects nothing")
         if not entry.get("reason"):
             violations.append(f"  {test_id}: missing required 'reason' field")
         if not entry.get("expiry"):
@@ -297,16 +292,10 @@ def test_workflow_self_report_payloads_name_the_stage():
                 continue
             found_self_report = True
             if f'stage_id: "{expected_stage}"' not in block:
-                violations.append(
-                    f"  .github/workflows/{filename}: workflow_self_report payload missing "
-                    f'stage_id: "{expected_stage}" — the endpoint needs it to advance journeys '
-                    "into the external merge/deploy stage"
-                )
+                violations.append(f'  .github/workflows/{filename}: workflow_self_report payload missing stage_id: "{expected_stage}" — the endpoint needs it to advance journeys into the external merge/deploy stage')
         if not found_self_report:
             violations.append(f"  .github/workflows/{filename}: no workflow_self_report payload step found")
-    assert not violations, "Workflow self-report payloads drifted from the lifecycle-map stage contract.\n" + "\n".join(
-        violations
-    )
+    assert not violations, "Workflow self-report payloads drifted from the lifecycle-map stage contract.\n" + "\n".join(violations)
 
 
 def test_awaiting_implementation_set_is_pinned():
@@ -327,13 +316,9 @@ def test_awaiting_implementation_set_is_pinned():
         got = actual.get(rel, set())
         pinned = PINNED_AWAITING_IMPLEMENTATION.get(rel, frozenset())
         for name in sorted(got - pinned):
-            problems.append(
-                f"  {rel}: scenario {name!r} newly tagged @awaiting-implementation — REMOVE the tag or extend the pin"
-            )
+            problems.append(f"  {rel}: scenario {name!r} newly tagged @awaiting-implementation — REMOVE the tag or extend the pin")
         for name in sorted(pinned - got):
-            problems.append(
-                f"  {rel}: scenario {name!r} no longer tagged @awaiting-implementation — behaviour must now run in CI"
-            )
+            problems.append(f"  {rel}: scenario {name!r} no longer tagged @awaiting-implementation — behaviour must now run in CI")
     assert not problems, "The @awaiting-implementation deselection set drifted from the pin.\n" + "\n".join(problems)
 
 
@@ -344,10 +329,7 @@ def test_quarantine_registry_entries_resolve():
     function or class) is a dead safety net that silently stops protecting
     anything because the xfail marker never applies."""
     violations = _quarantine_violations(QUARANTINE_FILE, BACKEND, REPO)
-    assert not violations, (
-        "Found stale or incomplete .quarantine.yml entries — a quarantined test that "
-        "cannot resolve is silently never xfailed.\n" + "\n".join(violations)
-    )
+    assert not violations, "Found stale or incomplete .quarantine.yml entries — a quarantined test that cannot resolve is silently never xfailed.\n" + "\n".join(violations)
 
 
 def test_feature_skip_tags_have_reason():
@@ -360,7 +342,5 @@ def test_feature_skip_tags_have_reason():
             if raw.strip().startswith(("@skip", "@xfail")):
                 prev = lines[lineno - 2].strip() if lineno >= 2 else ""
                 if not prev.startswith("#"):
-                    violations.append(
-                        f"  {feature.relative_to(BACKEND)}:{lineno}  {raw.strip()} — no '#' reason comment above"
-                    )
+                    violations.append(f"  {feature.relative_to(BACKEND)}:{lineno}  {raw.strip()} — no '#' reason comment above")
     assert not violations, "Found @skip/@xfail scenario tags without a reason comment.\n" + "\n".join(violations)

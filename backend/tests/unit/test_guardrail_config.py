@@ -449,13 +449,9 @@ def test_config_item_null_redaction_path_behaves_like_missing_key():
         "detection": {"type": "regex", "pattern": "AKIA[0-9A-Z]{16}", "field": "body"},
     }
     with pytest.raises(ValidationError):
-        config_item_from_engine_definition(
-            _envelope_definition("no-aws-keys", {**common, "redaction": [{"path": None, "mode": "transform"}]})
-        )
+        config_item_from_engine_definition(_envelope_definition("no-aws-keys", {**common, "redaction": [{"path": None, "mode": "transform"}]}))
     with pytest.raises(ValidationError):
-        config_item_from_engine_definition(
-            _envelope_definition("no-aws-keys", {**common, "redaction": [{"mode": "transform"}]})
-        )
+        config_item_from_engine_definition(_envelope_definition("no-aws-keys", {**common, "redaction": [{"mode": "transform"}]}))
 
 
 def test_config_item_rebuilt_from_envelope_regex_is_complete():
@@ -632,11 +628,7 @@ def test_config_set_knobs_rejected_when_invalid():
 
 
 def test_to_eval_config_mirrors_org_knobs_onto_rows():
-    config_set = load_config_set(
-        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
-        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
-        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
-    )
+    config_set = load_config_set("version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n" + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n" + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n")
     item = config_set.guardrails[0]
     engine_config = to_eval_config(
         item,
@@ -650,11 +642,7 @@ def test_to_eval_config_mirrors_org_knobs_onto_rows():
 def test_knobs_do_not_drift_on_rebuild_from_rows():
     """The org knobs are mirrored onto every row, so a set rebuilt from rows
     hashes identically to the applied set — drift stays clean."""
-    config_set = load_config_set(
-        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
-        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
-        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
-    )
+    config_set = load_config_set("version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n" + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n" + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n")
     definitions = _definitions([config_set])
     rebuilt = build_config_set_from_definitions(definitions)
     assert rebuilt.max_guardrails_per_node == 4
@@ -710,11 +698,7 @@ def test_mask_config_set_preserves_knobs_and_empty_sets():
     assert not empty.guardrails
     assert empty.max_guardrails_per_node == GuardrailConfigSet().max_guardrails_per_node
 
-    config_set = load_config_set(
-        "version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n"
-        + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n"
-        + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n"
-    )
+    config_set = load_config_set("version: 1\nmax_guardrails_per_node: 4\nguardrail_timeout_seconds: 1.5\n" + "guardrails:\n  - id: no-aws-keys\n    name: Block\n    action: block\n" + "    detection:\n      type: regex\n      pattern: 'AKIA[0-9A-Z]{16}'\n      field: body\n")
     masked = mask_config_set(config_set)
     assert masked.max_guardrails_per_node == 4
     assert masked.guardrail_timeout_seconds == 1.5

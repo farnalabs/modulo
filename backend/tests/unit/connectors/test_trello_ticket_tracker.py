@@ -113,9 +113,7 @@ class TestListTickets:
     async def test_lists_tickets(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.return_value = _response(
-            200, json=[_make_mock_card(), _make_mock_card({"id": "def456", "name": "Second card"})]
-        )
+        mock_client.get.return_value = _response(200, json=[_make_mock_card(), _make_mock_card({"id": "def456", "name": "Second card"})])
 
         tickets = await tracker.list_tickets()
 
@@ -207,9 +205,7 @@ class TestCreateTicket:
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.post.return_value = _response(200, json=_make_mock_card())
 
-        ticket = await tracker.create_ticket(
-            "Fix login bug", description="SSO broken", labels=["bug"], idList="list456"
-        )
+        ticket = await tracker.create_ticket("Fix login bug", description="SSO broken", labels=["bug"], idList="list456")
 
         assert ticket.id == "abc123"
         assert ticket.title == "Fix login bug"
@@ -310,9 +306,7 @@ class TestCredentialRedaction:
         assert "***" in out
 
     @patch("httpx.AsyncClient")
-    async def test_health_http_error_detail_redacts(
-        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
-    ) -> None:
+    async def test_health_http_error_detail_redacts(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.return_value = _response_with_auth(401, text="unauthorized")
@@ -325,9 +319,7 @@ class TestCredentialRedaction:
         assert "fake_token" not in result.detail
 
     @patch("httpx.AsyncClient")
-    async def test_health_transport_error_detail_redacts(
-        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
-    ) -> None:
+    async def test_health_transport_error_detail_redacts(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.side_effect = httpx.ConnectError("Connection refused")
@@ -340,9 +332,7 @@ class TestCredentialRedaction:
         assert "fake_token" not in result.detail
 
     @patch("httpx.AsyncClient")
-    async def test_list_tickets_http_error_detail_redacts(
-        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
-    ) -> None:
+    async def test_list_tickets_http_error_detail_redacts(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.return_value = _response_with_auth(401, text="unauthorized")
@@ -354,9 +344,7 @@ class TestCredentialRedaction:
         assert "fake_token" not in str(exc_info.value)
 
     @patch("httpx.AsyncClient")
-    async def test_list_tickets_network_error_detail_redacts(
-        self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker
-    ) -> None:
+    async def test_list_tickets_network_error_detail_redacts(self, mock_client_cls: MagicMock, tracker: TrelloTicketTracker) -> None:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
         mock_client.get.side_effect = httpx.ConnectError("Connection refused")

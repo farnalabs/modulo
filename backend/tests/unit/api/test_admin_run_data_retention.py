@@ -417,9 +417,7 @@ class TestExport:
             patch("farna.api.routes.admin_run_retention.set_rls_org", new=AsyncMock()),
             patch("farna.api.routes.admin_run_retention.iter_run_export", new=fake_export),
         ):
-            resp = client.post(
-                EXPORT_URL, json={"organisation_id": str(_OTHER_ORG), "date_from": "2026-01-01T00:00:00Z"}
-            )
+            resp = client.post(EXPORT_URL, json={"organisation_id": str(_OTHER_ORG), "date_from": "2026-01-01T00:00:00Z"})
 
         assert resp.status_code == 200
         assert seen_org == [_OTHER_ORG]
@@ -548,9 +546,7 @@ def _issue(client: TestClient, method: str, url: str, body: dict[str, object] | 
     [(_SQL, 503, _MSG_503), (_PROG, 501, _MSG_501)],
     ids=["sqlalchemy-503", "programming-501"],
 )
-def test_backstop_maps_escaping_db_error_to_standard_status(
-    method: str, url: str, body: dict[str, object] | None, exc: Exception, expected: int, detail: str
-) -> None:
+def test_backstop_maps_escaping_db_error_to_standard_status(method: str, url: str, body: dict[str, object] | None, exc: Exception, expected: int, detail: str) -> None:
     """FAR-1905 prove-the-fix: an unexpected DB error escaping the handler body.
 
     ``_resolve_org_id`` runs before each handler's ``try``, so a DB error raised

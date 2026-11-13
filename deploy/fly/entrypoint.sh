@@ -172,7 +172,7 @@ if [[ -f /tmp/system_database_url.env ]]; then
   echo "MODULO_SYSTEM_DATABASE_URL fixed: $(printf '%s' "$SYSTEM_URL" | redact_url_credentials | cut -c1-80)..."
 fi
 
-echo "=== Bootstrapping modulo_app role ==="
+echo "=== Bootstrapping farna_control_app role ==="
 python3 -m farna.db.bootstrap_role || echo "  WARNING: role bootstrap failed (non-fatal)"
 
 echo "=== Running DB migrations ==="

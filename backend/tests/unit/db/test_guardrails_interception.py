@@ -565,9 +565,7 @@ async def test_create_run_replay_skips_soft_deleted_pinned_guardrail(session: As
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert rows == []
     # The skip is audited (guardrail.skipped) so the enforcement gap is visible.
-    audit = (
-        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
-    )
+    audit = (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
     assert len(audit) == 1
     assert audit[0].payload_json["guardrail"] == "ghost-block"
     assert audit[0].payload_json["reason"] == "soft_deleted"
@@ -601,9 +599,7 @@ async def test_create_run_replay_all_pins_soft_deleted_never_falls_back_to_live_
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert rows == []
     # The skip is audited (guardrail.skipped) so the enforcement gap is visible.
-    audit = (
-        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
-    )
+    audit = (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
     assert len(audit) == 1
     assert audit[0].payload_json["guardrail"] == "ghost-block"
     assert audit[0].payload_json["reason"] == "soft_deleted"
@@ -633,9 +629,7 @@ async def test_create_run_replay_without_pins_falls_back_to_live_rows(session: A
     assert run.status == "pending"  # detection-only replay of the live row
 
 
-async def test_create_run_replay_pinned_all_soft_deleted_never_falls_back_to_live(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_replay_pinned_all_soft_deleted_never_falls_back_to_live(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     """MAJOR (review): a replay whose pins are ALL soft-deleted must NOT fall
     back to the LIVE rows — the pinned (empty) set governs. The live guardrail's
     detection must never fire, the skip is audited, and the enforcement-gap
@@ -670,15 +664,10 @@ async def test_create_run_replay_pinned_all_soft_deleted_never_falls_back_to_liv
     rows = (await session.execute(select(EvalResult).where(EvalResult.run_id == run.id))).scalars().all()
     assert rows == []
     # The skip is audited + alerted (the sole enforcement signal).
-    audit = (
-        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
-    )
+    audit = (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
     assert len(audit) == 1
     assert audit[0].payload_json["guardrail"] == "ghost-block"
-    assert any(
-        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
-        for e in notified
-    )
+    assert any(e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block" for e in notified)
 
 
 # ---------------------------------------------------------------------------
@@ -701,9 +690,7 @@ async def test_create_run_conformance_non_conformant_block_fails_closed(session:
     assert "non-conformant" in (run.error_detail or "")
 
 
-async def test_create_run_muted_only_mechanism_error_does_not_block_and_preserves_evidence(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_muted_only_mechanism_error_does_not_block_and_preserves_evidence(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     await _seed(session)
     guardrail_id = await _seed_guardrail(session, name="muted-block", action="block", is_muted=True)
     monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _raise_mechanism_error)
@@ -718,9 +705,7 @@ async def test_create_run_muted_only_mechanism_error_does_not_block_and_preserve
 
 
 @pytest.mark.parametrize("action", ["block", "redact"])
-async def test_create_run_active_mechanism_error_fails_closed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, action: str
-):
+async def test_create_run_active_mechanism_error_fails_closed(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, action: str):
     await _seed(session)
     await _seed_guardrail(session, name=f"active-{action}", action=action)
     monkeypatch.setattr(guardrails_module, "run_interception_pass_async", _raise_mechanism_error)
@@ -732,9 +717,7 @@ async def test_create_run_active_mechanism_error_fails_closed(
     assert "mechanism error" in (run.error_detail or "")
 
 
-async def test_create_run_mixed_conformance_block_uses_detection_only_pass(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_mixed_conformance_block_uses_detection_only_pass(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     await _seed(session)
     muted_id = await _seed_guardrail(session, name="muted-sibling", action="block", is_muted=True)
     await _seed_guardrail(
@@ -822,10 +805,7 @@ async def test_create_run_conformance_block_fires_paging_alert(session: AsyncSes
     run = await _create(session, input_payload={"body": "clean"})
     assert run.status == "eval_failed"
     assert run.error_code == "eval_blocked"
-    assert any(
-        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "non_conformant"
-        for e in notified
-    )
+    assert any(e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "non_conformant" for e in notified)
 
 
 async def test_create_run_conformance_block_preserves_pin_skip(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
@@ -863,16 +843,11 @@ async def test_create_run_conformance_block_preserves_pin_skip(session: AsyncSes
     # The ghost-block pin-skip SURVIVES the conformance path: audited AND
     # alerted. Before the fix, the conformance block cleared the collected
     # skips, so no guardrail.skipped audit and no ghost-block alert existed.
-    audit = (
-        (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
-    )
+    audit = (await session.execute(select(AuditEvent).where(AuditEvent.event_type == "guardrail.skipped"))).scalars().all()
     assert len(audit) == 1
     assert audit[0].payload_json["guardrail"] == "ghost-block"
     assert audit[0].payload_json["reason"] == "soft_deleted"
-    assert any(
-        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
-        for e in notified
-    )
+    assert any(e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block" for e in notified)
 
 
 async def test_create_run_kill_switch_suppresses_conformance_block(session: AsyncSession):
@@ -891,9 +866,7 @@ async def test_create_run_kill_switch_suppresses_conformance_block(session: Asyn
     assert run.error_code is None
 
 
-async def test_create_run_replay_skip_fires_enforcement_gap_alert(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_replay_skip_fires_enforcement_gap_alert(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     """A soft-deleted pinned guardrail is skipped AND pages an enforcement-gap
     alert so the operator sees the control has silently stopped enforcing."""
     notified: list[dict[str, Any]] = []
@@ -912,10 +885,7 @@ async def test_create_run_replay_skip_fires_enforcement_gap_alert(
 
     run = await _create(session, input_payload={"body": "clean"}, is_replay=True)
     assert run.status == "pending"
-    assert any(
-        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block"
-        for e in notified
-    )
+    assert any(e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("guardrail") == "ghost-block" for e in notified)
 
 
 async def test_create_run_emits_guardrail_latency_metric(session: AsyncSession, caplog: pytest.LogCaptureFixture):
@@ -930,9 +900,7 @@ async def test_create_run_emits_guardrail_latency_metric(session: AsyncSession, 
     assert any(r.message == "guardrails.interception_latency_ms" for r in caplog.records)
 
 
-async def test_create_run_replay_pin_fingerprint_mismatch_blocks(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-):
+async def test_create_run_replay_pin_fingerprint_mismatch_blocks(session: AsyncSession, monkeypatch: pytest.MonkeyPatch):
     """A replay whose saved pin fingerprint disagrees with the pinned set fails
     CLOSED at the pin check — before enforcement runs — and pages the gap.
     """
@@ -951,7 +919,4 @@ async def test_create_run_replay_pin_fingerprint_mismatch_blocks(
 
     assert run.status == "eval_failed"
     assert run.error_code == "eval_blocked"
-    assert any(
-        e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "pin_fingerprint_mismatch"
-        for e in notified
-    )
+    assert any(e["event_type"] == "guardrail_enforcement_gap" and e["payload"].get("reason") == "pin_fingerprint_mismatch" for e in notified)

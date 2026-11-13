@@ -658,9 +658,7 @@ async def test_update_organisation_refuses_settings_json_writes() -> None:
     """
     session = _FakeSession(exc=RuntimeError("db work must not start"))
     with pytest.raises(ValueError, match="settings_json"):
-        await organisation_mod.update_organisation(
-            session, uuid.uuid4(), {"settings_json": {"logo_url": "https://x/l.png"}}
-        )
+        await organisation_mod.update_organisation(session, uuid.uuid4(), {"settings_json": {"logo_url": "https://x/l.png"}})
 
 
 async def test_update_organisation_refuses_settings_json_alongside_other_keys() -> None:
@@ -668,9 +666,7 @@ async def test_update_organisation_refuses_settings_json_alongside_other_keys() 
     the guard runs before anything is applied, so no partial write happens."""
     session = _FakeSession(exc=RuntimeError("db work must not start"))
     with pytest.raises(ValueError, match="settings_json"):
-        await organisation_mod.update_organisation(
-            session, uuid.uuid4(), {"name": "Renamed", "settings_json": {"k": 1}}
-        )
+        await organisation_mod.update_organisation(session, uuid.uuid4(), {"name": "Renamed", "settings_json": {"k": 1}})
 
 
 async def test_update_organisation_refuses_otel_config_json_writes() -> None:
@@ -679,9 +675,7 @@ async def test_update_organisation_refuses_otel_config_json_writes() -> None:
     ``execute`` raises if the guard is missing)."""
     session = _FakeSession(exc=RuntimeError("db work must not start"))
     with pytest.raises(ValueError, match="otel_config_json"):
-        await organisation_mod.update_organisation(
-            session, uuid.uuid4(), {"otel_config_json": {"otlp_endpoint": "http://x:4317"}}
-        )
+        await organisation_mod.update_organisation(session, uuid.uuid4(), {"otel_config_json": {"otlp_endpoint": "http://x:4317"}})
 
 
 async def test_update_organisation_still_writes_non_settings_columns(monkeypatch: pytest.MonkeyPatch) -> None:

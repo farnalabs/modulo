@@ -107,7 +107,7 @@ async def test_unique_provider_id_dedupes_globally() -> None:
 
 
 async def test_create_provider_uses_system_session_for_global_slug() -> None:
-    """create_provider scans ALL orgs via the modulo_system (BYPASSRLS) session.
+    """create_provider scans ALL orgs via the farna_control_system (BYPASSRLS) session.
 
     A provider named ``Okta`` when another org already owns the global slug
     ``okta`` must get ``okta-2`` — proving the scan is cross-org, not scoped to
@@ -200,7 +200,7 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
     """Regression test for the autobegin bug (FAR-464 CHANGES_REQUESTED #1).
 
     When MODULO_SYSTEM_DATABASE_URL is set, ``create_provider`` runs the global
-    slug scan on the modulo_system session, which is built with autobegin=False.
+    slug scan on the farna_control_system session, which is built with autobegin=False.
     The previous code called ``_unique_provider_id`` without an explicit
     transaction, raising ``InvalidRequestError`` and 503-ing the admin create
     endpoint. AsyncMock-based tests cannot catch this because the mock never
@@ -209,15 +209,13 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
     works without the autobegin error.
     """
     key = Fernet.generate_key().decode()
-    eng: AsyncEngine = create_async_engine(
-        "sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-    )
+    eng: AsyncEngine = create_async_engine("sqlite+aiosqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
     from farna.db.models.sso_provider import SsoProvider
 
     async with eng.begin() as conn:
         await conn.run_sync(lambda sync_conn: SsoProvider.__table__.create(sync_conn, checkfirst=True))
 
-    # The system session mirrors the real modulo_system factory (autobegin=False);
+    # The system session mirrors the real farna_control_system factory (autobegin=False);
     # the app session uses the default autobegin=True but is begun explicitly.
     app_maker = async_sessionmaker(eng, expire_on_commit=False)
     sys_maker = async_sessionmaker(eng, expire_on_commit=False, autobegin=False)

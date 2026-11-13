@@ -191,10 +191,7 @@ def _effective_config_set(pin: GuardrailPin | None) -> GuardrailConfigSet:
     snapshot. Returns the empty set when nothing is pinned/applied."""
     if pin is None:
         return GuardrailConfigSet()
-    if pin.status == "proposed":
-        serialized = pin.serialized_proposal or pin.serialized_snapshot
-    else:
-        serialized = pin.serialized_snapshot
+    serialized = pin.serialized_proposal or pin.serialized_snapshot if pin.status == "proposed" else pin.serialized_snapshot
     if not serialized:
         return GuardrailConfigSet()
     try:

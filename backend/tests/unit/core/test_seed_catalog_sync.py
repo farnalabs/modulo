@@ -40,9 +40,7 @@ class TestSeedCatalogMirror:
         known_tiers = {flag.name: flag.tier for flag in _KNOWN_FLAGS}
         for name, entry in _seed_by_name().items():
             assert name in known_tiers, f"catalog.FLAGS has unexpected flag {name}"
-            assert entry["tier_id"] == known_tiers[name], (
-                f"catalog.FLAGS tier for {name} is {entry['tier_id']!r}, _KNOWN_FLAGS says {known_tiers[name]!r}"
-            )
+            assert entry["tier_id"] == known_tiers[name], f"catalog.FLAGS tier for {name} is {entry['tier_id']!r}, _KNOWN_FLAGS says {known_tiers[name]!r}"
 
     def test_seed_catalog_has_no_duplicate_names(self) -> None:
         names = [entry["name"] for entry in FLAGS]

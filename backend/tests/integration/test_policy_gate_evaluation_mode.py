@@ -76,12 +76,7 @@ async def _seed_eval_with_gate(
     gate_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                "config_json, pass_threshold, suite_id, version, account_id) "
-                "VALUES (:id, :oid, :pid, CAST(:nid AS uuid), :name, 'regex', "
-                "CAST(:cfg AS json), NULL, NULL, 1, :aid)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, pass_threshold, suite_id, version, account_id) VALUES (:id, :oid, :pid, CAST(:nid AS uuid), :name, 'regex', CAST(:cfg AS json), NULL, NULL, 1, :aid)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -93,11 +88,7 @@ async def _seed_eval_with_gate(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, "
-                "evaluation_mode, version, enabled, enabled_at) "
-                "VALUES (:id, :oid, :eid, CAST(:nid AS uuid), :action, :mode, 1, true, now())"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, evaluation_mode, version, enabled, enabled_at) VALUES (:id, :oid, :eid, CAST(:nid AS uuid), :action, :mode, 1, true, now())"),
             {
                 "id": str(gate_id),
                 "oid": str(org_id),
@@ -265,8 +256,7 @@ async def test_c1_evaluation_mode_column_default_and_check(db_engine: AsyncEngin
     """TEXT, NOT NULL, default 'automatic', CHECK ('automatic','human')."""
     column = await _run_query(
         db_engine,
-        "SELECT data_type, is_nullable, column_default FROM information_schema.columns "
-        "WHERE table_name = 'policy_gates' AND column_name = 'evaluation_mode'",
+        "SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'policy_gates' AND column_name = 'evaluation_mode'",
     )
     assert column, "policy_gates.evaluation_mode column missing"
     data_type, is_nullable, column_default = column[0]
@@ -276,9 +266,7 @@ async def test_c1_evaluation_mode_column_default_and_check(db_engine: AsyncEngin
 
     check = await _run_query(
         db_engine,
-        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-        "WHERE conname = 'ck_policy_gates_evaluation_mode' "
-        "AND conrelid = 'public.policy_gates'::regclass",
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'ck_policy_gates_evaluation_mode' AND conrelid = 'public.policy_gates'::regclass",
     )
     assert check, "ck_policy_gates_evaluation_mode missing"
     assert "'automatic'" in check[0][0]
@@ -454,15 +442,12 @@ async def test_c14_e2e_approve_grounds_evidence_and_writes_no_decision_row(
     assert counts["eval_results"] == 0
     assert counts["policy_gate_decisions"] == 0
 
-    await _resume_with_decision(
-        db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
-    )
+    await _resume_with_decision(db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete")
 
     # C9 (post): exactly one Evidence row, keyed on the gate, subject run.
     rows = await _run_query(
         db_engine,
-        "SELECT key, subject_type, subject_id, value, producer_type, producer_id::text "
-        "FROM evidence WHERE subject_type = 'run' AND subject_id = :sid AND key = :key",
+        "SELECT key, subject_type, subject_id, value, producer_type, producer_id::text FROM evidence WHERE subject_type = 'run' AND subject_id = :sid AND key = :key",
         {"sid": str(run_id), "key": f"gate_decision_{gate_id}"},
     )
     assert len(rows) == 1
@@ -504,9 +489,7 @@ async def test_c15_e2e_reject_grounds_false_evidence(
     gate_id = ctx["gate_id"]
 
     review_id = await _interrupt(db_engine, migrated_db_url, ctx)
-    await _resume_with_decision(
-        db_engine, migrated_db_url, ctx, review_id, action="rejected", expected_status="rejected"
-    )
+    await _resume_with_decision(db_engine, migrated_db_url, ctx, review_id, action="rejected", expected_status="rejected")
 
     rows = await _run_query(
         db_engine,
@@ -549,9 +532,7 @@ async def test_c12_grounding_failure_is_fail_open(
     evidence_layer.append_evidence = _boom  # type: ignore[assignment]
     try:
         with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.node_runner"):
-            await _resume_with_decision(
-                db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
-            )
+            await _resume_with_decision(db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete")
     finally:
         evidence_layer.append_evidence = original  # type: ignore[assignment]
 
@@ -598,9 +579,7 @@ async def test_c18_cancellation_while_pending_is_clean(
     # pending-list status filter has nothing to surface.
     pending = await _count(
         db_engine,
-        "SELECT count(*) FROM hitl_claims c "
-        "WHERE c.run_id = :rid AND c.decision IS NULL "
-        "AND EXISTS (SELECT 1 FROM runs r WHERE r.id = c.run_id AND r.status = 'awaiting_human')",
+        "SELECT count(*) FROM hitl_claims c WHERE c.run_id = :rid AND c.decision IS NULL AND EXISTS (SELECT 1 FROM runs r WHERE r.id = c.run_id AND r.status = 'awaiting_human')",
         {"rid": str(run_id)},
     )
     assert pending == 0
@@ -689,9 +668,7 @@ async def test_m4_human_mode_flip_after_pause_still_grounds_the_decision(
         {"gid": str(gate_id)},
     )
 
-    await _resume_with_decision(
-        db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
-    )
+    await _resume_with_decision(db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete")
 
     rows = await _run_query(
         db_engine,
@@ -730,9 +707,7 @@ async def test_m4_automatic_mode_flip_after_pause_grounds_nothing(
         {"gid": str(gate_id)},
     )
 
-    await _resume_with_decision(
-        db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete"
-    )
+    await _resume_with_decision(db_engine, migrated_db_url, ctx, review_id, action="approved", expected_status="complete")
 
     after = await _decision_counts(db_engine, run_id)  # type: ignore[arg-type]
     assert after["evidence"] == 0, "a run that started automatic must never ground human Evidence"

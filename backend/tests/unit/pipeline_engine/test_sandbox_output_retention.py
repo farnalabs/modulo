@@ -240,11 +240,7 @@ class _RetentionSession:
             if isinstance(markers, dict):
                 self._row.raw_output_markers = dict(markers)
             return _RetentionResult(self._row, statement=stmt_text)
-        marker_rows = (
-            [_MarkerRow(key, value) for key, value in (self._row.raw_output_markers or {}).items()]
-            if "run_node_outputs" in stmt_text
-            else None
-        )
+        marker_rows = [_MarkerRow(key, value) for key, value in (self._row.raw_output_markers or {}).items()] if "run_node_outputs" in stmt_text else None
         return _RetentionResult(
             self._row if "FROM runs" in stmt_text else None,
             statement=stmt_text,
@@ -495,17 +491,11 @@ async def test_multi_attempt_retention_preserves_first_pr_url():
         }
 
     # Attempt 1 persists with a pr_url.
-    await _persist_raw_output_marker(
-        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(_PR_1)
-    )
+    await _persist_raw_output_marker(_factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(_PR_1))
     # A retry re-executes the same node under the SAME attempt key with an empty pr_url.
-    await _persist_raw_output_marker(
-        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker("")
-    )
+    await _persist_raw_output_marker(_factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_1, marker=_marker(""))
     # A DIFFERENT attempt key is a separate attempt — its marker survives alongside.
-    await _persist_raw_output_marker(
-        _factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_2, marker=_marker("")
-    )
+    await _persist_raw_output_marker(_factory, run_id=_RUN_ID, org_id_raw=_ORG_ID, node_id="n1", attempt_key=attempt_2, marker=_marker(""))
 
     assert row.raw_output_markers is not None
     assert set(row.raw_output_markers) == {attempt_1, attempt_2}, "every attempt's evidence survives"
@@ -545,9 +535,7 @@ async def test_db_hang_persist_fails_open_and_node_stays_retryable(caplog):
     # B2b: markers live on the new table keyed by attempt_key - the hung
     # write leaves NOTHING keyed there (None or an empty dict).
     assert row.raw_output_markers is None or not row.raw_output_markers, "the hung write must not land"
-    assert any("raw_output_marker_persist_timeout_or_error" in r.message for r in caplog.records), (
-        "the timeout must be logged (fail open), not silently swallowed"
-    )
+    assert any("raw_output_marker_persist_timeout_or_error" in r.message for r in caplog.records), "the timeout must be logged (fail open), not silently swallowed"
 
 
 @pytest.mark.parametrize("non_dict", ["[]", '"just a string"', "123"])
@@ -659,9 +647,7 @@ async def test_cross_tenant_run_id_writes_nothing(caplog):
     )
 
     assert row.raw_output_markers is None, "no marker may be written for an RLS-invisible run"
-    assert any("raw_output_marker_skip_row_not_found" in r.message for r in caplog.records), (
-        "the RLS-hidden path must log a distinguishable WARNING"
-    )
+    assert any("raw_output_marker_skip_row_not_found" in r.message for r in caplog.records), "the RLS-hidden path must log a distinguishable WARNING"
 
 
 async def test_silent_early_returns_are_logged(caplog):
@@ -673,12 +659,8 @@ async def test_silent_early_returns_are_logged(caplog):
     def _factory() -> _RetentionSession:
         return _RetentionSession(row)
 
-    await _persist_raw_output_marker(
-        _factory, run_id="", org_id_raw=_ORG_ID, node_id="n1", attempt_key=None, marker={"x": 1}
-    )
-    await _persist_raw_output_marker(
-        _factory, run_id=_RUN_ID, org_id_raw="not-a-uuid", node_id="n1", attempt_key=None, marker={"x": 1}
-    )
+    await _persist_raw_output_marker(_factory, run_id="", org_id_raw=_ORG_ID, node_id="n1", attempt_key=None, marker={"x": 1})
+    await _persist_raw_output_marker(_factory, run_id=_RUN_ID, org_id_raw="not-a-uuid", node_id="n1", attempt_key=None, marker={"x": 1})
 
     messages = {r.message for r in caplog.records}
     assert "sandbox_agent.raw_output_marker_skip_no_run_id" in messages
@@ -691,12 +673,7 @@ async def test_raw_output_redacts_tokenized_git_urls_but_keeps_pr_url():
     git push/clone output embeds ``https://x-access-token:<PAT>@github.com/...``)
     is persisted with the credential scrubbed — while pr_url extraction still
     runs against the FULL UNREDACTED source so the evidence is never lost."""
-    malformed = (
-        '{"summary": "clone via tokenized url", '
-        '"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git and '
-        'http://x-access-token:ghp_http456@github.com/org/repo2.git", '
-        '"pr_url": "https://github.com/org/repo/pull/42"'
-    )
+    malformed = '{"summary": "clone via tokenized url", "log": "https://x-access-token:ghp_abc123@github.com/org/repo.git and http://x-access-token:ghp_http456@github.com/org/repo2.git", "pr_url": "https://github.com/org/repo/pull/42"'
     fn, row, sandbox = _retention_env(output_json=malformed)
 
     with (
@@ -719,9 +696,7 @@ async def test_raw_output_redacts_bare_token_patterns():
     """FAR-188 QA round 2: defensively mask bare credential values that follow
     known labels (ghp_/gho_/github_pat_, Bearer , token=, x-access-token:) even
     when they appear OUTSIDE a URL — e.g. echoed auth lines in agent stdout."""
-    log_content = (
-        f"clone ok\nauth: Bearer gho_secret789\ntoken=github_pat_11AAABBBCC\nx-access-token:ghp_zzzzzz\nPR: {_PR_456}\n"
-    )
+    log_content = f"clone ok\nauth: Bearer gho_secret789\ntoken=github_pat_11AAABBBCC\nx-access-token:ghp_zzzzzz\nPR: {_PR_456}\n"
     sandbox = _make_sandbox_mock(output_json="[]", log_content=log_content)
     row = _FakeRunRow()
 
@@ -748,10 +723,7 @@ async def test_redaction_failure_never_blocks_retention():
     """FAR-188 QA round 2: if redaction itself raises (best-effort), the ORIGINAL
     content is retained and the marker still persists — retention must never be
     blocked by the scrub step, and pr_url extraction still ran first."""
-    malformed = (
-        '{"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git", '
-        '"pr_url": "https://github.com/org/repo/pull/42", '
-    )
+    malformed = '{"log": "https://x-access-token:ghp_abc123@github.com/org/repo.git", "pr_url": "https://github.com/org/repo/pull/42", '
     fn, row, sandbox = _retention_env(output_json=malformed)
 
     _boom_pattern = MagicMock()
@@ -1924,9 +1896,7 @@ async def test_streaming_writer_finalize_is_source_of_stdout_artifact_prove_the_
     # PROVE the streaming path ran: the writer finalized and its return became
     # the advertised envelope pointer. On origin/main the streaming writer is
     # never constructed, so finalize is never called and this assertion fails.
-    assert finalize_record.get("called") is True, (
-        "StreamingArtifactWriter.finalize must be the source of stdout_artifact"
-    )
+    assert finalize_record.get("called") is True, "StreamingArtifactWriter.finalize must be the source of stdout_artifact"
     assert pointer["size_bytes"] == finalize_record["ptr"]["size_bytes"]
     assert pointer["sha256"] == finalize_record["ptr"]["sha256"]
 

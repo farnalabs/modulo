@@ -69,10 +69,7 @@ async def intake_rig(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pipeline_id),
@@ -94,9 +91,7 @@ async def intake_rig(
         )
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -194,10 +189,7 @@ async def _deliver(
 async def _guardrail_blocked_events(db_engine: AsyncEngine, trigger_id: uuid.UUID) -> list[str]:
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text(
-                "SELECT error_detail FROM trigger_events "
-                "WHERE trigger_id = :tid AND validation_result = 'guardrail_blocked'"
-            ),
+            text("SELECT error_detail FROM trigger_events WHERE trigger_id = :tid AND validation_result = 'guardrail_blocked'"),
             {"tid": str(trigger_id)},
         )
         return list(result.scalars())
@@ -259,15 +251,7 @@ class TestGuardrailBlockAtIntake:
         # The raw payload was stored for replay (the sender can retry after
         # fixing): a webhook_payloads row is bound to the blocked event.
         async with db_engine.connect() as conn:
-            stored = (
-                await conn.execute(
-                    text(
-                        "SELECT count(*) FROM webhook_payloads wp "
-                        "JOIN trigger_events te ON te.id = wp.trigger_event_id "
-                        "WHERE te.validation_result = 'guardrail_blocked'"
-                    )
-                )
-            ).scalar_one()
+            stored = (await conn.execute(text("SELECT count(*) FROM webhook_payloads wp JOIN trigger_events te ON te.id = wp.trigger_event_id WHERE te.validation_result = 'guardrail_blocked'"))).scalar_one()
         assert stored == 1
 
         # Intake has no Run, so it must not manufacture an EvalResult row:
@@ -277,19 +261,11 @@ class TestGuardrailBlockAtIntake:
         async with db_engine.connect() as conn:
             eval_result_count = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM eval_results er "
-                        "JOIN evals e ON e.id = er.eval_id "
-                        "WHERE e.pipeline_id = :pid"
-                    ),
+                    text("SELECT count(*) FROM eval_results er JOIN evals e ON e.id = er.eval_id WHERE e.pipeline_id = :pid"),
                     {"pid": str(intake_rig["pipeline_id"])},
                 )
             ).scalar_one()
-            evidence = (
-                await conn.execute(
-                    text("SELECT value, subject_type, subject_id FROM evidence WHERE subject_type = 'trigger_event'")
-                )
-            ).fetchall()
+            evidence = (await conn.execute(text("SELECT value, subject_type, subject_id FROM evidence WHERE subject_type = 'trigger_event'"))).fetchall()
         assert eval_result_count == 0
         assert len(evidence) == 1
         assert evidence[0].subject_type == "trigger_event"
@@ -357,9 +333,7 @@ class TestGuardrailAdvisoryFindingLinkage:
         async with db_engine.connect() as conn:
             events = (
                 await conn.execute(
-                    text(
-                        "SELECT id, validation_result FROM trigger_events WHERE trigger_id = :tid ORDER BY received_at"
-                    ),
+                    text("SELECT id, validation_result FROM trigger_events WHERE trigger_id = :tid ORDER BY received_at"),
                     {"tid": str(intake_rig["trigger_id"])},
                 )
             ).fetchall()
@@ -495,17 +469,11 @@ class TestGuardrailRLSScoping:
         other_account = uuid.uuid4()
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                 {"id": str(other_org), "name": "FAR-214 Other Org", "slug": f"other-{other_org.hex[:8]}"},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, "
-                    "auth_provider, active) "
-                    "VALUES (:id, :email, :name, 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
                 {"id": str(other_account), "email": f"other-{other_org.hex[:8]}@example.com", "name": "Other User"},
             )
 
@@ -566,18 +534,11 @@ class TestGuardrailRLSScoping:
         hmac_secret = "whsec_far214_other"
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                 {"id": str(other_org), "name": "FAR-214 Org B", "slug": f"orgb-{other_org.hex[:8]}"},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                    "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                    "run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
                 {
                     "id": str(other_pipeline),
                     "oid": str(other_org),
@@ -597,11 +558,7 @@ class TestGuardrailRLSScoping:
                 {"id": str(other_snapshot), "pid": str(other_pipeline), "oid": str(other_org)},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"
-                ),
+                text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)"),
                 {
                     "id": str(other_trigger),
                     "oid": str(other_org),

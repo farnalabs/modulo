@@ -460,9 +460,7 @@ def test_capability_map_is_the_single_source_of_truth() -> None:
     ],
     ids=["anthropic", "cohere", "gemini", "mistral"],
 )
-def test_build_backend_passes_custom_endpoint_to_capable_adapter(
-    provider: str, class_name: str, endpoint_kwarg: str, creds: dict[str, str]
-) -> None:
+def test_build_backend_passes_custom_endpoint_to_capable_adapter(provider: str, class_name: str, endpoint_kwarg: str, creds: dict[str, str]) -> None:
     with patch(f"farna.model_backends.{provider}.{class_name}") as klass:
         klass.side_effect = _DummyBackend
         result = _build_backend(
@@ -485,9 +483,7 @@ def test_build_backend_passes_custom_endpoint_to_capable_adapter(
     ids=["anthropic", "cohere", "gemini", "mistral"],
 )
 @pytest.mark.anyio
-async def test_capable_adapter_health_check_probes_its_effective_endpoint(
-    provider: str, module_name: str, class_name: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_capable_adapter_health_check_probes_its_effective_endpoint(provider: str, module_name: str, class_name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """The health check must probe the custom endpoint, not the vendor default."""
     module = __import__(f"farna.model_backends.{module_name}", fromlist=[class_name])
     health_mock = AsyncMock(return_value=HealthResult(ok=True))

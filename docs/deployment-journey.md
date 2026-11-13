@@ -177,7 +177,7 @@ These are not future plans – they are built and tested today:
 - **Tenant isolation**: Row-Level Security on Postgres, organisation_id
   on all tables including LangGraph checkpoints
 - **Observability**: OpenTelemetry-native, pre-built Grafana dashboards
-- **Backup/DR**: `modulo backup` / `modulo restore` CLI, full DR procedure
+- **Backup/DR**: `farna-control backup` / `farna-control restore` CLI, full DR procedure
 - **Secrets backends**: Fernet (default), Vault, AWS Secrets Manager
 
 ### When you need a hosted SaaS (modulo-cloud)

@@ -1156,10 +1156,7 @@ def _accumulate_agent_tokens(
         if not isinstance(entry, dict):
             continue
         tt = entry.get("total_tokens")
-        if isinstance(tt, (int, float)) and not isinstance(tt, bool):
-            tokens = int(tt)
-        else:
-            tokens = int(entry.get("input_tokens") or 0) + int(entry.get("output_tokens") or 0)
+        tokens = int(tt) if isinstance(tt, (int, float)) and not isinstance(tt, bool) else int(entry.get("input_tokens") or 0) + int(entry.get("output_tokens") or 0)
         per_agent[agent_id] = per_agent.get(agent_id, 0) + tokens
     return per_agent
 
