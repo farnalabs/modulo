@@ -25,7 +25,6 @@ unit-tests:
   - backend/tests/unit/api/test_pipeline_team_visibility.py
   - backend/tests/unit/db/test_pipeline_pause_resume_crud.py
   - backend/tests/unit/db/test_pipeline_state_gate.py
-  - backend/tests/integration/test_migration_0286_pipeline_run_state.py
   - backend/tests/unit/test_pipeline_execution.py
   - backend/tests/unit/test_pipeline_node_conversion.py
   - backend/tests/unit/graph_validator
@@ -121,8 +120,7 @@ pipeline CRUD and the versioned snapshot endpoints (`feat-pipelines-pipeline-ver
       `PipelineNotRunnableError` state `paused` → 409 (run-side details under `feat-runs`)
       (`backend/tests/unit/db/test_pipeline_pause_resume_crud.py`,
       `backend/tests/unit/api/test_pipelines_routes_coverage.py`,
-      `backend/tests/unit/db/test_pipeline_state_gate.py`,
-      `backend/tests/integration/test_migration_0286_pipeline_run_state.py`)
+      `backend/tests/unit/db/test_pipeline_state_gate.py`)
 - [x] Node categories: deleting an unreferenced category succeeds, deleting one still
       referenced by a pipeline node is refused (409) with the referencing pipeline listed,
       and viewers cannot delete categories (403) (`admin/node-categories.feature`)

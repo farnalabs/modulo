@@ -16,14 +16,14 @@
 </p>
 
 <p align="center">
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=coverage" alt="Coverage"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=alert_status" alt="Quality Gate"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=software_quality_reliability_issues" alt="Reliability Issues"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=software_quality_security_issues" alt="Security Issues"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=code_smells" alt="Code Smells"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=sqale_rating" alt="Maintainability"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=reliability_rating" alt="Reliability"/></a>
-  <a href="https://sonarcloud.io/dashboard?id=farnalabs_modulo-new"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_modulo-new&amp;metric=security_rating" alt="Security"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=coverage" alt="Coverage"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=alert_status" alt="Quality Gate"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=software_quality_reliability_issues" alt="Reliability Issues"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=software_quality_security_issues" alt="Security Issues"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=code_smells" alt="Code Smells"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=sqale_rating" alt="Maintainability"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=reliability_rating" alt="Reliability"/></a>
+  <a href="https://sonarcloud.io/dashboard?id=farnalabs_farna-control"><img src="https://sonarcloud.io/api/project_badges/measure?project=farnalabs_farna-control&amp;metric=security_rating" alt="Security"/></a>
 </p>
 
 <p align="center">
