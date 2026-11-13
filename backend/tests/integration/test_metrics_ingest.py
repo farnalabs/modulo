@@ -47,9 +47,7 @@ async def _seed_org(db_engine: AsyncEngine, name: str, *, settings_json: dict | 
     settings = settings_json if settings_json is not None else {}
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, :sj)"
-            ).bindparams(bindparam("sj", settings, type_=JSON)),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, :sj)").bindparams(bindparam("sj", settings, type_=JSON)),
             {"id": str(org_id), "name": name, "slug": f"{name}-{org_id.hex[:8]}"},
         )
     return org_id
@@ -67,10 +65,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
             account_id = uuid.UUID(str(row[0]))
         else:
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
                 {"id": str(account_id), "email": email, "name": f"Admin {email}"},
             )
         membership = await conn.execute(
@@ -79,10 +74,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         )
         if membership.first() is None:
             await conn.execute(
-                text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')"
-                ),
+                text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
             )
     return account_id
@@ -164,9 +156,7 @@ async def _staged_rows(app_engine: AsyncEngine, org_id: uuid.UUID | None) -> lis
                 text("SELECT set_config('app.organisation_id', :oid, true)"),
                 {"oid": str(org_id)},
             )
-        result = await session.execute(
-            text("SELECT event_id, event_type, payload, recorded_at FROM metrics_staging ORDER BY event_id")
-        )
+        result = await session.execute(text("SELECT event_id, event_type, payload, recorded_at FROM metrics_staging ORDER BY event_id"))
         return [(r[0], r[1], r[2], r[3]) for r in result.all()]
 
 
@@ -325,9 +315,7 @@ class TestRouteSanitizerPersisted:
         row = next((r for r in rows if r[0] == "san-1"), None)
         assert row is not None, "sanitized event must be staged"
         written_payload = row[2]
-        assert written_payload["route"] == "unknown", (
-            "unmatched route must be sanitized to 'unknown' in the persisted payload"
-        )
+        assert written_payload["route"] == "unknown", "unmatched route must be sanitized to 'unknown' in the persisted payload"
         assert written_payload["status"] == 500, "non-route fields must be preserved"
 
 
@@ -362,9 +350,7 @@ class TestApiErrorDailyCapRealDb:
 
         after = await _staged_rows(app_engine, org_a)
         after_api_errors = sum(1 for r in after if r[1] == "api_error")
-        assert after_api_errors == before_api_errors, (
-            f"api_error events over the cap must be skipped (before={before_api_errors}, after={after_api_errors})"
-        )
+        assert after_api_errors == before_api_errors, f"api_error events over the cap must be skipped (before={before_api_errors}, after={after_api_errors})"
 
 
 class TestRlsBlocksCrossTenantInsert:
@@ -406,10 +392,7 @@ class TestRlsBlocksCrossTenantInsert:
                 )
                 with pytest.raises(SQLAlchemyError):
                     await conn.execute(
-                        text(
-                            "INSERT INTO metrics_staging (organisation_id, event_id, event_type) "
-                            "VALUES (:oid, :eid, 'pipeline_created')"
-                        ),
+                        text("INSERT INTO metrics_staging (organisation_id, event_id, event_type) VALUES (:oid, :eid, 'pipeline_created')"),
                         {"oid": str(org_b), "eid": forged_event},
                     )
 

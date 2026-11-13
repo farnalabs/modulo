@@ -42,9 +42,7 @@ _ORG = uuid.UUID("00000000-0000-0000-0000-0000000000f1")
 _OTHER_ORG = uuid.UUID("00000000-0000-0000-0000-0000000000f9")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000f2")
 _SNAPSHOT = uuid.UUID("00000000-0000-0000-0000-0000000000f3")
-_MIGRATION_PATH = (
-    Path(__file__).parents[3] / "src/farna/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
-)
+_MIGRATION_PATH = Path(__file__).parents[3] / "src/farna/db/migrations/versions/0348_far147_legacy_run_group_backfill.py"
 
 
 def _load_migration() -> Any:
@@ -694,9 +692,7 @@ async def test_load_legacy_outputs_reads_a_whole_page_in_one_query(engine: Async
     await _seed_org(session)
     first_run_id = uuid.uuid4()
     second_run_id = uuid.uuid4()
-    await _add_output_row(
-        session, run_id=first_run_id, node_id="node1", outputs_json={"output": {"agent_outcome": "failed"}}
-    )
+    await _add_output_row(session, run_id=first_run_id, node_id="node1", outputs_json={"output": {"agent_outcome": "failed"}})
 
     statements: list[str] = []
 

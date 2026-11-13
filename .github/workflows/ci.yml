@@ -1764,7 +1764,7 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          MODULO_CSRF_ENABLED: "false"
+          FARNA_CONTROL_CSRF_ENABLED: "false"
         run: |
           cat > /tmp/gen_openapi.py <<'EOF'
           import os, json, sys
@@ -1956,7 +1956,7 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///./modulo-e2e-route-check.db"
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          MODULO_CSRF_ENABLED: "false"
+          FARNA_CONTROL_CSRF_ENABLED: "false"
         run: uv run --no-build --no-sync python ../scripts/run_check_e2e_route_methods.py
 
   # Break-glass deploy gate = acceptance (b) of the break-glass admin recovery

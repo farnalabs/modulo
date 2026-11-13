@@ -50,10 +50,7 @@ def circleci_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def circleci_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    if ctx["valid"]:
-        response = httpx.Response(200, json={"login": "testuser"})
-    else:
-        response = httpx.Response(401, text="Unauthorized")
+    response = httpx.Response(200, json={"login": "testuser"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_API}/me").mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
@@ -140,9 +137,7 @@ def circleci_list_runs(ctx: dict) -> None:
         },
     ]
     with respx.mock:
-        respx.get(f"{_API}/project/{ctx['project']}/pipeline").mock(
-            return_value=httpx.Response(200, json={"items": runs})
-        )
+        respx.get(f"{_API}/project/{ctx['project']}/pipeline").mock(return_value=httpx.Response(200, json={"items": runs}))
         ctx["runs"] = asyncio.run(ctx["connector"].list_runs(pipeline_id=ctx["project"]))
 
 
@@ -160,9 +155,7 @@ def circleci_result_contains_runs(ctx: dict) -> None:
 @when(parsers.parse('the connector fetches logs for pipeline "{run_id}"'))
 def circleci_get_run_logs(ctx: dict, run_id: str) -> None:
     with respx.mock:
-        respx.get(f"{_API}/pipeline/{run_id}/workflow").mock(
-            return_value=httpx.Response(200, json={"items": [{"id": "wf-uuid-1", "name": "build"}]})
-        )
+        respx.get(f"{_API}/pipeline/{run_id}/workflow").mock(return_value=httpx.Response(200, json={"items": [{"id": "wf-uuid-1", "name": "build"}]}))
         respx.get(f"{_API}/workflow/wf-uuid-1/job").mock(
             return_value=httpx.Response(
                 200,

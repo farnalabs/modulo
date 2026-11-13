@@ -110,12 +110,7 @@ async def correction_rig(
     graph = {"nodes": [{"id": node_id, "node_type": "agent", "agent_id": None}]}
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, (:graph)::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, (:graph)::json)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(test_org),
@@ -139,11 +134,7 @@ async def correction_rig(
         # (a JSON-graph id with no enforced FK). ON CONFLICT keeps this safe if
         # a trigger has already created the row.
         await conn.execute(
-            text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:nid, :oid, :pid, 'correction-node', :aid, 300) "
-                "ON CONFLICT (id) DO NOTHING"
-            ),
+            text("INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:nid, :oid, :pid, 'correction-node', :aid, 300) ON CONFLICT (id) DO NOTHING"),
             {"nid": node_id, "oid": str(test_org), "pid": str(pipeline_id), "aid": str(test_user)},
         )
         guardrail_id = uuid.uuid4()
@@ -199,13 +190,7 @@ async def _create_feedback_record(
         await set_rls_org(session, rig["org_id"])
         run_number = await _allocate_run_number(session, uuid.UUID(str(rig["org_id"])))
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, status, input_payload, input_hash, langgraph_thread_id, "
-                "account_id, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'eval_failed', '{}'::json, "
-                "'hash', :thread, :aid, :rnum)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_payload, input_hash, langgraph_thread_id, account_id, run_number) VALUES (:id, :oid, :pid, :sid, 'manual', 'eval_failed', '{}'::json, 'hash', :thread, :aid, :rnum)"),
             {
                 "id": str(run_id),
                 "oid": str(rig["org_id"]),
@@ -266,9 +251,7 @@ class TestSingleNodeCorrectionPersistsResolved:
 
             from farna.db.models.eval import Eval
 
-            guardrail_row = (
-                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
-            ).scalar_one()
+            guardrail_row = (await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))).scalar_one()
 
         from farna.core.eval_engine import EvalDefinition as EvalDefDTO
         from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
@@ -327,9 +310,7 @@ class TestSingleNodeCorrectionPersistsResolved:
 
             from farna.db.models.eval import Eval
 
-            guardrail_row = (
-                await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))
-            ).scalar_one()
+            guardrail_row = (await session.execute(select(Eval).where(Eval.id == correction_rig["guardrail_id"]))).scalar_one()
 
         from farna.core.eval_engine import EvalDefinition as EvalDefDTO
         from farna.core.guardrails.correction import CorrectionDefinition as CorrDef
@@ -346,9 +327,7 @@ class TestSingleNodeCorrectionPersistsResolved:
         )
         correction = CorrDef.from_eval_config(guardrail_row.config_json)
         correction.validate_guardrail_binding(guardrail_dto)
-        backend = _StubCorrectionBackend(
-            {_fixture_key(correction, {"body": "\u2022\u2022\u2022"}): json.dumps({"body": "123456789012345678901"})}
-        )
+        backend = _StubCorrectionBackend({_fixture_key(correction, {"body": "\u2022\u2022\u2022"}): json.dumps({"body": "123456789012345678901"})})
 
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
@@ -470,10 +449,7 @@ class TestOrgWideConcurrentCap:
         async with db_engine.connect() as conn:
             baseline = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM feedback_records "
-                        "WHERE organisation_id = :oid AND feedback_status = 'correcting'"
-                    ),
+                    text("SELECT count(*) FROM feedback_records WHERE organisation_id = :oid AND feedback_status = 'correcting'"),
                     {"oid": str(test_org)},
                 )
             ).scalar_one()
@@ -504,9 +480,7 @@ class TestOrgWideConcurrentCap:
         )
         # The correction carries NO input_redaction_patterns, so the engine
         # passes the node input through unchanged.
-        backend = _StubCorrectionBackend(
-            {_fixture_key(correction, {"body": "secret: hunter2"}): json.dumps({"body": "safe now"})}
-        )
+        backend = _StubCorrectionBackend({_fixture_key(correction, {"body": "secret: hunter2"}): json.dumps({"body": "safe now"})})
 
         async with factory() as session, session.begin():
             await set_rls_org(session, test_org)
@@ -542,10 +516,7 @@ class TestCorrectionRlsIsolation:
         other_org = uuid.uuid4()
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) "
-                    "VALUES (:id, 'Other Org', 'other-org', '{}'::json)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, 'Other Org', 'other-org', '{}'::json)"),
                 {"id": str(other_org)},
             )
 

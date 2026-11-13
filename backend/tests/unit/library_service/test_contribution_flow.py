@@ -602,10 +602,7 @@ class TestSubmitContributionVersion:
 
         # version_group_id was NOT seeded (already present) — only the new
         # draft row carries it.
-        assert all(
-            "version_group_id" not in call or call.get("contribution_status") == CONTRIBUTION_DRAFT
-            for call in seed_calls
-        )
+        assert all("version_group_id" not in call or call.get("contribution_status") == CONTRIBUTION_DRAFT for call in seed_calls)
         assert captured["version"] == "2.1"
 
     async def test_raises_not_found_when_existing_missing(self) -> None:

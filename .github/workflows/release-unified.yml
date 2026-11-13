@@ -2545,7 +2545,7 @@ jobs:
           DATABASE_URL: "sqlite+aiosqlite:///./modulo-gen-test.db"
           SECRET_KEY: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           FERNET_KEY: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-          MODULO_CSRF_ENABLED: "false"
+          FARNA_CONTROL_CSRF_ENABLED: "false"
         shell: bash
         run: |
           set -euo pipefail

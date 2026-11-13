@@ -100,9 +100,7 @@ def free_client() -> Generator[TestClient, None, None]:
         account_id=_USER_UUID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -128,9 +126,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
         account_id=_USER_UUID,
         org_role="viewer",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="viewer", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_UUID, account_id=_USER_UUID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -489,11 +485,7 @@ class TestObservabilityTestEndpoint:
         with a plain unpinned client."""
 
         async def _fake_pinned(_url: str) -> httpx.AsyncClient:
-            raise ValueError(
-                "URL hostname collector.example.com resolves to a private/internal "
-                "address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES "
-                "to allow this target, or use a public URL."
-            )
+            raise ValueError("URL hostname collector.example.com resolves to a private/internal address (169.254.169.254). Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL.")
 
         with (
             patch("farna.api.routes.observability.pinned_async_client", new=_fake_pinned),

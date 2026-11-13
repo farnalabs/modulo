@@ -269,18 +269,11 @@ _MAPPING_EXCEPTION_REASONS: dict[tuple[str, str], str] = {
     (
         "api/routes/sso.py",
         _SSO_CALLBACK_FUNCTION,
-    ): (
-        "browser-redirect surface: the IdP navigates the user here, so a JSON 409 cannot be "
-        "delivered and no SSO contention error code exists; 55P03 stays provider_unavailable"
-    ),
+    ): ("browser-redirect surface: the IdP navigates the user here, so a JSON 409 cannot be delivered and no SSO contention error code exists; 55P03 stays provider_unavailable"),
     (
         "api/routes/library.py",
         "create_lifecycle_map_from_primitive_endpoint",
-    ): (
-        "TRANSITIVE residual (not a direct caller): reaches C20 via materialize_map_from_primitive "
-        "-> save_map_version -> get_lifecycle_map_for_update; the lock is on a row inserted in the "
-        "SAME transaction, so 55P03 is not practically reachable and the 503 arm is accepted"
-    ),
+    ): ("TRANSITIVE residual (not a direct caller): reaches C20 via materialize_map_from_primitive -> save_map_version -> get_lifecycle_map_for_update; the lock is on a row inserted in the SAME transaction, so 55P03 is not practically reachable and the 503 arm is accepted"),
 }
 
 # C5/C6 are bounded one level up: the shared org JSON-column patch calls
@@ -616,9 +609,7 @@ def _local_sqlalchemy_arms(function: ast.AST) -> list[ast.ExceptHandler]:
     return arms
 
 
-_ROUTE_DECORATOR_NAMES = frozenset(
-    {"get", "post", "put", "patch", "delete", "head", "options", "api_route", "route", "websocket"}
-)
+_ROUTE_DECORATOR_NAMES = frozenset({"get", "post", "put", "patch", "delete", "head", "options", "api_route", "route", "websocket"})
 
 
 def _is_route_handler(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -682,11 +673,7 @@ def _mapping_failure(
     if (rel, function_name) in _MAPPING_EXCEPTION_REASONS:
         return None
     if _local_sqlalchemy_arms(function):
-        return (
-            f"{rel}::{function_name} directly calls {sorted(helpers)} and its local "
-            f"except SQLAlchemyError arm never calls {_CLASSIFIER_NAME} — a contended row "
-            "would answer 503/500 instead of a 409 conflict"
-        )
+        return f"{rel}::{function_name} directly calls {sorted(helpers)} and its local except SQLAlchemyError arm never calls {_CLASSIFIER_NAME} — a contended row would answer 503/500 instead of a 409 conflict"
     if not _is_route_handler(function):
         # A module-local helper owns no response: with no local except arm the
         # exception propagates to the request arm that called it, whose own arm
@@ -695,10 +682,7 @@ def _mapping_failure(
         # change in the response a contended request actually receives.
         return None
     if not _is_handle_db_errors_decorated(function):
-        return (
-            f"{rel}::{function_name} directly calls {sorted(helpers)} but has neither "
-            f"{_CLASSIFIER_NAME} nor the @{_HANDLE_DB_ERRORS_NAME} backstop"
-        )
+        return f"{rel}::{function_name} directly calls {sorted(helpers)} but has neither {_CLASSIFIER_NAME} nor the @{_HANDLE_DB_ERRORS_NAME} backstop"
     return None
 
 
@@ -725,11 +709,7 @@ def test_every_file_taking_a_row_lock_is_in_the_inventory_allowlist() -> None:
     discovered = _row_lock_file_set()
     unexpected = sorted(discovered - _ROW_LOCK_FILES)
     stale = sorted(_ROW_LOCK_FILES - discovered)
-    assert not unexpected, (
-        "these files take a row lock but are absent from the FAR-1825 inventory allowlist: "
-        f"{unexpected}. Add each to docs/architecture/lock-point-inventory.md and _ROW_LOCK_FILES "
-        "(and bound it if it is category C)."
-    )
+    assert not unexpected, f"these files take a row lock but are absent from the FAR-1825 inventory allowlist: {unexpected}. Add each to docs/architecture/lock-point-inventory.md and _ROW_LOCK_FILES (and bound it if it is category C)."
     assert not stale, f"these allowlisted files no longer take a row lock: {stale}"
 
 
@@ -786,13 +766,7 @@ def test_route_arms_fronting_bounded_crud_classify_55p03_as_a_conflict() -> None
             failures.append(f"{rel}::{function_name} not found")
             continue
         classified = any(
-            isinstance(handler, ast.ExceptHandler)
-            and isinstance(handler.type, ast.Name)
-            and handler.type.id == "SQLAlchemyError"
-            and any(
-                isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == _CLASSIFIER_NAME
-                for node in ast.walk(handler)
-            )
+            isinstance(handler, ast.ExceptHandler) and isinstance(handler.type, ast.Name) and handler.type.id == "SQLAlchemyError" and any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == _CLASSIFIER_NAME for node in ast.walk(handler))
             for handler in ast.walk(function)
             if isinstance(handler, ast.ExceptHandler)
         )
@@ -820,29 +794,13 @@ def test_sso_callback_redirect_surface_is_an_explicit_55p03_exception() -> None:
     """
     module = _parse("api/routes/sso.py")
     function = _function_node(module, _SSO_CALLBACK_FUNCTION)
-    arms = [
-        handler
-        for handler in ast.walk(function)
-        if isinstance(handler, ast.ExceptHandler)
-        and isinstance(handler.type, ast.Name)
-        and handler.type.id == "SQLAlchemyError"
-    ]
+    arms = [handler for handler in ast.walk(function) if isinstance(handler, ast.ExceptHandler) and isinstance(handler.type, ast.Name) and handler.type.id == "SQLAlchemyError"]
     assert len(arms) == 1, "the SSO callback should keep exactly one SQLAlchemyError arm"
 
-    raised = [
-        node
-        for node in ast.walk(arms[0])
-        if isinstance(node, ast.Raise)
-        and isinstance(node.exc, ast.Call)
-        and isinstance(node.exc.func, ast.Name)
-        and node.exc.func.id == "SsoCallbackError"
-    ]
+    raised = [node for node in ast.walk(arms[0]) if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and isinstance(node.exc.func, ast.Name) and node.exc.func.id == "SsoCallbackError"]
     assert raised, "the SSO callback SQLAlchemyError arm no longer raises SsoCallbackError"
     error_codes = {_dotted_name(arg) for call in raised for arg in call.exc.args if isinstance(arg, ast.expr)}
-    assert "SSO_ERROR_PROVIDER_UNAVAILABLE" in error_codes, (
-        "the redirect surface's documented 55P03 mapping changed; update the inventory's "
-        "'Mapping truth' table and this pinned exception in the same change"
-    )
+    assert "SSO_ERROR_PROVIDER_UNAVAILABLE" in error_codes, "the redirect surface's documented 55P03 mapping changed; update the inventory's 'Mapping truth' table and this pinned exception in the same change"
     assert ("api/routes/sso.py", _SSO_CALLBACK_FUNCTION) not in _MAPPED_55P03_ROUTE_ARMS
 
 
@@ -1144,15 +1102,9 @@ def test_every_direct_route_caller_of_a_swept_helper_classifies_55p03() -> None:
     """
     callers = _direct_swept_callers()
 
-    assert callers, (
-        "swept-helper caller discovery found NOTHING — the import resolution or helper table is "
-        "stale, which is not the same as every caller being mapped"
-    )
+    assert callers, "swept-helper caller discovery found NOTHING — the import resolution or helper table is stale, which is not the same as every caller being mapped"
     missing_known = _KNOWN_SWEPT_CALLERS - set(callers)
-    assert not missing_known, (
-        f"discovery no longer sees known direct swept-helper callers {sorted(missing_known)} — "
-        "fix the discovery, do not weaken the guard"
-    )
+    assert not missing_known, f"discovery no longer sees known direct swept-helper callers {sorted(missing_known)} — fix the discovery, do not weaken the guard"
 
     failures: list[str] = []
     for (rel, function_name), helpers in sorted(callers.items()):
@@ -1172,9 +1124,7 @@ def test_every_recorded_mapping_exception_still_matches_the_code() -> None:
     for (rel, function_name), reason in _MAPPING_EXCEPTION_REASONS.items():
         function = _function_node(_parse(rel), function_name)  # raises if renamed/removed
         assert len(reason) >= 40, f"{rel}::{function_name} exception reason is too thin: {reason!r}"
-        assert not _calls_classifier(function), (
-            f"{rel}::{function_name} now classifies 55P03 — remove its mapping exception and re-record the behaviour"
-        )
+        assert not _calls_classifier(function), f"{rel}::{function_name} now classifies 55P03 — remove its mapping exception and re-record the behaviour"
 
     # sso.py's callback is pinned separately; library.py's arm is the transitive
     # residual. Both must stay OUT of the enumerated arm list (they do not call
@@ -1188,10 +1138,7 @@ def test_every_recorded_mapping_exception_still_matches_the_code() -> None:
 
 def _unavailable_reply(handler: ast.ExceptHandler) -> bool:
     """Whether *handler* raises the route's generic 503 helper for a DB error."""
-    return any(
-        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_unavailable_error"
-        for node in ast.walk(handler)
-    )
+    return any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_unavailable_error" for node in ast.walk(handler))
 
 
 def test_library_materialise_arm_is_a_recorded_transitive_residual() -> None:
@@ -1213,14 +1160,8 @@ def test_library_materialise_arm_is_a_recorded_transitive_residual() -> None:
 
     arms = _local_sqlalchemy_arms(function)
     assert len(arms) == 1, "the library materialise arm should keep exactly one SQLAlchemyError handler"
-    assert not _calls_classifier(function), (
-        f"{rel}::{function_name} now classifies 55P03 — remove it from "
-        "_MAPPING_EXCEPTION_REASONS and from the inventory's residual table"
-    )
-    assert _unavailable_reply(arms[0]), (
-        "the recorded residual expects the arm to answer _unavailable_error() (503); if the mapping "
-        "changed, re-record the residual"
-    )
+    assert not _calls_classifier(function), f"{rel}::{function_name} now classifies 55P03 — remove it from _MAPPING_EXCEPTION_REASONS and from the inventory's residual table"
+    assert _unavailable_reply(arms[0]), "the recorded residual expects the arm to answer _unavailable_error() (503); if the mapping changed, re-record the residual"
     assert (rel, function_name) in _MAPPING_EXCEPTION_REASONS
 
 
@@ -1277,24 +1218,17 @@ async def test_library_import_inserts_the_map_before_the_first_c20_lock() -> Non
         patch.object(import_export, "save_map_version", new=fake_save),
         patch.object(import_export, "get_existing_lifecycle_map_names", new=AsyncMock(return_value=set())),
     ):
-        await import_export.materialize_map_from_primitive(
-            None, org_id=uuid.uuid4(), account_id=uuid.uuid4(), primitive=primitive
-        )
+        await import_export.materialize_map_from_primitive(None, org_id=uuid.uuid4(), account_id=uuid.uuid4(), primitive=primitive)
 
     # The route commits once at the end (get_db_session), so these calls are
     # one request transaction: create+flush first, locks strictly after, and
     # every lock is on THE id the flush minted — never a foreign row.
     assert len(order) >= 2, "a two-version envelope expects one create followed by one save"
-    assert order[0] == "create", (
-        f"the version-1 insert must be the FIRST transaction action, got {order[0]!r} first — "
-        "a save before the create+flush cannot rely on the same-transaction premise"
-    )
+    assert order[0] == "create", f"the version-1 insert must be the FIRST transaction action, got {order[0]!r} first — a save before the create+flush cannot rely on the same-transaction premise"
     assert len(created_ids) == 1, "the replay creates exactly one map inside the transaction"
     save_actions = [action for action in order[1:] if action.startswith("save:")]
     assert len(save_actions) == 1, f"a two-version envelope replays exactly one later version, got {len(save_actions)}"
-    assert save_actions[0] == f"save:{created_ids[0]}", (
-        f"the first C20 lock must target the row this transaction created ({created_ids[0]}), got {save_actions[0]!r}"
-    )
+    assert save_actions[0] == f"save:{created_ids[0]}", f"the first C20 lock must target the row this transaction created ({created_ids[0]}), got {save_actions[0]!r}"
 
 
 def test_lifecycle_map_create_flushes_inside_the_call_and_never_commits() -> None:
@@ -1315,22 +1249,14 @@ def test_lifecycle_map_create_flushes_inside_the_call_and_never_commits() -> Non
     top = [stmt for stmt in function.body if isinstance(stmt, ast.stmt)]
     flush_positions = [index for index, stmt in enumerate(top) if _is_session_call(stmt, attr="flush")]
     flush_count = len(flush_positions)
-    assert flush_count == 1, (
-        f"create_lifecycle_map must flush exactly once before it returns (minted id supplies"
-        f" save_map_version's lock target), found {flush_count}"
-    )
+    assert flush_count == 1, f"create_lifecycle_map must flush exactly once before it returns (minted id supplies save_map_version's lock target), found {flush_count}"
     commit_positions = [index for index, stmt in enumerate(top) if _is_session_call(stmt, attr="commit")]
     build_return = [index for index, stmt in enumerate(top) if isinstance(stmt, ast.Return)]
     assert len(build_return) == 1, "create_lifecycle_map has a single return in its top-level body"
     assert flush_positions, "create_lifecycle_map must flush before it returns"
-    assert flush_positions[0] < build_return[0], (
-        "create_lifecycle_map must flush BEFORE it returns so the id exists before any caller locks the row"
-    )
+    assert flush_positions[0] < build_return[0], "create_lifecycle_map must flush BEFORE it returns so the id exists before any caller locks the row"
     commit_count = len(commit_positions)
-    assert commit_count == 0, (
-        f"create_lifecycle_map must NOT commit: the map stays inside the caller's request "
-        f"transaction (get_db_session), found {commit_count} commit call(s)"
-    )
+    assert commit_count == 0, f"create_lifecycle_map must NOT commit: the map stays inside the caller's request transaction (get_db_session), found {commit_count} commit call(s)"
 
 
 def _is_session_call(stmt: ast.stmt, *, attr: str) -> bool:
@@ -1343,12 +1269,7 @@ def _is_session_call(stmt: ast.stmt, *, attr: str) -> bool:
     if call is None:
         return False
     function = call.func
-    return (
-        isinstance(function, ast.Attribute)
-        and function.attr == attr
-        and isinstance(function.value, ast.Name)
-        and function.value.id == "session"
-    )
+    return isinstance(function, ast.Attribute) and function.attr == attr and isinstance(function.value, ast.Name) and function.value.id == "session"
 
 
 def test_c5_c6_generic_fallback_is_bounded_by_the_shared_patch_caller() -> None:
@@ -1364,31 +1285,13 @@ def test_c5_c6_generic_fallback_is_bounded_by_the_shared_patch_caller() -> None:
 
     # The generic fallback is defined once and called from exactly that
     # bounded dispatcher (checking the CALL, not a token).
-    call_sites = [
-        call
-        for call in ast.walk(module)
-        if isinstance(call, ast.Call)
-        and (
-            (isinstance(call.func, ast.Name) and call.func.id == _GENERIC_FALLBACK)
-            or (isinstance(call.func, ast.Attribute) and call.func.attr == _GENERIC_FALLBACK)
-        )
-    ]
+    call_sites = [call for call in ast.walk(module) if isinstance(call, ast.Call) and ((isinstance(call.func, ast.Name) and call.func.id == _GENERIC_FALLBACK) or (isinstance(call.func, ast.Attribute) and call.func.attr == _GENERIC_FALLBACK))]
     assert len(call_sites) == 1, f"expected one bounded call to {_GENERIC_FALLBACK}, got {len(call_sites)}"
-    assert bound_line < call_sites[0].lineno <= caller_node.end_lineno, (
-        "the single generic-fallback call is no longer inside the bounded dispatcher"
-    )
+    assert bound_line < call_sites[0].lineno <= caller_node.end_lineno, "the single generic-fallback call is no longer inside the bounded dispatcher"
 
 
 def _first_call_line(node: ast.AST, func_name: str) -> int | None:
-    lines = [
-        child.lineno
-        for child in ast.walk(node)
-        if isinstance(child, ast.Call)
-        and (
-            (isinstance(child.func, ast.Name) and child.func.id == func_name)
-            or (isinstance(child.func, ast.Attribute) and child.func.attr == func_name)
-        )
-    ]
+    lines = [child.lineno for child in ast.walk(node) if isinstance(child, ast.Call) and ((isinstance(child.func, ast.Name) and child.func.id == func_name) or (isinstance(child.func, ast.Attribute) and child.func.attr == func_name))]
     return min(lines) if lines else None
 
 

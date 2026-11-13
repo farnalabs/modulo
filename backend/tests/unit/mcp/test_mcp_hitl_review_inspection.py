@@ -413,9 +413,7 @@ class TestReadOnlyGuarantee(_AuthContext):
 class TestHitlInspectionBranches(_AuthContext):
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_team_scoped_key_appends_team_clause(
-        self, mock_session: AsyncMock, mock_validate_auth: AsyncMock
-    ) -> None:
+    async def test_team_scoped_key_appends_team_clause(self, mock_session: AsyncMock, mock_validate_auth: AsyncMock) -> None:
         self.setup_method()
         team_id = uuid.uuid4()
         _ctx_team_id.set(team_id)
@@ -437,9 +435,7 @@ class TestHitlInspectionBranches(_AuthContext):
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_scope_error_returns_insufficient_scope(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_list_scope_error_returns_insufficient_scope(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await list_hitl_reviews()
         assert out["error"] == "insufficient_scope"
         assert "no scope" in out["detail"]
@@ -449,17 +445,13 @@ class TestHitlInspectionBranches(_AuthContext):
         side_effect=ProgrammingError("relation missing", "detail", None),
     )
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_programming_error_returns_migration_required(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_list_programming_error_returns_migration_required(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await list_hitl_reviews()
         assert out["error"] == "migration_required"
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_list_generic_error_returns_tool_error(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_list_generic_error_returns_tool_error(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await list_hitl_reviews()
         assert out["error"] == "server_error"
 
@@ -506,9 +498,7 @@ class TestHitlInspectionBranches(_AuthContext):
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_gate_scope_error_returns_insufficient_scope(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_gate_scope_error_returns_insufficient_scope(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "insufficient_scope"
 
@@ -517,17 +507,13 @@ class TestHitlInspectionBranches(_AuthContext):
         side_effect=ProgrammingError("relation missing", "detail", None),
     )
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_gate_programming_error_returns_migration_required(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_gate_programming_error_returns_migration_required(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "migration_required"
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_gate_generic_error_returns_tool_error(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_gate_generic_error_returns_tool_error(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_hitl_review(run_id=str(uuid.uuid4()), review_id="hitl_review_a_b")
         assert out["error"] == "server_error"
 
@@ -558,9 +544,7 @@ class TestHitlInspectionBranches(_AuthContext):
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=MCPAuthorizationError("no scope"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_reviews_scope_error_returns_insufficient_scope(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_pipeline_reviews_scope_error_returns_insufficient_scope(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "insufficient_scope"
 
@@ -569,17 +553,13 @@ class TestHitlInspectionBranches(_AuthContext):
         side_effect=ProgrammingError("relation missing", "detail", None),
     )
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_reviews_programming_error_returns_migration_required(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_pipeline_reviews_programming_error_returns_migration_required(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "migration_required"
 
     @patch("farna.api.mcp_server._check_agent_tool_scope", side_effect=ValueError("boom"))
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
-    async def test_get_pipeline_reviews_generic_error_returns_tool_error(
-        self, mock_validate_auth: AsyncMock, mock_scope: MagicMock
-    ) -> None:
+    async def test_get_pipeline_reviews_generic_error_returns_tool_error(self, mock_validate_auth: AsyncMock, mock_scope: MagicMock) -> None:
         out = await get_pipeline_reviews(pipeline_id=str(uuid.uuid4()))
         assert out["error"] == "server_error"
 

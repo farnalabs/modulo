@@ -89,10 +89,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
     account_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"{label}-{account_id.hex[:12]}@example.com",
@@ -100,10 +97,7 @@ async def _seed_operator_account(db_engine: AsyncEngine, org_id: uuid.UUID, labe
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'operator')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'operator')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -482,9 +476,7 @@ async def _seed_two_pipelines_one_team(
 
 async def _read_tag(db_engine: AsyncEngine, snapshot_id: uuid.UUID) -> object:
     async with db_engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT tag FROM pipeline_snapshots WHERE id = :id"), {"id": str(snapshot_id)})
-        ).scalar_one_or_none()
+        return (await conn.execute(text("SELECT tag FROM pipeline_snapshots WHERE id = :id"), {"id": str(snapshot_id)})).scalar_one_or_none()
 
 
 async def test_tag_snapshot_through_a_foreign_pipeline_path_is_404(
@@ -592,16 +584,12 @@ async def test_diff_non_member_never_reaches_the_handler(
 
 async def _read_archived_at(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> object:
     async with db_engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT archived_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
-        ).scalar_one_or_none()
+        return (await conn.execute(text("SELECT archived_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})).scalar_one_or_none()
 
 
 async def _read_deleted_at(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> object:
     async with db_engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT deleted_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
-        ).scalar_one_or_none()
+        return (await conn.execute(text("SELECT deleted_at FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})).scalar_one_or_none()
 
 
 async def _soft_delete(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> None:
@@ -814,9 +802,7 @@ async def test_team_a_member_binding_team_b_connector_is_rejected_409(
     team_a = await _seed_team(db_engine, test_org, test_user, member_id=member, label="a")
     team_b = await _seed_team(db_engine, test_org, test_user, member_id=None, label="b")
     pipeline_id = await _insert_team_private_pipeline(db_engine, test_org, test_user, team_a)
-    connector_id, connector_name = await _seed_team_private_connector(
-        db_engine, test_org, test_user, team_b, label="gate"
-    )
+    connector_id, connector_name = await _seed_team_private_connector(db_engine, test_org, test_user, team_b, label="gate")
     node = {
         "id": str(uuid.uuid4()),
         "node_type": "agent",

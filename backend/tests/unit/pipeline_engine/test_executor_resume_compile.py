@@ -150,9 +150,7 @@ def _make_resume_session(
     # True resume() query order: sandbox-capacity graph_json probe, snapshot
     # select, eval-definitions load, claim evaluation-mode stamp read (first
     # session block), THEN the pipeline select (second session block).
-    execute_results = iter(
-        [graph_json_result, snapshot_result, eval_result, claim_stamp_result, pipeline_result, count_result]
-    )
+    execute_results = iter([graph_json_result, snapshot_result, eval_result, claim_stamp_result, pipeline_result, count_result])
 
     async def _execute(*_args: Any, **_kwargs: Any) -> Any:
         try:

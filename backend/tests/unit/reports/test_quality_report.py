@@ -445,9 +445,7 @@ class TestSlackBlockKitSchema:
         # Exact block order is a construction detail, not a contract: the
         # builder assembles a fixed literal list. What callers can rely on is
         # the composition of the report and that the header leads it.
-        assert collections.Counter(types) == collections.Counter(
-            {"header": 1, "context": 2, "divider": 4, "section": 4}
-        )
+        assert collections.Counter(types) == collections.Counter({"header": 1, "context": 2, "divider": 4, "section": 4})
         assert types[0] == "header"
 
 
@@ -515,9 +513,7 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with patched_quality_delivery(
-            make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="error"))
-        ):
+        with patched_quality_delivery(make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="error"))):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1
@@ -528,9 +524,7 @@ class TestDeliverQualityReport:
         url = SLACK_URL
         recipient_config = {"webhook_urls": [url]}
 
-        with patched_quality_delivery(
-            make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="x" * 500))
-        ):
+        with patched_quality_delivery(make_http_client(return_value=make_http_response(is_success=False, status_code=500, text="x" * 500))):
             results = await deliver_quality_report(_REPORT_DELIVERY, recipient_config)
 
         assert len(results) == 1

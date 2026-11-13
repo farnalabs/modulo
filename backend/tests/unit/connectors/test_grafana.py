@@ -234,9 +234,7 @@ async def test_query_annotations(connector: GrafanaConnector) -> None:
 
 @respx.mock
 async def test_query_annotations_type_filter_opt_in(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/annotations", params={"type": "alert"}).mock(
-        return_value=httpx.Response(200, json=[{"id": 9, "text": "Alert only"}])
-    )
+    respx.get(f"{_BASE}/api/annotations", params={"type": "alert"}).mock(return_value=httpx.Response(200, json=[{"id": 9, "text": "Alert only"}]))
     result = await connector.query(ConnectorQuery(resource="annotations", filters={"type": "alert"}))
     assert len(result.records) == 1
     assert result.records[0]["text"] == "Alert only"
@@ -264,9 +262,7 @@ async def test_query_annotations_with_filters(connector: GrafanaConnector) -> No
 
 @respx.mock
 async def test_write_annotation(connector: GrafanaConnector) -> None:
-    respx.post(f"{_BASE}/api/annotations").mock(
-        return_value=httpx.Response(200, json={"id": 42, "text": "Deploy complete"})
-    )
+    respx.post(f"{_BASE}/api/annotations").mock(return_value=httpx.Response(200, json={"id": 42, "text": "Deploy complete"}))
     result = await connector.write(
         ConnectorPayload(
             resource="annotation",
@@ -370,9 +366,7 @@ async def test_write_invalid_resource(connector: GrafanaConnector) -> None:
 @respx.mock
 async def test_query_dashboards_non_list_body_no_crash(connector: GrafanaConnector) -> None:
     """A corrupt/hostile non-list body must degrade to an empty page."""
-    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
-        return_value=httpx.Response(200, json={"not": "a list"})
-    )
+    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(return_value=httpx.Response(200, json={"not": "a list"}))
     result = await connector.query(ConnectorQuery(resource="dashboards"))
     assert not result.records
     assert result.total == 0
@@ -390,9 +384,7 @@ async def test_query_alerts_non_list_body_no_crash(connector: GrafanaConnector) 
 @respx.mock
 async def test_query_datasources_list_with_non_dict_entries(connector: GrafanaConnector) -> None:
     """Non-dict entries within a list must be dropped rather than crash the query."""
-    respx.get(f"{_BASE}/api/datasources").mock(
-        return_value=httpx.Response(200, json=[{"id": 1, "name": "Prometheus"}, "corrupt", 42])
-    )
+    respx.get(f"{_BASE}/api/datasources").mock(return_value=httpx.Response(200, json=[{"id": 1, "name": "Prometheus"}, "corrupt", 42]))
     result = await connector.query(ConnectorQuery(resource="datasources"))
     assert len(result.records) == 1
     assert result.records[0]["name"] == "Prometheus"
@@ -400,18 +392,14 @@ async def test_query_datasources_list_with_non_dict_entries(connector: GrafanaCo
 
 @respx.mock
 async def test_query_http_401(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="dashboards"))
 
 
 @respx.mock
 async def test_query_http_500(connector: GrafanaConnector) -> None:
-    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="dashboards"))
 

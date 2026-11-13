@@ -407,9 +407,7 @@ def test_golden_flat_dict_pipeline_backfill_and_routing():
 def test_topology_hash_tolerates_backoff_schedule() -> None:
     g = _base_graph()
     base = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2})
-    with_schedule = compute_retry_aware_topology_hash(
-        g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}}
-    )
+    with_schedule = compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 45}})
     assert base != with_schedule
 
 
@@ -427,9 +425,5 @@ def test_topology_hash_canonicalization_round_trip() -> None:
     g = _base_graph()
     from farna.api.routes.pipelines import _validate_retry_policy
 
-    patched = _validate_retry_policy(
-        {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0}}
-    )
-    assert compute_retry_aware_topology_hash(g, patched) == compute_retry_aware_topology_hash(
-        g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300}}
-    )
+    patched = _validate_retry_policy({"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300.0}})
+    assert compute_retry_aware_topology_hash(g, patched) == compute_retry_aware_topology_hash(g, {"on": ["failure"], "max_retries": 2, "backoff_schedule": {"delay_seconds": 300}})

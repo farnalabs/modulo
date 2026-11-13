@@ -1345,13 +1345,8 @@ def test_main_passes_on_deletion_only_change(tmp_path, capsys):
     silently.
     """
     xml = tmp_path / "coverage.xml"
-    lines = "\n".join(
-        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101)
-    )
-    xml.write_text(
-        "<coverage><packages><package><classes>"
-        '<class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>"
-    )
+    lines = "\n".join(f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101))
+    xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>")
     lcov = tmp_path / "lcov.info"
     lcov.write_text("TN:\nSF:src/x.ts\nDA:1,1\nBRDA:1,0,0,1\nend_of_record\n")
 
@@ -2254,13 +2249,8 @@ def test_main_exits_zero_when_deletion_only_approved(tmp_path, capsys):
     resolves the gate, and the summary renders the approved status.
     """
     xml = tmp_path / "coverage.xml"
-    lines = "\n".join(
-        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101)
-    )
-    xml.write_text(
-        "<coverage><packages><package><classes>"
-        '<class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>"
-    )
+    lines = "\n".join(f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"/>' for i in range(101))
+    xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></package></packages></coverage>")
     lcov = tmp_path / "lcov.info"
     lcov.write_text("TN:\nSF:src/x.ts\nDA:1,1\nBRDA:1,0,0,1\nend_of_record\n")
 
@@ -2424,9 +2414,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_pass = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}},
             "total_num_lines": 50,
             "total_num_violations": 0,
             "total_percent_covered": 100.0,
@@ -2448,9 +2436,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_pass = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}},
             "total_num_lines": 50,
             "total_num_violations": 0,
             "total_percent_covered": 100.0,
@@ -2500,9 +2486,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_99 = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}},
             "total_num_lines": 100,
             "total_num_violations": 1,
             "total_percent_covered": 99.0,
@@ -2523,9 +2507,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_99 = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(99)), "violation_lines": [100]}},
             "total_num_lines": 100,
             "total_num_violations": 1,
             "total_percent_covered": 99.0,
@@ -2546,9 +2528,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_pass = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}},
             "total_num_lines": 50,
             "total_num_violations": 0,
             "total_percent_covered": 100.0,
@@ -2578,9 +2558,7 @@ class TestBranchCoverageEvaluation:
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_pass = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(50)), "violation_lines": []}},
             "total_num_lines": 50,
             "total_num_violations": 0,
             "total_percent_covered": 100.0,
@@ -2609,16 +2587,9 @@ class TestBranchCoverageEvaluation:
         pass vacuously rather than fail the branch-free diff at 0%.
         """
         report = tmp_path / "coverage.xml"
-        report.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="src/calc.py"><lines>'
-            '<line number="1" hits="1"/><line number="2" hits="1"/>'
-            '<line number="3" hits="1"/></lines></class></classes></package></packages></coverage>'
-        )
+        report.write_text('<coverage><packages><package><classes><class filename="src/calc.py"><lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/></lines></class></classes></package></packages></coverage>')
         json_pass = {
-            "src_stats": {
-                "src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(1, 51)), "violation_lines": []}
-            },
+            "src_stats": {"src/calc.py": {"percent_covered": 100.0, "covered_lines": list(range(1, 51)), "violation_lines": []}},
             "total_num_lines": 50,
             "num_changed_lines": 50,
             "total_percent_covered": 100.0,
@@ -2651,9 +2622,7 @@ class TestLineBranchThresholdTable:
             (97, (50, 100), False, False),  # both red
         ],
     )
-    def test_line_and_branch_thresholds_are_independent(
-        self, tmp_path, covered_line_count, branch_tuple, expected_line_passed, expected_branch_passed
-    ):
+    def test_line_and_branch_thresholds_are_independent(self, tmp_path, covered_line_count, branch_tuple, expected_line_passed, expected_branch_passed):
         fake_report = tmp_path / "coverage.xml"
         fake_report.write_text("<coverage/>")
         json_report = {
@@ -2730,9 +2699,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"src/main.py": 2}, xml, "origin/main", "Python"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"src/main.py": 2}, xml, "origin/main", "Python")
         assert covered == 2
         assert total == 3
         assert unmeasured == 0
@@ -2743,9 +2710,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"src/app.ts": 2}, lcov, "origin/main", "JavaScript"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"src/app.ts": 2}, lcov, "origin/main", "JavaScript")
         assert covered == 2
         assert total == 3
         assert unmeasured == 0
@@ -2756,9 +2721,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"src/new.ts": 2}, lcov, "origin/main", "JavaScript"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"src/new.ts": 2}, lcov, "origin/main", "JavaScript")
         assert covered == 0
         assert total == 0
         assert unmeasured == 2
@@ -2790,9 +2753,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"backend/src/farna/core/foo.py": 2}, xml, "origin/main", "Python"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"backend/src/farna/core/foo.py": 2}, xml, "origin/main", "Python")
         assert covered == 2
         assert total == 3
         assert unmeasured == 0
@@ -2810,9 +2771,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"backend/src/farna/foo.py": 2}, xml, "origin/main", "Python"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"backend/src/farna/foo.py": 2}, xml, "origin/main", "Python")
         assert covered == 1
         assert total == 1
         assert unmeasured == 1
@@ -2831,9 +2790,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript")
         assert covered == 2
         assert total == 3
         assert unmeasured == 0
@@ -2851,9 +2808,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"frontend/src/app.ts": 2}, lcov, "origin/main", "JavaScript")
         assert covered == 0
         assert total == 2
         assert unmeasured == 1
@@ -2866,9 +2821,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"frontend/src/new.ts": 2}, lcov, "origin/main", "JavaScript"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"frontend/src/new.ts": 2}, lcov, "origin/main", "JavaScript")
         assert covered == 0
         assert total == 0
         assert unmeasured == 2
@@ -2887,9 +2840,7 @@ class TestBranchParserIntegration:
         git_diff = "@@ -0,0 +1,2 @@\n+line1\n+line2\n"
         with patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=git_diff, stderr="")
-            covered, total, unmeasured = mod._compute_branch_coverage_from_raw(
-                {"webapp/src/app.ts": 2}, lcov, "origin/main", "JavaScript", js_src_root="webapp"
-            )
+            covered, total, unmeasured = mod._compute_branch_coverage_from_raw({"webapp/src/app.ts": 2}, lcov, "origin/main", "JavaScript", js_src_root="webapp")
         assert covered == 1
         assert total == 2
         assert unmeasured == 1
@@ -2968,10 +2919,7 @@ class TestProjectWideMetrics:
 
     def test_lcov_metrics(self, tmp_path):
         lcov = tmp_path / "lcov.info"
-        lcov.write_text(
-            "TN:\nSF:a.ts\nDA:1,1\nDA:2,0\nDA:3,5\nBRDA:1,0,0,1\nBRDA:2,0,0,-\nend_of_record\n"
-            "TN:\nSF:b.ts\nDA:1,1\nend_of_record\n"
-        )
+        lcov.write_text("TN:\nSF:a.ts\nDA:1,1\nDA:2,0\nDA:3,5\nBRDA:1,0,0,1\nBRDA:2,0,0,-\nend_of_record\nTN:\nSF:b.ts\nDA:1,1\nend_of_record\n")
         line_pct, branch_pct = mod._compute_project_wide_metrics_lcov(lcov)
         assert line_pct == 75.0
         assert branch_pct == 50.0
@@ -3003,11 +2951,7 @@ class TestProjectWideMetrics:
         """Branch records that exist but are all uncovered report 0.0, not None."""
         xml = tmp_path / "coverage.xml"
         xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>'
-            '<line number="1" hits="0" branch="true" condition-coverage="0% (0/1)">'
-            '<conditions><condition number="0" type="jump" coverage="0%"/></conditions></line>'
-            "</lines></class></classes></package></packages></coverage>"
+            '<coverage><packages><package><classes><class filename="a.py"><lines><line number="1" hits="0" branch="true" condition-coverage="0% (0/1)"><conditions><condition number="0" type="jump" coverage="0%"/></conditions></line></lines></class></classes></package></packages></coverage>'
         )
         assert mod._compute_project_wide_metrics_cobertura(xml) == (0.0, 0.0)
 
@@ -3022,10 +2966,7 @@ class TestProjectWideFloor:
         """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3042,10 +2983,7 @@ class TestProjectWideFloor:
         """Line coverage 80% < floor 88% → FAIL (exit 1)."""
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3067,10 +3005,7 @@ class TestProjectWideFloor:
         """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join('<line number="{}" hits="{}"/>'.format(i, "1" if i <= 80 else "0") for i in range(1, 101))
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
 
         def fake_changed(compare_branch, language):
             return {"backend/src/farna/x.py": 1} if language == "Python" else {}
@@ -3139,17 +3074,8 @@ class TestProjectWideFloor:
         branch at 0% with data, the run must fail.
         """
         xml = tmp_path / "coverage.xml"
-        lines = "\n".join(
-            f'<line number="{i}" hits="1" branch="true" '
-            'condition-coverage="0% (0/1)">'
-            '<conditions><condition number="0" type="jump" '
-            'coverage="0%"/></conditions></line>'
-            for i in range(1, 101)
-        )
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        lines = "\n".join(f'<line number="{i}" hits="1" branch="true" condition-coverage="0% (0/1)"><conditions><condition number="0" type="jump" coverage="0%"/></conditions></line>' for i in range(1, 101))
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
 
         def fake_changed(compare_branch, language):
             return {"backend/src/farna/x.py": 1} if language == "Python" else {}
@@ -3173,10 +3099,7 @@ class TestProjectWideFloor:
         """
         xml = tmp_path / "coverage.xml"
         lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
 
         def fake_changed(compare_branch, language):
             return {"backend/src/farna/x.py": 1} if language == "Python" else {}
@@ -3196,17 +3119,8 @@ class TestProjectWideFloor:
 
     def test_project_both_above_floor(self, tmp_path):
         xml = tmp_path / "coverage.xml"
-        lines = "\n".join(
-            f'<line number="{i}" hits="1" branch="true" '
-            'condition-coverage="100% (1/1)">'
-            '<conditions><condition number="0" type="jump" '
-            'coverage="100%"/></conditions></line>'
-            for i in range(1, 101)
-        )
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        lines = "\n".join(f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (1/1)"><conditions><condition number="0" type="jump" coverage="100%"/></conditions></line>' for i in range(1, 101))
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3317,10 +3231,7 @@ class TestFar1063BranchFloorFailClosed:
             "</conditions></line>"
             for i in range(1, 101)
         )
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3338,10 +3249,7 @@ class TestFar1063BranchFloorFailClosed:
         xml = tmp_path / "coverage.xml"
         # 100 lines, all hit, no branch="true" attributes at all
         lines = "\n".join(f'<line number="{i}" hits="1"/>' for i in range(1, 101))
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3387,10 +3295,7 @@ class TestFar1063BranchFloorFailClosed:
             "</conditions></line>"
             for i in range(1, 101)
         )
-        xml.write_text(
-            "<coverage><packages><package><classes>"
-            '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-        )
+        xml.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
         with (
             patch.object(mod, "_get_changed_production_files", return_value={}),
             patch(
@@ -3410,18 +3315,8 @@ class TestFar1063BranchFloorFailClosed:
 # ---------------------------------------------------------------------------
 def _write_healthy_python_report(path: Path) -> None:
     """A Cobertura report with 100% line + branch coverage (clears every floor)."""
-    lines = "\n".join(
-        f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)">'
-        "<conditions>"
-        '<condition number="0" type="jump" coverage="100%"/>'
-        '<condition number="1" type="jump" coverage="100%"/>'
-        "</conditions></line>"
-        for i in range(1, 101)
-    )
-    path.write_text(
-        "<coverage><packages><package><classes>"
-        '<class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>"
-    )
+    lines = "\n".join(f'<line number="{i}" hits="1" branch="true" condition-coverage="100% (2/2)"><conditions><condition number="0" type="jump" coverage="100%"/><condition number="1" type="jump" coverage="100%"/></conditions></line>' for i in range(1, 101))
+    path.write_text('<coverage><packages><package><classes><class filename="a.py"><lines>' + lines + "</lines></class></classes></package></packages></coverage>")
 
 
 def _run_main_with_changes(argv_tail: list[str], changed_by_language: dict[str, dict[str, int]]) -> int:

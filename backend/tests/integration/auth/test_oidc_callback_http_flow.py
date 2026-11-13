@@ -219,16 +219,11 @@ async def _create_inviter(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(acc_id), "email": f"owner-{acc_id.hex[:8]}@example.com", "name": "Owner"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -286,11 +281,7 @@ async def _create_invitation(
     inv_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO invitations "
-                "(id, organisation_id, email, display_name, org_role, token_hash, invited_by, expires_at) "
-                "VALUES (:id, :oid, :email, :name, :role, :hash, :by, :exp)"
-            ),
+            text("INSERT INTO invitations (id, organisation_id, email, display_name, org_role, token_hash, invited_by, expires_at) VALUES (:id, :oid, :email, :name, :role, :hash, :by, :exp)"),
             {
                 "id": str(inv_id),
                 "oid": str(org_id),
@@ -309,9 +300,7 @@ async def _create_invitation(
 
 async def _get_account_id(engine: AsyncEngine, email: str) -> uuid.UUID | None:
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT id FROM accounts WHERE email = :email"), {"email": email})
-        ).scalar_one_or_none()
+        row = (await conn.execute(text("SELECT id FROM accounts WHERE email = :email"), {"email": email})).scalar_one_or_none()
     return uuid.UUID(str(row)) if row is not None else None
 
 
@@ -320,11 +309,7 @@ async def _get_membership_role(engine: AsyncEngine, email: str, org_id: uuid.UUI
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT m.role FROM org_memberships m "
-                        "JOIN accounts a ON a.id = m.account_id "
-                        "WHERE a.email = :email AND m.organisation_id = :oid AND m.deactivated_at IS NULL"
-                    ),
+                    text("SELECT m.role FROM org_memberships m JOIN accounts a ON a.id = m.account_id WHERE a.email = :email AND m.organisation_id = :oid AND m.deactivated_at IS NULL"),
                     {"email": email, "oid": str(org_id)},
                 )
             )
@@ -559,9 +544,7 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
     """Happy path: real callback → exchange, verify, JIT provision, redirect."""
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     email = f"good-{world.org_id.hex[:8]}@{_ALLOWLISTED_DOMAIN}"
-    id_token = _make_id_token(
-        sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE
-    )
+    id_token = _make_id_token(sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE)
 
     client = await oidc_app()
     try:
@@ -586,9 +569,7 @@ async def test_oidc_callback_success_provisions_and_redirects_to_frontend_url(
     #    "marketing,api", picking cors_origins[0] (the FAR-837 bug) would
     #    produce https://marketing.example.com — assert it did NOT.
     assert location.startswith(f"{_FRONTEND_BASE}/auth/callback#"), location
-    assert location.startswith("https://marketing.example.com") is False, (
-        "redirect base resolved from CORS-origin ordering — the FAR-837 bug returned"
-    )
+    assert location.startswith("https://marketing.example.com") is False, "redirect base resolved from CORS-origin ordering — the FAR-837 bug returned"
 
     params = _fragment_params(location)
     assert set(params) == {"access_token"}
@@ -633,9 +614,7 @@ async def test_oidc_callback_redirect_base_falls_back_to_public_url_when_fronten
     """MODULO_FRONTEND_URL empty → redirects to MODULO_PUBLIC_URL (same-origin)."""
     world = await _seed_provider(db_engine, allowed_domains=[_ALLOWLISTED_DOMAIN])
     email = f"fallback-{world.org_id.hex[:8]}@{_ALLOWLISTED_DOMAIN}"
-    id_token = _make_id_token(
-        sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE
-    )
+    id_token = _make_id_token(sub=world.client_id, email=email, issuer=world.issuer, audience=world.client_id, nonce=_FLOW_NONCE)
 
     client = await oidc_app(frontend_url="")
     try:
@@ -696,9 +675,7 @@ async def test_oidc_callback_join_gate_denial_is_clean_redirect_and_leaves_no_or
     assert "sso_error=not_invited" in location, location
 
     # Fail-closed assertion against the REAL DB: no orphan Account row, no membership.
-    assert await _get_account_id(db_engine, denied_email) is None, (
-        "a join-gate-denied identity must leave no orphan Account row"
-    )
+    assert await _get_account_id(db_engine, denied_email) is None, "a join-gate-denied identity must leave no orphan Account row"
 
 
 async def test_oidc_callback_consumes_pending_invitation_for_non_allowlisted_domain(

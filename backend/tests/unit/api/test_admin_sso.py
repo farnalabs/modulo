@@ -121,9 +121,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -158,9 +156,7 @@ def operator_client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="operator",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator")
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -592,10 +588,7 @@ class TestSamlConnection:
     async def test_missing_idp_descriptor(self) -> None:
         from farna.api.routes.admin_sso import _test_saml_connection
 
-        bad_xml = (
-            '<?xml version="1.0"?>'
-            '<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="test"/>'
-        )
+        bad_xml = '<?xml version="1.0"?><md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="test"/>'
         provider = _make_mock_provider(provider_type="saml", metadata_xml=bad_xml)
         result = await _test_saml_connection(provider)
         assert result.success is False

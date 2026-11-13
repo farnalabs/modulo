@@ -41,9 +41,7 @@ async def test_claim_run_and_audit_append_failure() -> None:
         patch.object(ex, "append_audit_event", new=AsyncMock(side_effect=RuntimeError("boom"))),
         patch.object(ex, "_log") as log,
     ):
-        await _executor()._claim_run_and_audit(
-            session=MagicMock(), run_id=run_id, org_id=org_id, pipeline_id=pipeline_id
-        )
+        await _executor()._claim_run_and_audit(session=MagicMock(), run_id=run_id, org_id=org_id, pipeline_id=pipeline_id)
     log.warning.assert_called_once_with(
         "pipeline.run_started_audit_failed",
         extra={"run_id": str(run_id), "org_id": str(org_id)},
@@ -148,6 +146,4 @@ def test_idempotency_gate_check_failure() -> None:
             single_sandbox_node=True,
         )
     assert result is False
-    log.warning.assert_called_once_with(
-        "pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)}, exc_info=True
-    )
+    log.warning.assert_called_once_with("pipeline.idempotency_gate.check_failed", extra={"run_id": str(run_id)}, exc_info=True)

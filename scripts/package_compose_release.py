@@ -175,7 +175,7 @@ _INIT_ENV_SH = r"""#!/bin/sh
 # Generate .env for the Modulo production stack.
 #
 # Fills the five REQUIRED values the compose refuses to start without:
-#   MODULO_DB_PASSWORD, SECRET_KEY, FERNET_KEY, SAQ_AUTH_USERNAME, SAQ_AUTH_PASSWORD
+#   FARNA_CONTROL_DB_PASSWORD, SECRET_KEY, FERNET_KEY, SAQ_AUTH_USERNAME, SAQ_AUTH_PASSWORD
 #
 # Usage:
 #   ./init-env.sh          create .env (refuses to overwrite an existing one)
@@ -211,7 +211,7 @@ gen_hex() {
   tr -dc 'a-f0-9' < /dev/urandom | head -c "$1"
 }
 
-# MODULO_DB_PASSWORD is embedded in DATABASE_URL, so it must survive a URL
+# FARNA_CONTROL_DB_PASSWORD is embedded in DATABASE_URL, so it must survive a URL
 # unescaped: hex only.
 DB_PASSWORD="$(gen_hex 48)"
 # SECRET_KEY needs >= 32 bytes; 48 bytes of base64 satisfies Settings' length
@@ -226,7 +226,7 @@ cp .env.example .env
 
 # `|` delimiter: base64 can contain `/` and `+` but never `|`.
 sed -i.bak \
-  -e "s|^MODULO_DB_PASSWORD=.*|MODULO_DB_PASSWORD=${DB_PASSWORD}|" \
+  -e "s|^FARNA_CONTROL_DB_PASSWORD=.*|FARNA_CONTROL_DB_PASSWORD=${DB_PASSWORD}|" \
   -e "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|" \
   -e "s|^FERNET_KEY=.*|FERNET_KEY=${FERNET_KEY}|" \
   -e "s|^SAQ_AUTH_USERNAME=.*|SAQ_AUTH_USERNAME=admin|" \
@@ -235,7 +235,7 @@ sed -i.bak \
 rm -f .env.bak
 
 missing=""
-for name in MODULO_DB_PASSWORD SECRET_KEY FERNET_KEY SAQ_AUTH_USERNAME SAQ_AUTH_PASSWORD; do
+for name in FARNA_CONTROL_DB_PASSWORD SECRET_KEY FERNET_KEY SAQ_AUTH_USERNAME SAQ_AUTH_PASSWORD; do
   if ! grep -q "^${name}=..*" .env; then
     missing="${missing} ${name}"
   fi

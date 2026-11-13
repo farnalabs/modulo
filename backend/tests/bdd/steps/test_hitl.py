@@ -184,9 +184,7 @@ def run_waiting_at_gate_with_timeout(review_id: str, timeout: int, ctx):
 @when("1 second passes without approval")
 def one_second_passes(ctx):
     """Simulate the expiry check — not a real sleep, just a mock invocation."""
-    ctx["expired_gates"] = [
-        {"run_id": ctx.get("run_id", uuid.uuid4()), "review_id": ctx.get("review_id", "pre-deploy")}
-    ]
+    ctx["expired_gates"] = [{"run_id": ctx.get("run_id", uuid.uuid4()), "review_id": ctx.get("review_id", "pre-deploy")}]
     ctx["run_status"] = "timed_out"
 
 
@@ -404,9 +402,7 @@ def patch_feedback_status(request, new_status: str, client, ctx):
 @then(parsers.parse('the feedback record status becomes "{status}"'))
 def feedback_status_becomes(request, status: str):
     body = request.node._resp.json()
-    assert body.get("feedback_status") == status, (
-        f"Expected feedback_status {status!r}, got {body.get('feedback_status')!r}"
-    )
+    assert body.get("feedback_status") == status, f"Expected feedback_status {status!r}, got {body.get('feedback_status')!r}"
 
 
 @when(parsers.parse('I review the feedback record with action "{action}"'))
@@ -513,11 +509,7 @@ def post_deliver_manual_no_token(request, run_id, review_id, ctx, client):
     request.node._resp = resp
 
 
-@when(
-    parsers.parse(
-        "I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with expired claim_token and manual output"
-    )
-)
+@when(parsers.parse("I POST /api/runs/{run_id}/hitl/{review_id}/deliver-manual with expired claim_token and manual output"))
 def post_deliver_manual_expired(request, run_id, review_id, ctx, client):
     """Drive the real deliver-manual route with an expired claim token.
 
@@ -573,9 +565,7 @@ def post_deliver_manual_empty(request, run_id, review_id, ctx, client):
 @then("the manual output is passed to the pipeline")
 def manual_output_passed_to_pipeline(ctx):
     assert "manual_output" in ctx, "Expected manual output to be passed to pipeline"
-    assert ctx["manual_output"] == {"status": "approved", "notes": "Manual review passed"}, (
-        f"Unexpected manual output: {ctx.get('manual_output')}"
-    )
+    assert ctx["manual_output"] == {"status": "approved", "notes": "Manual review passed"}, f"Unexpected manual output: {ctx.get('manual_output')}"
 
 
 @then(parsers.parse('a "{event_type}" audit event is logged'))
@@ -655,9 +645,7 @@ def submit_manual_output_missing(request, field: str, ctx, client):
     from farna.core.hitl_manager import DecisionPayloadError
 
     with patch("farna.api.routes.hitl.HITLManager") as mock_mgr_cls:
-        mock_mgr_cls.return_value.approve = AsyncMock(
-            side_effect=DecisionPayloadError(f"Manual output missing required field {field!r}")
-        )
+        mock_mgr_cls.return_value.approve = AsyncMock(side_effect=DecisionPayloadError(f"Manual output missing required field {field!r}"))
         resp = client.post(
             f"/api/v1/runs/{ctx['run_id']}/manual/{ctx['review_id']}/submit",
             json={"claim_token": ctx.get("claim_token", "valid_token"), "output": {"notes": "no approval field"}},

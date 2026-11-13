@@ -128,12 +128,8 @@ def client() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 
     app.dependency_overrides[get_settings] = lambda: _make_settings()
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -938,9 +934,7 @@ def test_resolve_demo_membership_and_login_context_edges() -> None:
     asyncio.run(asyncio.sleep(0))
 
 
-def test_logout_family_not_found_log_truncates_family_id(
-    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
-) -> None:
+def test_logout_family_not_found_log_truncates_family_id(client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture) -> None:
     """The family-not-found log line never carries the full family UUID (#849)."""
     http, _session = client
     family = str(uuid.uuid4())
@@ -959,9 +953,7 @@ def test_logout_family_not_found_log_truncates_family_id(
     assert family not in str(matching[0].__dict__)
 
 
-def test_logout_invalid_family_log_truncates_token_family(
-    client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture
-) -> None:
+def test_logout_invalid_family_log_truncates_token_family(client: tuple[TestClient, AsyncMock], caplog: pytest.LogCaptureFixture) -> None:
     """The invalid-family log line carries only a truncated token_family (#849)."""
     http, _session = client
     bad_family = "not-a-uuid-but-long-enough-to-truncate"

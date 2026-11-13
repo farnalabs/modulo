@@ -148,9 +148,7 @@ class TestPipeline(_ToolBase):
         assert result["error"] == "pipeline_has_active_runs"
 
     async def test_gate_rejection_is_validation_failed(self) -> None:
-        exc = FastAPIHTTPException(
-            status_code=403, detail="Cannot reassign a pipeline to a team you are not a member of"
-        )
+        exc = FastAPIHTTPException(status_code=403, detail="Cannot reassign a pipeline to a team you are not a member of")
         with (
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch.object(ms, "_apply_owner_team_pipeline", new=AsyncMock(side_effect=exc)),
@@ -186,9 +184,7 @@ class TestPipeline(_ToolBase):
     async def test_helper_gone_pipeline_returns_none(self) -> None:
         principal = SimpleNamespace(organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
         gone = FastAPIHTTPException(status_code=404, detail="Pipeline not found")
-        with patch(
-            "farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=gone)
-        ):
+        with patch("farna.api.routes.pipelines._reapply_team_gate_inside_mutation_txn", new=AsyncMock(side_effect=gone)):
             outcome = await ms._apply_owner_team_pipeline(MagicMock(), principal, _RESOURCE_ID, None, _ORG_ID)
         assert outcome is None
 
@@ -264,9 +260,7 @@ class TestSimpleResources(_ToolBase):
         assert audit_kwargs["event_type"] == "resource_team_ownership_changed"
         assert audit_kwargs["payload_json"]["new_team_id"] == str(_TEAM_A)
 
-    async def test_member_clears_org_visible_resource(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_member_clears_org_visible_resource(self, resource_type: str, get_target: str, update_target: str) -> None:
         self._use_session()
         row = _row(owner=_TEAM_A, visibility="org")
         update = AsyncMock(return_value=_row(owner=None))
@@ -281,9 +275,7 @@ class TestSimpleResources(_ToolBase):
         assert result["previous_owner_team_id"] == str(_TEAM_A)
         assert update.await_args.args[2] == {"owner_team_id": None}
 
-    async def test_clear_on_team_visible_resource_is_rejected(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_clear_on_team_visible_resource_is_rejected(self, resource_type: str, get_target: str, update_target: str) -> None:
         ms._ctx_role.set("admin")
         self._use_session()
         update = AsyncMock()
@@ -296,9 +288,7 @@ class TestSimpleResources(_ToolBase):
         assert "owner_team_id is required" in result["detail"]
         update.assert_not_awaited()
 
-    async def test_unknown_team_is_validation_failed_even_for_admin(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_unknown_team_is_validation_failed_even_for_admin(self, resource_type: str, get_target: str, update_target: str) -> None:
         ms._ctx_role.set("admin")
         self._use_session(team_exists=False)
         update = AsyncMock()
@@ -326,9 +316,7 @@ class TestSimpleResources(_ToolBase):
             result = await ms.set_resource_owner_team(resource_type, str(_RESOURCE_ID), None)
         assert result == {"error": f"{resource_type}_not_found", "resource_id": str(_RESOURCE_ID)}
 
-    async def test_resource_in_other_org_is_not_found(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_resource_in_other_org_is_not_found(self, resource_type: str, get_target: str, update_target: str) -> None:
         update = AsyncMock()
         with (
             patch(get_target, new=AsyncMock(return_value=_row(org_id=_OTHER_ORG_ID))),
@@ -338,9 +326,7 @@ class TestSimpleResources(_ToolBase):
         assert result["error"] == f"{resource_type}_not_found"
         update.assert_not_awaited()
 
-    async def test_team_scoped_key_cannot_touch_other_team(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_team_scoped_key_cannot_touch_other_team(self, resource_type: str, get_target: str, update_target: str) -> None:
         ms._ctx_role.set("admin")
         self._use_session()
         ms._ctx_team_id.set(_TEAM_A)
@@ -363,14 +349,10 @@ class TestSimpleResources(_ToolBase):
             patch(update_target, new=AsyncMock(return_value=None)),
             patch(_REBIND_GUARD, new=AsyncMock()),
         ):
-            outcome = await ms._apply_owner_team_simple(
-                _mock_session(), principal, resource_type, _RESOURCE_ID, None, _ORG_ID
-            )
+            outcome = await ms._apply_owner_team_simple(_mock_session(), principal, resource_type, _RESOURCE_ID, None, _ORG_ID)
         assert outcome is None
 
-    async def test_same_team_change_writes_no_audit(
-        self, resource_type: str, get_target: str, update_target: str
-    ) -> None:
+    async def test_same_team_change_writes_no_audit(self, resource_type: str, get_target: str, update_target: str) -> None:
         ms._ctx_role.set("admin")
         self._use_session()
         with (

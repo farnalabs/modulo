@@ -145,9 +145,7 @@ class FakeAsyncSession:
             return _FakeResult([])
         entity = stmt.column_descriptions[0]["entity"]
         preds = _extract_predicates(stmt.whereclause)
-        matches = [
-            obj for obj in self._store.get(entity, []) if all(getattr(obj, name, None) == val for (name, val) in preds)
-        ]
+        matches = [obj for obj in self._store.get(entity, []) if all(getattr(obj, name, None) == val for (name, val) in preds)]
         return _FakeResult(matches)
 
     async def flush(self) -> None:

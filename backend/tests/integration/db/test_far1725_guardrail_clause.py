@@ -65,19 +65,11 @@ async def _seed_org_account_pipeline(engine: AsyncEngine) -> tuple[uuid.UUID, uu
             {"id": str(org_id), "n": slug, "s": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(account_id), "e": f"{slug}@test.com", "n": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipeline_id), "oid": str(org_id), "n": slug, "aid": str(account_id)},
         )
     return org_id, account_id, pipeline_id
@@ -100,11 +92,7 @@ async def _seed_run(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UU
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "langgraph_thread_id, trigger_type, input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, trigger_type, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -163,10 +151,7 @@ async def _insert_result(
     result_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) "
-                "VALUES (:id, :oid, :rid, :eid, :p, :outcome)"
-            ),
+            text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:id, :oid, :rid, :eid, :p, :outcome)"),
             {
                 "id": str(result_id),
                 "oid": str(org_id),
@@ -194,15 +179,7 @@ class TestStorageModelProbe:
     async def test_eval_result_fk_targets_evals_not_eval_definitions(self, db_engine: AsyncEngine) -> None:
         """Structural probe: the live FK on eval_results references ``evals``."""
         async with db_engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text(
-                        "SELECT c.conname, pg_get_constraintdef(c.oid) FROM pg_constraint c "
-                        "WHERE c.conrelid = CAST('eval_results' AS regclass) "
-                        "AND c.confrelid = CAST('evals' AS regclass) AND c.contype = 'f'"
-                    )
-                )
-            ).fetchone()
+            row = (await conn.execute(text("SELECT c.conname, pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = CAST('eval_results' AS regclass) AND c.confrelid = CAST('evals' AS regclass) AND c.contype = 'f'"))).fetchone()
         assert row is not None, "eval_results has no FK to evals — storage model changed"
         assert row[0] == _COMPOSITE_FK, row[1]
         assert "REFERENCES evals(id, organisation_id)" in row[1], row[1]
@@ -226,9 +203,7 @@ class TestStorageModelProbe:
             await session.commit()
 
         async with db_engine.connect() as conn:
-            evals_rows = (
-                await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": str(guardrail_id)})
-            ).fetchall()
+            evals_rows = (await conn.execute(text("SELECT eval_type FROM evals WHERE id = :id"), {"id": str(guardrail_id)})).fetchall()
 
         assert [r[0] for r in evals_rows] == ["guardrail"], f"evals row missing: {evals_rows}"
 
@@ -277,9 +252,7 @@ class TestGuardrailExclusion:
         async with maker() as session:
             rows = await get_run_evals(session, run_id)
 
-        assert [r.eval_id for r in rows] == [normal_id], (
-            f"guardrail row leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
-        )
+        assert [r.eval_id for r in rows] == [normal_id], f"guardrail row leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
 
     async def test_get_evals_for_runs_excludes_post_cutover_guardrail_rows(self, db_engine: AsyncEngine) -> None:
         """Same contract on the coverage-gap read-model consumer."""
@@ -311,9 +284,7 @@ class TestGuardrailExclusion:
         async with maker() as session:
             rows = await get_evals_for_runs(session, org_id=org_id, run_ids=[run_id])
 
-        assert [r.eval_id for r in rows] == [normal_id], (
-            f"guardrail row leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
-        )
+        assert [r.eval_id for r in rows] == [normal_id], f"guardrail row leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
 
     async def test_soft_deleted_guardrail_results_still_excluded(self, db_engine: AsyncEngine) -> None:
         """Soft-deleting a guardrail must not un-exclude its stored results.
@@ -359,9 +330,7 @@ class TestGuardrailExclusion:
         async with maker() as session:
             rows = await get_run_evals(session, run_id)
 
-        assert [r.eval_id for r in rows] == [normal_id], (
-            f"soft-deleted guardrail leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
-        )
+        assert [r.eval_id for r in rows] == [normal_id], f"soft-deleted guardrail leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
 
     async def test_directly_seeded_guardrail_rows_still_excluded(self, db_engine: AsyncEngine) -> None:
         """No-regression: a guardrail row written directly to ``evals`` (raw
@@ -371,11 +340,7 @@ class TestGuardrailExclusion:
         guardrail_id = uuid.uuid4()
         async with db_engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, "
-                    "config_json, account_id, version) "
-                    "VALUES (:id, :oid, :pid, NULL, 'seeded-gr', 'guardrail', '{}'::json, :aid, 1)"
-                ),
+                text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id, version) VALUES (:id, :oid, :pid, NULL, 'seeded-gr', 'guardrail', '{}'::json, :aid, 1)"),
                 {"id": str(guardrail_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(account_id)},
             )
 
@@ -397,9 +362,7 @@ class TestGuardrailExclusion:
         async with maker() as session:
             rows = await get_run_evals(session, run_id)
 
-        assert [r.eval_id for r in rows] == [normal_id], (
-            f"backfilled guardrail leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
-        )
+        assert [r.eval_id for r in rows] == [normal_id], f"backfilled guardrail leaked: expected only {normal_id}, got {[r.eval_id for r in rows]}"
 
     async def test_clause_selects_guardrail_ids_from_evals(self, db_engine: AsyncEngine) -> None:
         """Direct check of the clause's own sub-select, independent of consumers.
@@ -426,9 +389,7 @@ class TestGuardrailExclusion:
         await _insert_result(db_engine, org_id=org_id, run_id=run_id, eval_id=guardrail_id, passed=True)
 
         async with maker() as session:
-            guardrail_ids = {
-                row[0] for row in await session.execute(select(Eval.id).where(Eval.eval_type == "guardrail"))
-            }
+            guardrail_ids = {row[0] for row in await session.execute(select(Eval.id).where(Eval.eval_type == "guardrail"))}
             excluded = await session.execute(
                 select(EvalResult.eval_id).where(
                     EvalResult.run_id == run_id,

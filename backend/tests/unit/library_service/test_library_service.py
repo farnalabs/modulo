@@ -341,9 +341,7 @@ async def test_list_primitives_source_community_only():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         result = await list_primitives(session, org_id, source="community")
 
@@ -392,9 +390,7 @@ async def test_list_primitives_type_filter_propagated():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         result = await list_primitives(session, org_id, primitive_type="schema")
 
@@ -412,9 +408,7 @@ async def test_list_primitives_multi_type_filter_propagated():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         result = await list_primitives(session, org_id, primitive_types=["workflow", "agent"])
 
@@ -433,9 +427,7 @@ async def test_list_primitives_plural_types_win_over_single():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         result = await list_primitives(session, org_id, primitive_type="schema", primitive_types=["workflow"])
 
@@ -454,9 +446,7 @@ async def test_list_primitives_passes_excluded_tiers_to_crud():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         await list_primitives(session, org_id, excluded_tiers=["preview"])
 
@@ -473,9 +463,7 @@ async def test_list_primitives_default_excluded_tiers_is_in_dev():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         await list_primitives(session, org_id)
 
@@ -569,9 +557,7 @@ async def test_list_primitives_source_forwarded_to_org_query():
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
-        patch(
-            "farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page
-        ) as mock_list,
+        patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=org_page) as mock_list,
     ):
         await list_primitives(session, org_id, source="local")
 
@@ -592,9 +578,7 @@ async def test_list_primitives_source_local_has_more_tracks_the_filtered_total()
     page_size = 20
     local_rows = [_fake_primitive(source="local") for _ in range(45)]
 
-    first_page: PageResult = PageResult(
-        items=local_rows[:page_size], total=len(local_rows), page=1, page_size=page_size, has_more=True
-    )
+    first_page: PageResult = PageResult(items=local_rows[:page_size], total=len(local_rows), page=1, page_size=page_size, has_more=True)
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=first_page),
@@ -604,9 +588,7 @@ async def test_list_primitives_source_local_has_more_tracks_the_filtered_total()
     assert first.total == len(local_rows)
     assert first.has_more is True
 
-    final_page: PageResult = PageResult(
-        items=local_rows[-5:], total=len(local_rows), page=3, page_size=page_size, has_more=False
-    )
+    final_page: PageResult = PageResult(items=local_rows[-5:], total=len(local_rows), page=3, page_size=page_size, has_more=False)
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=final_page),
@@ -653,9 +635,7 @@ async def test_list_primitives_has_more_is_recomputed_not_forwarded():
     session = _mock_session()
     org_id = uuid.uuid4()
     local_rows = [_fake_primitive(source="local") for _ in range(20)]
-    inconsistent_page: PageResult = PageResult(
-        items=local_rows, total=len(local_rows), page=1, page_size=20, has_more=True
-    )
+    inconsistent_page: PageResult = PageResult(items=local_rows, total=len(local_rows), page=1, page_size=20, has_more=True)
 
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
@@ -705,18 +685,14 @@ async def test_list_primitives_default_path_has_more_tracks_the_org_total():
     page_size = 20
     org_rows = [_fake_primitive() for _ in range(100)]
 
-    first_page: PageResult = PageResult(
-        items=org_rows[:page_size], total=len(org_rows), page=1, page_size=page_size, has_more=True
-    )
+    first_page: PageResult = PageResult(items=org_rows[:page_size], total=len(org_rows), page=1, page_size=page_size, has_more=True)
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=first_page),
     ):
         first = await list_primitives(session, org_id, page=1, page_size=page_size)
 
-    last_page: PageResult = PageResult(
-        items=org_rows[-page_size:], total=len(org_rows), page=5, page_size=page_size, has_more=False
-    )
+    last_page: PageResult = PageResult(items=org_rows[-page_size:], total=len(org_rows), page=5, page_size=page_size, has_more=False)
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.list_library_primitives", new_callable=AsyncMock, return_value=last_page),
@@ -803,9 +779,7 @@ async def test_copy_to_adapt_bumps_version():
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch(
-            "farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
-        ),
+        patch("farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -824,9 +798,7 @@ async def test_copy_to_adapt_propagates_tier():
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch(
-            "farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
-        ),
+        patch("farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -845,9 +817,7 @@ async def test_copy_to_adapt_native_tier_defaults():
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch(
-            "farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
-        ),
+        patch("farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -866,9 +836,7 @@ async def test_copy_to_adapt_db_source_keeps_forked_from():
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=source),
-        patch(
-            "farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
-        ),
+        patch("farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)),
     ):
         await copy_to_adapt(session, org_id, source.id)
 
@@ -892,9 +860,7 @@ async def test_copy_to_adapt_builtin_source_nulls_forked_from():
     with (
         patch("farna.core.library_service.set_rls_org", new_callable=AsyncMock),
         patch("farna.core.library_service.get_library_primitive", new_callable=AsyncMock, return_value=None),
-        patch(
-            "farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)
-        ),
+        patch("farna.core.library_service.create_library_primitive", side_effect=_capture_create_with(captured, copied)),
     ):
         result = await copy_to_adapt(session, org_id, builtin.id, created_by=uuid.uuid4(), via_mcp=False)
 

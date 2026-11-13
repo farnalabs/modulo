@@ -42,7 +42,7 @@ def _make_settings(**overrides: Any) -> Settings:
         "modulo_admin_password": "test",
         "redis_url": "redis://localhost:6379/0",
         # Pin both FAR-1495 fields so no ambient env var can flip an assertion.
-        "FARNA_CONTROL_MODULO_ENV": "staging",
+        "environment": "staging",  # field name (populate_by_name=True)
         "ALERT_CONTEXT": None,
     }
     base.update(overrides)
@@ -50,15 +50,15 @@ def _make_settings(**overrides: Any) -> Settings:
 
 
 def test_environment_line_is_always_present_and_first() -> None:
-    settings = _make_settings(MODULO_ENV="production")
+    settings = _make_settings(environment="production")
     assert alert_context_lines(settings) == ["Environment: production"]
     assert alert_context_text(settings) == "Environment: production"
 
 
 def test_environment_line_capped_at_max_line_chars() -> None:
-    """A pathological MODULO_ENV must not bloat an alert body or a stdout
+    """A pathological environment must not bloat an alert body or a stdout
     stamp: the single-sourced environment line is truncated, not dropped."""
-    settings = _make_settings(MODULO_ENV="x" * 1000)
+    settings = _make_settings(environment="x" * 1000)
     line = alert_environment_line(settings)
     assert len(line) == MAX_CONTEXT_LINE_CHARS
     # The SAME capped line is what the email body renders first.
@@ -66,7 +66,7 @@ def test_environment_line_capped_at_max_line_chars() -> None:
 
 
 def test_empty_environment_falls_back_to_unknown() -> None:
-    settings = _make_settings(MODULO_ENV="")
+    settings = _make_settings(environment="")
     assert alert_environment_line(settings) == "Environment: unknown"
 
 

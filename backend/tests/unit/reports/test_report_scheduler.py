@@ -1436,9 +1436,7 @@ class TestDeliverToUrlsTimeout:
 class TestDeliverToUrls:
     async def test_retries_429_then_succeeds(self) -> None:
         url = "https://hooks.example.com/x"
-        client = make_http_client(
-            [make_http_response(is_success=False, status_code=429), make_http_response(status_code=200)]
-        )
+        client = make_http_client([make_http_response(is_success=False, status_code=429), make_http_response(status_code=200)])
 
         with (
             patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock) as sleep,
@@ -1524,9 +1522,7 @@ class TestDeliverToUrls:
         url = "https://hooks.example.com/x"
         secret = "s3cr3t"
         body = {"a": 1}
-        client = make_http_client(
-            [make_http_response(is_success=False, status_code=500), make_http_response(status_code=200)]
-        )
+        client = make_http_client([make_http_response(is_success=False, status_code=500), make_http_response(status_code=200)])
 
         with (
             patch("farna.core.reports.scheduler.asyncio.sleep", new_callable=AsyncMock),

@@ -881,9 +881,7 @@ async def test_replace_explicit_null_writes_none_for_privileged(monkeypatch: pyt
     assert persisted[0].hitl_review_config is None
     assert len(_hitl_audits(audit)) == 1
     assert _hitl_audits(audit)[-1].kwargs["event_type"] == "hitl_review_removed"
-    assert _hitl_audits(audit)[-1].kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == [
-        "structural:gate_removed"
-    ]
+    assert _hitl_audits(audit)[-1].kwargs["payload_json"]["affected_edges"][0]["weakening_types"] == ["structural:gate_removed"]
 
 
 async def test_replace_explicit_null_still_denies_for_mcp(monkeypatch: pytest.MonkeyPatch) -> None:

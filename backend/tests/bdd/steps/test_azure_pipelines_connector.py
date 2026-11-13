@@ -96,9 +96,7 @@ def azp_write_run(ctx: dict, pipeline_id: str, branch: str) -> None:
             f"{_API}/{ORG}/{PROJECT}/_apis/pipelines/{pipeline_id}/runs",
             params={"api-version": _API_VERSION},
         ).mock(return_value=httpx.Response(200, json=body))
-        result = asyncio.run(
-            connector.write(ConnectorPayload(resource="run", data={"pipeline_id": pipeline_id, "branch": branch}))
-        )
+        result = asyncio.run(connector.write(ConnectorPayload(resource="run", data={"pipeline_id": pipeline_id, "branch": branch})))
     ctx["write_result"] = result
     assert result["state"] == "inProgress", result
 
@@ -114,9 +112,7 @@ def azp_write_release(ctx: dict, definition_id: str) -> None:
             f"{_API}/{ORG}/{PROJECT}/_apis/release/releases",
             params={"api-version": _API_VERSION},
         ).mock(return_value=httpx.Response(200, json=body))
-        result = asyncio.run(
-            connector.write(ConnectorPayload(resource="release", data={"definition_id": definition_id}))
-        )
+        result = asyncio.run(connector.write(ConnectorPayload(resource="release", data={"definition_id": definition_id})))
     ctx["write_result"] = result
     assert result["name"] == "Release 1", result
 

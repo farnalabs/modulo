@@ -311,9 +311,7 @@ class KeycloakAdminApi:
     def _expect(self, method: str, path: str, status: int, **kwargs: Any) -> httpx.Response:
         resp = self._request(method, path, **kwargs)
         if resp.status_code != status:
-            raise Tier1bFixtureError(
-                f"Keycloak admin {method} {path} -> {resp.status_code} (expected {status}): {resp.text[:600]}"
-            )
+            raise Tier1bFixtureError(f"Keycloak admin {method} {path} -> {resp.status_code} (expected {status}): {resp.text[:600]}")
         return resp
 
     def _uuid_from_location(self, resp: httpx.Response, what: str) -> str:
@@ -394,9 +392,7 @@ class KeycloakAdminApi:
         if role_list_id is None:
             raise Tier1bFixtureError(f"role_list client scope not found in realm {realm}")
         self._expect("DELETE", f"/admin/realms/{realm}/clients/{client_uuid}/default-client-scopes/{role_list_id}", 204)
-        self._expect(
-            "DELETE", f"/admin/realms/{realm}/clients/{client_uuid}/optional-client-scopes/{role_list_id}", 204
-        )
+        self._expect("DELETE", f"/admin/realms/{realm}/clients/{client_uuid}/optional-client-scopes/{role_list_id}", 204)
 
     def _add_saml_user_property_mappers(self, realm: str, client_uuid: str) -> None:
         """Insert the three SAML user-property mappers the ACS flow reads.
@@ -563,9 +559,7 @@ def _parse_hidden_fields(html: str) -> dict[str, str]:
 def _assert_is_keycloak_login_form(response: httpx.Response, stage: str) -> None:
     ctype = response.headers.get("content-type", "")
     if "text/html" not in ctype:
-        raise Tier1bFixtureError(
-            f"Keycloak drive {stage}: expected HTML, got content-type {ctype!r}; body: {response.text[:400]}"
-        )
+        raise Tier1bFixtureError(f"Keycloak drive {stage}: expected HTML, got content-type {ctype!r}; body: {response.text[:400]}")
 
 
 @dataclass
@@ -606,10 +600,7 @@ class IdpBrowserDriver:
                     action = _parse_form_action(response.text)
                     login_action = urljoin(str(response.url), action)
                     break
-                raise Tier1bFixtureError(
-                    f"Keycloak drive: unexpected response to {start_url}: status {response.status_code}; "
-                    f"body: {response.text[:400]}"
-                )
+                raise Tier1bFixtureError(f"Keycloak drive: unexpected response to {start_url}: status {response.status_code}; body: {response.text[:400]}")
             else:
                 raise Tier1bFixtureError(f"Keycloak drive: redirect chain exceeded {_MAX_REDIRECT_HOPS} hops")
             submitted = client.post(
@@ -654,9 +645,7 @@ def walk_oidc_redirect_params(
                     return params
                 response = client.get(location)
                 continue
-            raise Tier1bFixtureError(
-                f"OIDC drive: expected a Redirect-to-app after login, got {response.status_code}: {response.text[:400]}"
-            )
+            raise Tier1bFixtureError(f"OIDC drive: expected a Redirect-to-app after login, got {response.status_code}: {response.text[:400]}")
         raise Tier1bFixtureError("OIDC drive: post-login redirect chain exceeded hops")
     finally:
         client.close()
@@ -683,18 +672,14 @@ def walk_saml_postback(
             if response.status_code in _REDIRECT_STATUS:
                 location = response.headers["location"]
                 if not location.startswith(driver.idp_base):
-                    raise Tier1bFixtureError(
-                        f"SAML drive: expected a Keycloak surface after login but got a redirect to {location!r}"
-                    )
+                    raise Tier1bFixtureError(f"SAML drive: expected a Keycloak surface after login but got a redirect to {location!r}")
                 response = client.get(location)
                 continue
             if response.status_code == 200:
                 _assert_is_keycloak_login_form(response, "saml postback")
                 html = response.text
                 break
-            raise Tier1bFixtureError(
-                f"SAML drive: unexpected {response.status_code} after login: {response.text[:400]}"
-            )
+            raise Tier1bFixtureError(f"SAML drive: unexpected {response.status_code} after login: {response.text[:400]}")
         if html is None:
             raise Tier1bFixtureError("SAML drive: no HTML response carrying the SAML postback form")
         # The SAML postback html has the auto-submitting form actioned to the

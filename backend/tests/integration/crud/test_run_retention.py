@@ -58,24 +58,15 @@ async def retention_fixture(migrated_db_url: str) -> _RetentionFixture:
     try:
         async with engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"
-                ),
+                text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json)"),
                 {"id": str(org_id), "name": "Retention Test Org", "slug": f"ret-{org_id.hex[:8]}"},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                    "VALUES (:id, :email, :name, 'hash', 'local', true)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
                 {"id": str(account_id), "email": f"ret-{org_id.hex[:8]}@test.local", "name": "Retention Test"},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
-                    "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                    "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
                 {"id": str(pipeline_id), "oid": str(org_id), "name": "Retention Test Pipeline", "aid": str(account_id)},
             )
             await conn.execute(
@@ -139,10 +130,7 @@ async def _seed_checkpoints(session: AsyncSession, org_id: uuid.UUID, thread_id:
     Postgres-only langgraph.* tables the aggregates join, created by the
     integration conftest from ModuloPostgresSaver's migration SQL)."""
     await session.execute(
-        text(
-            "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) "
-            "VALUES (:oid, :tid, '', :cid, CAST(:cp AS jsonb), CAST(:md AS jsonb))"
-        ),
+        text("INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata) VALUES (:oid, :tid, '', :cid, CAST(:cp AS jsonb), CAST(:md AS jsonb))"),
         {
             "oid": str(org_id),
             "tid": thread_id,
@@ -152,10 +140,7 @@ async def _seed_checkpoints(session: AsyncSession, org_id: uuid.UUID, thread_id:
         },
     )
     await session.execute(
-        text(
-            "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) "
-            "VALUES (:oid, :tid, '', 'ch', '1', 'json', :blob)"
-        ),
+        text("INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob) VALUES (:oid, :tid, '', 'ch', '1', 'json', :blob)"),
         {"oid": str(org_id), "tid": thread_id, "blob": b"b" * 300},
     )
 
@@ -358,9 +343,7 @@ async def test_candidates_date_filter_applies_to_the_aggregates(
     )
     await rls_session.flush()
 
-    result = await list_retention_candidates(
-        rls_session, org_id=retention_fixture.org_id, date_from=datetime(2026, 3, 1, tzinfo=UTC)
-    )
+    result = await list_retention_candidates(rls_session, org_id=retention_fixture.org_id, date_from=datetime(2026, 3, 1, tzinfo=UTC))
 
     assert result["total_count"] == 1
     est = {item["id"]: item["estimated_bytes"] for item in result["runs"]}
@@ -384,18 +367,11 @@ async def _seed_foreign_run(db_engine: AsyncEngine) -> None:
             {"id": str(org_b), "name": "Retention Org B", "slug": slug},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_b), "email": f"ret-b-{slug}@test.local", "name": "Retention B"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
-                "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipeline_b), "oid": str(org_b), "name": "Retention B Pipeline", "aid": str(account_b)},
         )
         await conn.execute(
@@ -408,11 +384,7 @@ async def _seed_foreign_run(db_engine: AsyncEngine) -> None:
             {"id": str(snapshot_b), "pid": str(pipeline_b), "oid": str(org_b)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :ih, :tid)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :ih, :tid)"),
             {
                 "id": str(run_b),
                 "oid": str(org_b),

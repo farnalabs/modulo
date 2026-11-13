@@ -74,7 +74,7 @@ from farna.launcher import env_safety
 
 _log = logging.getLogger(__name__)
 
-BUNDLED_BIN_DIR_ENV = "FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR"
+BUNDLED_BIN_DIR_ENV = "FARNA_CONTROL_BUNDLED_BIN_DIR"
 POSTGRES_HOST = "127.0.0.1"
 APP_DB_NAME = "modulo"
 
@@ -604,9 +604,9 @@ def _prepare_database_env(composed: dict[str, str]) -> None:
     admin_url = composed.get("DATABASE_ADMIN_URL")
     if admin_url:
         os.environ["DATABASE_ADMIN_URL"] = admin_url
-    system_url = composed.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
+    system_url = composed.get("FARNA_CONTROL_SYSTEM_DATABASE_URL")
     if system_url:
-        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] = system_url
+        os.environ["FARNA_CONTROL_SYSTEM_DATABASE_URL"] = system_url
 
 
 def _build_settings() -> Any:
@@ -643,7 +643,7 @@ def _add_saq_children(supervisor: Any, settings: Any, composed: dict[str, str]) 
 
     def _child_env(base: dict[str, str]) -> dict[str, str]:
         env = dict(base)
-        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"):
+        for key in ("DATABASE_URL", "DATABASE_ADMIN_URL", "REDIS_URL", "FARNA_CONTROL_SYSTEM_DATABASE_URL"):
             if composed.get(key):
                 env[key] = composed[key]
         return env

@@ -344,9 +344,7 @@ class TestPatchEdgeCases:
             pytest.param([{"value": str(USER_ID)}], id="member_list"),
         ],
     )
-    def test_patch_group_remove_member_accepts_both_value_shapes(
-        self, client: TestClient, member_value: dict[str, object] | list[dict[str, str]]
-    ) -> None:
+    def test_patch_group_remove_member_accepts_both_value_shapes(self, client: TestClient, member_value: dict[str, object] | list[dict[str, str]]) -> None:
         mock_team = make_team()
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
@@ -523,9 +521,7 @@ class TestCrudNotFound:
     @pytest.mark.parametrize(
         ("name", "method", "url", "mock_target", "body"),
         [
-            pytest.param(
-                "get_user", "GET", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_get_user", None, id="get_user"
-            ),
+            pytest.param("get_user", "GET", "/scim/v2/Users/{id}", "farna.api.routes.scim.scim_get_user", None, id="get_user"),
             pytest.param(
                 "replace_user",
                 "PUT",
@@ -568,9 +564,7 @@ class TestCrudNotFound:
             ),
         ],
     )
-    def test_not_found_returns_404(
-        self, client: TestClient, name: str, method: str, url: str, mock_target: str, body: dict | None
-    ) -> None:
+    def test_not_found_returns_404(self, client: TestClient, name: str, method: str, url: str, mock_target: str, body: dict | None) -> None:
         entity_id = USER_ID if "user" in name else TEAM_ID
         formatted_url = url.format(id=entity_id)
         with (
@@ -684,9 +678,7 @@ class TestCrudCreate:
             ),
         ],
     )
-    def test_duplicate_returns_409(
-        self, client: TestClient, name: str, url: str, body: dict, mock_duplicate_target: str, duplicate_return: object
-    ) -> None:
+    def test_duplicate_returns_409(self, client: TestClient, name: str, url: str, body: dict, mock_duplicate_target: str, duplicate_return: object) -> None:
         if "group" in name:
             with (
                 patch(mock_duplicate_target, return_value=duplicate_return),

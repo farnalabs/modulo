@@ -196,9 +196,7 @@ async def test_lookup_api_key_org_generic_backend_without_row_returns_none() -> 
 async def test_lookup_api_key_org_generic_backend_returns_row_org() -> None:
     org_id = uuid.uuid4()
     session = MagicMock()
-    session.execute = AsyncMock(
-        return_value=SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(organisation_id=org_id))
-    )
+    session.execute = AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(organisation_id=org_id)))
 
     with patch("farna.db.rls._ensure_active_transaction", AsyncMock(return_value="sqlite")):
         resolved = await _lookup_api_key_org(_factory(session), _API_KEY)
@@ -219,9 +217,7 @@ async def test_validate_api_key_in_org_reads_live_role() -> None:
             AsyncMock(return_value=("viewer", "human")),
         ),
     ):
-        resolved_key, live_role, owner_kind = await _validate_api_key_in_org(
-            _factory(session), _API_KEY, key.organisation_id
-        )
+        resolved_key, live_role, owner_kind = await _validate_api_key_in_org(_factory(session), _API_KEY, key.organisation_id)
 
     assert resolved_key is key
     assert live_role == "viewer"

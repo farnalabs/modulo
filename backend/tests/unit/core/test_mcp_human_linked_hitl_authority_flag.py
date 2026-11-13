@@ -31,27 +31,20 @@ class TestFlagRegistration:
 
 class TestResolver:
     async def test_defaults_off_without_an_org_override(self) -> None:
-        assert (
-            await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority")
-            is False
-        )
+        assert await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority") is False
 
     async def test_org_override_disables_it(self) -> None:
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(return_value=False)
         with patch("farna.core.feature_flags.get_registry", return_value=registry):
-            enabled = await resolve_mcp_human_linked_hitl_authority(
-                org_id=None, flag_name="mcp_human_linked_hitl_authority"
-            )
+            enabled = await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority")
         assert enabled is False
 
     async def test_read_failure_fails_closed_to_off(self) -> None:
         registry = MagicMock()
         registry.resolve_flag = AsyncMock(side_effect=RuntimeError("db down"))
         with patch("farna.core.feature_flags.get_registry", return_value=registry):
-            enabled = await resolve_mcp_human_linked_hitl_authority(
-                org_id=None, flag_name="mcp_human_linked_hitl_authority"
-            )
+            enabled = await resolve_mcp_human_linked_hitl_authority(org_id=None, flag_name="mcp_human_linked_hitl_authority")
         assert enabled is False
         registry.resolve_flag.assert_awaited_once()
         # The caller-supplied flag name is what gets resolved — the flag lives

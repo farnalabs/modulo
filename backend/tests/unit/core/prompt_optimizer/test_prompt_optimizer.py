@@ -278,9 +278,7 @@ class TestPromptOptimizer:
         with pytest.raises(ValueError, match="empty or whitespace-only"):
             await optimizer.optimize("   ", [], {})
 
-    async def test_optimize_defaults_none_results_and_definitions(
-        self, optimizer: PromptOptimizer, mock_llm: AsyncMock
-    ) -> None:
+    async def test_optimize_defaults_none_results_and_definitions(self, optimizer: PromptOptimizer, mock_llm: AsyncMock) -> None:
         result = await optimizer.optimize("Hello {{name}}")
         assert result.suggested_prompt == _VALID_RESPONSE["suggested_prompt"]
         mock_llm.assert_awaited_once()
@@ -289,9 +287,7 @@ class TestPromptOptimizer:
         assert "<current_prompt>\nHello {{name}}\n</current_prompt>" in args[1].content
         assert "<failing_evals>\n[]\n</failing_evals>" in args[1].content
 
-    async def test_optimize_calls_llm_with_system_and_human_messages(
-        self, optimizer: PromptOptimizer, mock_llm: AsyncMock
-    ) -> None:
+    async def test_optimize_calls_llm_with_system_and_human_messages(self, optimizer: PromptOptimizer, mock_llm: AsyncMock) -> None:
         results = _sample_eval_results()
         defs = _sample_eval_defs()
 
@@ -324,9 +320,7 @@ class TestPromptOptimizer:
         assert result.rationale == "Added detail requirement to fix brevity failures"
         assert result.analysis == "Failures show brevity issue"
 
-    async def test_optimize_raises_optimization_failed_after_retry_exhaustion(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_optimize_raises_optimization_failed_after_retry_exhaustion(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock = AsyncMock(side_effect=RuntimeError("LLM unavailable"))
         optimizer = PromptOptimizer(mock)
         await _patch_sleep(monkeypatch)

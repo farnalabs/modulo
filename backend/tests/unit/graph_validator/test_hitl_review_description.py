@@ -86,9 +86,7 @@ async def test_gate_with_short_description_rejected(graph_builder):
 
 
 async def test_gate_with_whitespace_only_description_rejected():
-    result = await GraphValidator().validate_definition(
-        _gated_edge_graph("                     "), _session_returning()
-    )
+    result = await GraphValidator().validate_definition(_gated_edge_graph("                     "), _session_returning())
     assert any(i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED" for i in result.issues)
 
 
@@ -100,9 +98,7 @@ async def test_gate_with_non_string_description_rejected():
 
 
 async def test_description_of_exactly_min_length_passes():
-    result = await GraphValidator().validate_definition(
-        _gated_edge_graph("x" * HITL_DESCRIPTION_MIN_LENGTH), _session_returning()
-    )
+    result = await GraphValidator().validate_definition(_gated_edge_graph("x" * HITL_DESCRIPTION_MIN_LENGTH), _session_returning())
     assert not any(i.code == "HITL_REVIEW_DESCRIPTION_REQUIRED" for i in result.issues)
 
 

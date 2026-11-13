@@ -37,9 +37,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
             ),
             {
                 "id": str(account_id),
@@ -49,8 +47,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {
                 "mid": str(uuid.uuid4()),
@@ -495,13 +492,7 @@ async def test_count_owned_resources_reflects_resource_ownership(db_engine: Asyn
             },
         )
         await session.execute(
-            text(
-                "INSERT INTO model_backends "
-                "(id, organisation_id, name, display_name, provider, model_id, owner_team_id, "
-                "visibility, credentials_ciphertext, default_params, account_id) "
-                "VALUES (:id, :oid, :name, :display, :provider, :model, :team_id, 'team', "
-                "'\\x00'::bytea, '{}'::json, :uid)"
-            ),
+            text("INSERT INTO model_backends (id, organisation_id, name, display_name, provider, model_id, owner_team_id, visibility, credentials_ciphertext, default_params, account_id) VALUES (:id, :oid, :name, :display, :provider, :model, :team_id, 'team', '\\x00'::bytea, '{}'::json, :uid)"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org),
@@ -542,13 +533,7 @@ async def test_notification_endpoints_persist_after_team_soft_delete(db_engine: 
         team = await create_team(session, org_id=org, name="NE Team", account_id=user)
         ep_id = str(uuid.uuid4())
         await session.execute(
-            text(
-                "INSERT INTO notification_endpoints "
-                "(id, organisation_id, url, events, team_id, created_at, updated_at, "
-                "consecutive_dead_letter_count) "
-                "VALUES (:id, :oid, :url, '[\"run.completed\"]'::json, :team_id, "
-                "current_timestamp, current_timestamp, 0)"
-            ),
+            text("INSERT INTO notification_endpoints (id, organisation_id, url, events, team_id, created_at, updated_at, consecutive_dead_letter_count) VALUES (:id, :oid, :url, '[\"run.completed\"]'::json, :team_id, current_timestamp, current_timestamp, 0)"),
             {
                 "id": ep_id,
                 "oid": str(org),

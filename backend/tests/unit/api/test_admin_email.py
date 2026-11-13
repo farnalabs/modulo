@@ -789,9 +789,7 @@ class TestOrgAdminAllowed:
         from farna.api.routes import admin_email
         from farna.db.models.organisation import Organisation
 
-        org = Organisation(
-            id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
-        )
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}})
         monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
         resp = await client_non_sys_admin.get(f"/api/v1/admin/org/{ORG_ID}/email-settings")
         assert resp.status_code == 200
@@ -819,9 +817,7 @@ class TestOrgAdminAllowed:
         from farna.api.routes import admin_email
         from farna.db.models.organisation import Organisation
 
-        org = Organisation(
-            id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}}
-        )
+        org = Organisation(id=ORG_ID, name="Test", slug="test", settings_json={"email": {"smtp_host": "smtp.example.com"}})
         monkeypatch.setattr(admin_email, "get_organisation", AsyncMock(return_value=org))
         resp = await client_non_sys_admin.post(
             f"/api/v1/admin/org/{ORG_ID}/email-settings/test",

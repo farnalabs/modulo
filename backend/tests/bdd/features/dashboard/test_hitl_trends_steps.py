@@ -140,10 +140,7 @@ def _bdd_entries(request, key: str, count: int) -> None:
     assert len(entries) == count, f"Expected {count} '{key}' entries, got {len(entries)}"
 
 
-@then(
-    "each hitl_volume entry has total_decisions, approved_count,"
-    " rejected_count, rejection_rate, and avg_time_to_approve_ms"
-)
+@then("each hitl_volume entry has total_decisions, approved_count, rejected_count, rejection_rate, and avg_time_to_approve_ms")
 def _bdd_hitl_volume_shape(request) -> None:
     for entry in _assert_body(request)["hitl_volume"]:
         for field in (

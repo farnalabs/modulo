@@ -97,18 +97,11 @@ async def _seed_run(
 ) -> None:
     async with maker() as session, session.begin():
         await session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, 'gate org', :slug, '{}', '{}')"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, 'gate org', :slug, '{}', '{}')"),
             {"id": str(_ORG), "slug": f"gate-{_ORG.hex[:12]}"},
         )
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, 'tok-a', 0)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, claim_token, cancellation_requested) VALUES (:id, :oid, :pid, :sid, 'manual', :status, 1, 'ih', :thread, 'tok-a', 0)"),
             {
                 "id": run_id.hex,
                 "oid": _ORG.hex,
@@ -132,9 +125,7 @@ async def _load_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) 
 
 class TestMarkerSavepointWrite:
     @pytest.mark.asyncio
-    async def test_write_persists_the_merged_marker_row(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_write_persists_the_merged_marker_row(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """The savepoint leg runs the REAL ``write_run_markers`` — one row
         per attempt key in the new table."""
         run_id = uuid.uuid4()
@@ -174,9 +165,7 @@ class TestMarkerSavepointWrite:
             attempt_key=None,
             marker={"status": "failed", "raw_output": "raw"},
         )
-        assert "requires a parsed organisation id" in caplog.text, (
-            "the explicit RuntimeError must surface through the persist-failure log"
-        )
+        assert "requires a parsed organisation id" in caplog.text, "the explicit RuntimeError must surface through the persist-failure log"
 
 
 class TestMarkerSavepointLegacyLostClassification:
@@ -371,10 +360,7 @@ class TestGateReadUsesFencedReader:
                 "for_update": True,
                 "fence_status": False,
             }
-        ], (
-            "the connector read must fence by other means (no claim token) WITH the row lock, "
-            "and WITHOUT the status fence (qa Minor 4 — the old read had no status predicate)"
-        )
+        ], "the connector read must fence by other means (no claim token) WITH the row lock, and WITHOUT the status fence (qa Minor 4 — the old read had no status predicate)"
         assert markers is not None
         assert "run:x:node:n1:connector" in markers
         assert len(session.execute_calls) == 1, "only the idempotency-key SELECT remains outside the repo"
@@ -403,9 +389,7 @@ class TestFenceStatusVisibilityDuringCancel:
         return run_id
 
     @pytest.mark.asyncio
-    async def test_connector_shape_read_serves_markers_of_a_cancelled_run(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_connector_shape_read_serves_markers_of_a_cancelled_run(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """The connector caller's shape (for_update=True, claim_token=None,
         fence_status=False) — a cancelled run's markers are STILL served, so
         a delivery_done stamped just before the cancel keeps suppressing the
@@ -424,9 +408,7 @@ class TestFenceStatusVisibilityDuringCancel:
         assert served == self._MARKERS
 
     @pytest.mark.asyncio
-    async def test_gate_shape_read_serves_none_for_a_cancelled_run(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_gate_shape_read_serves_none_for_a_cancelled_run(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """The FAR-228 gate caller's shape (fence_status=True default) — the
         status fence holds: a cancelled run's markers are NOT served."""
         run_id = await self._seed_cancelled_run(sqlite_sessionmaker)
@@ -513,12 +495,7 @@ def _update_run_status_call_sites() -> set[tuple[str, str, bool]]:
             self._scoped(node)
 
         def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
-            wrapped = (
-                len(node.items) == 1
-                and isinstance(node.items[0].context_expr, ast.Call)
-                and isinstance(node.items[0].context_expr.func, ast.Name)
-                and node.items[0].context_expr.func.id == "guard_dual_write"
-            )
+            wrapped = len(node.items) == 1 and isinstance(node.items[0].context_expr, ast.Call) and isinstance(node.items[0].context_expr.func, ast.Name) and node.items[0].context_expr.func.id == "guard_dual_write"
             if wrapped:
                 self.guard_depth += 1
             self.generic_visit(node)
@@ -556,21 +533,10 @@ class TestGuardContract:
         unwrapped = {(rel, fn) for rel, fn, guarded in findings if not guarded}
         missing_guard = wrapped - _GUARDED_SITES
         unguarded_drift = unwrapped - _UNGUARDED_SITES
-        assert not missing_guard, (
-            "update_run_status call sites wrapped in guard_dual_write that are NOT in the sanctioned "
-            f"list (review + extend the allowlist): {sorted(missing_guard)}"
-        )
-        assert not unguarded_drift, (
-            "UNGUARDED update_run_status call sites outside the known no-blobs set — if the new site "
-            f"passes outputs_json/node_telemetry_json it MUST be wrapped in guard_dual_write: "
-            f"{sorted(unguarded_drift)}"
-        )
-        assert wrapped >= _GUARDED_SITES, (
-            f"a sanctioned guard-wrapped site disappeared: {sorted(_GUARDED_SITES - wrapped)}"
-        )
-        assert unwrapped >= _UNGUARDED_SITES, (
-            f"a known no-blobs site became guarded (review the pin): {sorted(_UNGUARDED_SITES - unwrapped)}"
-        )
+        assert not missing_guard, f"update_run_status call sites wrapped in guard_dual_write that are NOT in the sanctioned list (review + extend the allowlist): {sorted(missing_guard)}"
+        assert not unguarded_drift, f"UNGUARDED update_run_status call sites outside the known no-blobs set — if the new site passes outputs_json/node_telemetry_json it MUST be wrapped in guard_dual_write: {sorted(unguarded_drift)}"
+        assert wrapped >= _GUARDED_SITES, f"a sanctioned guard-wrapped site disappeared: {sorted(_GUARDED_SITES - wrapped)}"
+        assert unwrapped >= _UNGUARDED_SITES, f"a known no-blobs site became guarded (review the pin): {sorted(_UNGUARDED_SITES - unwrapped)}"
 
     def test_update_run_status_docstring_documents_raises_and_guard(self) -> None:
         from farna.db.crud.run import update_run_status
@@ -600,9 +566,7 @@ class TestGuardContract:
 
 class TestRecoveryClaimTokenFence:
     @pytest.mark.asyncio
-    async def test_recovery_failure_carries_the_claim_token(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_recovery_failure_carries_the_claim_token(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """qa M18: the recovery dual-write failure path passes
         ``run.claim_token`` — without it the separate-session terminalize
         could mark a SUCCESSOR's re-claim."""
@@ -662,9 +626,7 @@ class TestRecoveryInheritedSentinelKeys:
     FILTERED from the new-table leg, never wedging the node's recovery."""
 
     @pytest.mark.asyncio
-    async def test_inherited_kwargs_carry_the_pre_mutation_dicts(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_inherited_kwargs_carry_the_pre_mutation_dicts(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         from farna.core.pipeline_engine.recovery import _apply_recovery_markers
 
         run_id = uuid.uuid4()
@@ -688,9 +650,7 @@ class TestRecoveryInheritedSentinelKeys:
         assert captured["outputs"]["n1"] == {"recovered": True}
 
     @pytest.mark.asyncio
-    async def test_recovery_on_an_inherited_sentinel_run_is_filtered_not_failed(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_recovery_on_an_inherited_sentinel_run_is_filtered_not_failed(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """End-to-end through the REAL chokepoint: a run whose STORED blobs
         carry a pre-0176 re-mapped ``__sneaky__`` key (the B2b repair wrote it
         into the new table verbatim) recovers successfully - the sentinel is

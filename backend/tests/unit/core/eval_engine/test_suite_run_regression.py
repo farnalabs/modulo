@@ -140,9 +140,7 @@ async def test_default_path_ignores_guardrail_and_insufficient_data() -> None:
 # SuiteRun grouping path                                                      #
 # --------------------------------------------------------------------------- #
 async def test_grouped_path_uses_suite_run_ids_and_computes_drop() -> None:
-    session = await _make_session(
-        rows=[_row(current_total=10, current_passed=2, baseline_total=10, baseline_passed=9, eval_type="regex")]
-    )
+    session = await _make_session(rows=[_row(current_total=10, current_passed=2, baseline_total=10, baseline_passed=9, eval_type="regex")])
     cur = uuid.uuid4()
     base = uuid.uuid4()
     alerts = await detect_regressions(
@@ -212,9 +210,7 @@ async def test_grouped_path_no_current_run_returns_empty() -> None:
 async def test_grouped_path_scoped_by_eval_type() -> None:
     # Mixed eval types partition — a regex regression must not be diluted by an
     # model_judge pass. Restricting to regex isolates the alert.
-    session = await _make_session(
-        rows=[_row(eval_type="regex", current_total=5, current_passed=1, baseline_total=5, baseline_passed=5)]
-    )
+    session = await _make_session(rows=[_row(eval_type="regex", current_total=5, current_passed=1, baseline_total=5, baseline_passed=5)])
     alerts = await detect_regressions(
         session,
         uuid.uuid4(),

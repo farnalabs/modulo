@@ -20,11 +20,7 @@ def _get_hub_connector_types() -> set[str]:
 
     hub_types: set[str] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.match_case)
-            and isinstance(node.pattern, ast.MatchValue)
-            and isinstance(node.pattern.value, ast.Constant)
-        ):
+        if isinstance(node, ast.match_case) and isinstance(node.pattern, ast.MatchValue) and isinstance(node.pattern.value, ast.Constant):
             hub_types.add(node.pattern.value.value)
     return hub_types
 
@@ -78,10 +74,7 @@ def test_all_connector_types_have_polling_parity():
     hub_types = _get_hub_connector_types()
     missing = hub_types - polling_types - set(excluded_types)
 
-    assert not missing, (
-        f"connector_hub types missing from _build_polling_connector: {sorted(missing)}. "
-        "Add support to _build_polling_connector or add to excluded_types with a reason."
-    )
+    assert not missing, f"connector_hub types missing from _build_polling_connector: {sorted(missing)}. Add support to _build_polling_connector or add to excluded_types with a reason."
 
 
 def test_polling_types_are_valid_connectors():
@@ -104,6 +97,4 @@ def test_polling_types_are_valid_connectors():
 def test_hub_has_minimum_types():
     """Sanity check — the hub should have more types than polling supports."""
     hub_types = _get_hub_connector_types()
-    assert len(hub_types) >= 20, (
-        f"Expected at least 20 hub connector types, got {len(hub_types)}. Has the hub been refactored?"
-    )
+    assert len(hub_types) >= 20, f"Expected at least 20 hub connector types, got {len(hub_types)}. Has the hub been refactored?"

@@ -38,11 +38,7 @@ pytestmark = pytest.mark.integration
 _BASE = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 _SUBJECT = "node_execution"
 
-_EVIDENCE_INSERT = (
-    "INSERT INTO evidence "
-    "(id, organisation_id, key, subject_type, subject_id, value, producer_type, created_at, observed_at) "
-    "VALUES (:id, :org, :key, :stype, :sid, CAST(:value AS jsonb), :producer, :created, :observed)"
-)
+_EVIDENCE_INSERT = "INSERT INTO evidence (id, organisation_id, key, subject_type, subject_id, value, producer_type, created_at, observed_at) VALUES (:id, :org, :key, :stype, :sid, CAST(:value AS jsonb), :producer, :created, :observed)"
 
 
 def _unique_key(prefix: str = "eval_") -> str:
@@ -496,9 +492,7 @@ async def _scoped_ids(app_engine: AsyncEngine, own_org: uuid.UUID, key: str) -> 
     return [row[0] for row in rows]
 
 
-async def test_rls_cross_org_rows_invisible_to_scoped_session(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID
-) -> None:
+async def test_rls_cross_org_rows_invisible_to_scoped_session(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID) -> None:
     """The integrator role scoped to one org cannot see other orgs' evidence."""
     shared_key = _unique_key()
     subject_id = f"rls-sel-{uuid.uuid4().hex[:8]}"
@@ -516,9 +510,7 @@ async def test_rls_cross_org_rows_invisible_to_scoped_session(
     assert str(other_org_id) not in visible
 
 
-async def test_rls_write_rejected_when_scope_disagrees_with_row(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID
-) -> None:
+async def test_rls_write_rejected_when_scope_disagrees_with_row(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID) -> None:
     """An INSERT naming a different org than the session scope fails closed."""
     other_org_id = await _create_other_org(db_engine)
     row_id = uuid.uuid4()
@@ -540,9 +532,7 @@ async def test_rls_write_rejected_when_scope_disagrees_with_row(
     assert len(superuser_probe) == 0
 
 
-async def test_rls_write_accepted_when_scope_matches_row(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID
-) -> None:
+async def test_rls_write_accepted_when_scope_matches_row(db_engine: AsyncEngine, app_engine: AsyncEngine, test_org: uuid.UUID) -> None:
     """An INSERT naming the row's own scoped org succeeds and persists."""
     key = _unique_key()
     subject_id = f"rls-ok-{uuid.uuid4().hex[:8]}"

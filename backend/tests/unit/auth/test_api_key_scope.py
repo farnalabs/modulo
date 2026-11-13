@@ -187,9 +187,7 @@ class TestScopeImmutability:
         from farna.auth.api_key import update_api_key
 
         params = inspect.signature(update_api_key).parameters
-        assert "scope" not in params, (
-            "update_api_key must not accept a scope parameter — the caller scope is immutable post-mint"
-        )
+        assert "scope" not in params, "update_api_key must not accept a scope parameter — the caller scope is immutable post-mint"
 
 
 class TestClampScopeIndependence:

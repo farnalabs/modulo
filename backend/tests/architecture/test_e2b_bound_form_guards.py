@@ -90,11 +90,7 @@ def test_no_e2b_imports_outside_the_provider_and_sanctioned_hosts() -> None:
         if rel in SANCTIONED_E2B_IMPORT_HOSTS:
             continue
         violations.extend(_e2b_import_violations(source, rel))
-    assert not violations, (
-        "ADR 040 T2a: the e2b SDK may only be imported by core/runtime_provider/e2b.py "
-        "and the sanctioned kill/evidence hosts.\n"
-        "Route the call through the RuntimeProvider ABC instead.\n" + "\n".join(violations)
-    )
+    assert not violations, "ADR 040 T2a: the e2b SDK may only be imported by core/runtime_provider/e2b.py and the sanctioned kill/evidence hosts.\nRoute the call through the RuntimeProvider ABC instead.\n" + "\n".join(violations)
 
 
 def test_e2b_import_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
@@ -122,13 +118,7 @@ def _apply_policy_violations(source: str, rel: str) -> list[str]:
     except SyntaxError as exc:  # pragma: no cover - fail closed
         return [f"  {rel}: unparsable source ({exc})"]
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.level == 0
-            and node.module
-            and node.module.endswith("sandbox_policy")
-            and any(alias.name == "apply_sandbox_policy" for alias in node.names)
-        ):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and node.module.endswith("sandbox_policy") and any(alias.name == "apply_sandbox_policy" for alias in node.names):
             violations.append(f"  {rel}:{node.lineno}: import apply_sandbox_policy")
         elif isinstance(node, ast.Import):
             if any(alias.name.endswith("sandbox_policy") for alias in node.names):
@@ -153,20 +143,14 @@ def test_a21_apply_sandbox_policy_confined_to_its_host_modules() -> None:
         if rel in SANCTIONED_APPLY_POLICY_HOSTS:
             continue
         violations.extend(_apply_policy_violations(source, rel))
-    assert not violations, (
-        "ADR 040 A21: apply_sandbox_policy may only be imported/called from "
-        "core/pipeline_engine/sandbox_policy.py and core/runtime_provider/e2b.py.\n"
-        "Route enforcement through RuntimeProvider.apply_isolation instead.\n" + "\n".join(violations)
-    )
+    assert not violations, "ADR 040 A21: apply_sandbox_policy may only be imported/called from core/pipeline_engine/sandbox_policy.py and core/runtime_provider/e2b.py.\nRoute enforcement through RuntimeProvider.apply_isolation instead.\n" + "\n".join(violations)
 
 
 def test_a21_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
     """Anti-vacuity for the A21 guard."""
     planted = tmp_path / "engine.py"
     planted.write_text(
-        "from farna.core.pipeline_engine.sandbox_policy import apply_sandbox_policy\n"
-        "async def go(sandbox):\n"
-        "    await apply_sandbox_policy(sandbox, read_only=True)\n",
+        "from farna.core.pipeline_engine.sandbox_policy import apply_sandbox_policy\nasync def go(sandbox):\n    await apply_sandbox_policy(sandbox, read_only=True)\n",
         encoding="utf-8",
     )
     found = _apply_policy_violations(planted.read_text(encoding="utf-8"), "engine.py")
@@ -184,19 +168,12 @@ def test_api_e2b_app_hostname_confined_to_the_provider_module() -> None:
         for lineno, line in enumerate(source.splitlines(), start=1):
             if HOSTNAME in line:
                 violations.append(f"  {rel}:{lineno}: {HOSTNAME}")
-    assert not violations, (
-        "ADR 040: the api.e2b.app hostname belongs only to core/runtime_provider/e2b.py "
-        "(R6 deleted the legacy node_runner log probe).\n" + "\n".join(violations)
-    )
+    assert not violations, "ADR 040: the api.e2b.app hostname belongs only to core/runtime_provider/e2b.py (R6 deleted the legacy node_runner log probe).\n" + "\n".join(violations)
 
 
 def test_hostname_scanner_reports_a_planted_violation(tmp_path: Path) -> None:
     """Anti-vacuity for the hostname ban."""
     planted = tmp_path / "probe.py"
     planted.write_text(f'URL = "https://{HOSTNAME}/sandboxes"\n', encoding="utf-8")
-    found = [
-        f"  probe.py:{lineno}"
-        for lineno, line in enumerate(planted.read_text(encoding="utf-8").splitlines(), start=1)
-        if HOSTNAME in line
-    ]
+    found = [f"  probe.py:{lineno}" for lineno, line in enumerate(planted.read_text(encoding="utf-8").splitlines(), start=1) if HOSTNAME in line]
     assert found, "the hostname scanner must report a planted violation"

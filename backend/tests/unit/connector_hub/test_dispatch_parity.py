@@ -769,9 +769,7 @@ _AZURE = _ConnectorSpec(
                             "id": 101,
                             "pipeline": {"id": 1},
                             "state": "inProgress",
-                            "_links": {
-                                "web": {"href": "https://dev.azure.com/myorg/myproject/_build/results?buildId=101"}
-                            },
+                            "_links": {"web": {"href": "https://dev.azure.com/myorg/myproject/_build/results?buildId=101"}},
                             "createdDate": "2026-01-01T00:00:00Z",
                         },
                     ),
@@ -794,9 +792,7 @@ _AZURE = _ConnectorSpec(
                             "pipeline": {"id": 1},
                             "state": "completed",
                             "result": "succeeded",
-                            "_links": {
-                                "web": {"href": "https://dev.azure.com/myorg/myproject/_build/results?buildId=101"}
-                            },
+                            "_links": {"web": {"href": "https://dev.azure.com/myorg/myproject/_build/results?buildId=101"}},
                             "createdDate": "2026-01-01T00:00:00Z",
                         },
                     ),
@@ -866,11 +862,7 @@ _CASE_IDS = [f"{spec.name}-{case.op}" for spec, case in _CASES]
 
 # (allowed_operations, op) pairs that must be DENIED for every connector:
 # read-only ACL blocks the write-class trigger; write-only ACL blocks the reads.
-_DENY_CASES = [
-    (spec, allowed, op)
-    for spec in _SPECS
-    for allowed, op in (("read", "trigger_run"), ("write", "get_run_status"), ("write", "list_runs"))
-]
+_DENY_CASES = [(spec, allowed, op) for spec in _SPECS for allowed, op in (("read", "trigger_run"), ("write", "get_run_status"), ("write", "list_runs"))]
 _DENY_IDS = [f"{spec.name}-{allowed}-{op}" for spec, allowed, op in _DENY_CASES]
 
 _DENY_KWARGS: dict[str, dict[str, Any]] = {
@@ -958,12 +950,8 @@ async def test_dispatch_op_traced_and_forwarded(
 # get_run_status CONSUMES (the dispatch await_completion contract)
 # ---------------------------------------------------------------------------
 
-_TRIGGER_CASES: dict[str, _OpCase] = {
-    spec.name: next(case for case in spec.cases if case.op == "trigger_run") for spec in _SPECS
-}
-_STATUS_CASES: dict[str, _OpCase] = {
-    spec.name: next(case for case in spec.cases if case.op == "get_run_status") for spec in _SPECS
-}
+_TRIGGER_CASES: dict[str, _OpCase] = {spec.name: next(case for case in spec.cases if case.op == "trigger_run") for spec in _SPECS}
+_STATUS_CASES: dict[str, _OpCase] = {spec.name: next(case for case in spec.cases if case.op == "get_run_status") for spec in _SPECS}
 
 
 @respx.mock

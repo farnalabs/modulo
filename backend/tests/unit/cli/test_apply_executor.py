@@ -93,12 +93,8 @@ def _mock_current(
 ) -> dict:
     """Mock the list/create endpoints; returns {name: route} for assertions."""
     routes = {}
-    routes["schemas_get"] = respx.get(
-        "https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}
-    ).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": 100})
-    routes["backends_get"] = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-        json={"items": backends, "total": len(backends), "page": 1, "page_size": 100}
-    )
+    routes["schemas_get"] = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": schemas, "total": len(schemas), "page": 1, "page_size": 100})
+    routes["backends_get"] = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": backends, "total": len(backends), "page": 1, "page_size": 100})
     routes["versions_get"] = respx.get(
         re.compile(r"https://api\.test/api/v1/schemas/[^/]+/versions"),
         params={"page": "1", "page_size": str(PAGE_SIZE)},
@@ -120,9 +116,7 @@ def _mock_current(
             json=backend_post_json if backend_post_json is not None else _backend_item("applied", "applied-provider"),
         )
     )
-    routes["health_post"] = respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[^/]+/health-check")).mock(
-        return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"})
-    )
+    routes["health_post"] = respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[^/]+/health-check")).mock(return_value=httpx.Response(200, json={"status": "ok", "detail": None, "checked_at": "2026-01-01T00:00:00Z"}))
     return routes
 
 
@@ -201,9 +195,7 @@ class TestRealApply:
     def test_patch_sent_when_fields_differ(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "resolved-secret")
         existing = _schema_item("alpha", "Old description")
-        patch_route = respx.patch(f"https://api.test/api/v1/schemas/{existing['id']}").mock(
-            return_value=httpx.Response(200, json={**existing, "description": "Alpha schema"})
-        )
+        patch_route = respx.patch(f"https://api.test/api/v1/schemas/{existing['id']}").mock(return_value=httpx.Response(200, json={**existing, "description": "Alpha schema"}))
         _mock_current([existing], [], versions_json=existing.get("versions"))
         shortened = CONFIG_TEXT.replace("    - name: fresh\n      description: Brand new\n", "")
         config = parse_apply_documents(shortened)
@@ -261,15 +253,7 @@ class TestVersionsCreate:
         config_text = CONFIG_TEXT.replace("    - name: fresh\n      description: Brand new\n", "")
         config_text = config_text.replace(
             "    - name: alpha\n      description: Alpha schema\n",
-            (
-                "    - name: alpha\n"
-                "      description: Alpha schema\n"
-                "      versions:\n"
-                "        - version: v1\n"
-                "          version_number: 1\n"
-                "          definition_json:\n"
-                "            type: object\n"
-            ),
+            ("    - name: alpha\n      description: Alpha schema\n      versions:\n        - version: v1\n          version_number: 1\n          definition_json:\n            type: object\n"),
         )
         schema_id = str(uuid.uuid4())
         config = parse_apply_documents(config_text)
@@ -330,12 +314,8 @@ class TestHeaders:
     @respx.mock
     def test_bearer_authorization_header_sent(self) -> None:
         """The server (HTTPBearer) reads ONLY Authorization: Bearer — never X-Api-Key."""
-        schemas_get = respx.get(
-            "https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}
-        ).respond(json={"items": [], "total": 0})
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
+        schemas_get = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "secret-key", client=client)
             executor.fetch_current(parse_apply_documents(CONFIG_TEXT))
@@ -361,15 +341,9 @@ class TestPagination:
         """Two schemas that do not fit one page are both collected (no false 'created')."""
         page1 = [_schema_item("alpha", "First page"), _schema_item("beta", "First page")]
         page2 = [_schema_item("gamma", "Second page")]
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": page1, "total": 3, "page": 1, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/schemas", params={"page": "2", "page_size": "100"}).respond(
-            json={"items": page2, "total": 3, "page": 2, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": page1, "total": 3, "page": 1, "page_size": 100})
+        respx.get("https://api.test/api/v1/schemas", params={"page": "2", "page_size": "100"}).respond(json={"items": page2, "total": 3, "page": 2, "page_size": 100})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -379,25 +353,10 @@ class TestPagination:
     @respx.mock
     def test_versions_fetch_passes_page_size(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "v")
-        config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: alpha\n"
-            "      description: Alpha schema\n"
-            "      versions:\n"
-            "        - version: v1\n"
-            "          version_number: 1\n"
-            "          definition_json:\n"
-            "            type: object\n"
-        )
+        config_text = "api_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: alpha\n      description: Alpha schema\n      versions:\n        - version: v1\n          version_number: 1\n          definition_json:\n            type: object\n"
         schema_id = str(uuid.uuid4())
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [_schema_item("alpha", "Alpha schema", schema_id=schema_id)], "total": 1}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [_schema_item("alpha", "Alpha schema", schema_id=schema_id)], "total": 1})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
         versions_route = respx.get(
             f"https://api.test/api/v1/schemas/{schema_id}/versions",
             params={"page": "1", "page_size": str(PAGE_SIZE)},
@@ -411,15 +370,9 @@ class TestPagination:
     @respx.mock
     def test_backend_list_403_falls_back_to_default_listing(self) -> None:
         """Operator-key 403 on include_in_dev degrades to the default listing."""
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        with_dev = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            status_code=403, json={"detail": "operator role required"}
-        )
-        without_dev = respx.get(
-            "https://api.test/api/v1/model-backends", params={"page": "1", "page_size": str(PAGE_SIZE)}
-        ).respond(json={"items": [_backend_item("openai", "openai")], "total": 1})
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+        with_dev = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(status_code=403, json={"detail": "operator role required"})
+        without_dev = respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(json={"items": [_backend_item("openai", "openai")], "total": 1})
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -431,12 +384,8 @@ class TestPagination:
     @respx.mock
     def test_backend_list_non_403_error_propagates(self) -> None:
         """Only 403 (in_dev disclosure) falls back; other errors propagate."""
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            status_code=500, json={"detail": "boom"}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(status_code=500, json={"detail": "boom"})
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -445,16 +394,7 @@ class TestPagination:
         assert exc_info.value.status_code == 500
 
 
-_SECRETREF_CONFIG_TEXT = (
-    "api_version: modulo.dev/v1\n"
-    "entities:\n"
-    "  model_backends:\n"
-    "    - name: openai\n"
-    "      display_name: OpenAI\n"
-    "      provider: openai\n"
-    "      model_id: gpt-x\n"
-    "      api_key: secretref://vault/openai-key\n"
-)
+_SECRETREF_CONFIG_TEXT = "api_version: modulo.dev/v1\nentities:\n  model_backends:\n    - name: openai\n      display_name: OpenAI\n      provider: openai\n      model_id: gpt-x\n      api_key: secretref://vault/openai-key\n"
 
 
 class TestRefForwarding:
@@ -518,18 +458,7 @@ class TestVersionImmutability:
     def test_conflicting_version_string_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "v")
         config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: alpha\n"
-            "      description: Alpha schema\n"
-            "      versions:\n"
-            "        - version: v1\n"
-            "          version_number: 1\n"
-            "          definition_json:\n"
-            "            type: object\n"
-            "            properties:\n"
-            "              changed: {}\n"
+            "api_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: alpha\n      description: Alpha schema\n      versions:\n        - version: v1\n          version_number: 1\n          definition_json:\n            type: object\n            properties:\n              changed: {}\n"
         )
         existing = _schema_item("alpha", "Alpha schema")
         existing["versions"] = [
@@ -555,18 +484,7 @@ class TestVersionImmutability:
     @respx.mock
     def test_identical_version_is_unchanged(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "v")
-        config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: alpha\n"
-            "      description: Alpha schema\n"
-            "      versions:\n"
-            "        - version: v1\n"
-            "          version_number: 1\n"
-            "          definition_json:\n"
-            "            type: object\n"
-        )
+        config_text = "api_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: alpha\n      description: Alpha schema\n      versions:\n        - version: v1\n          version_number: 1\n          definition_json:\n            type: object\n"
         existing = _schema_item("alpha", "Alpha schema")
         existing["versions"] = [
             {
@@ -609,12 +527,8 @@ class TestFailureIsolation:
     def test_connect_error_isolates_entity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """httpx.ConnectError moves exactly that entity to failed."""
         monkeypatch.setenv("SK", "v")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
 
         def _side_effect_factory() -> list:
             return [
@@ -632,12 +546,8 @@ class TestFailureIsolation:
     @respx.mock
     def test_later_entities_still_apply_after_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "v")
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
         schema_post = respx.post("https://api.test/api/v1/schemas").mock(
             side_effect=[
                 httpx.Response(500, json={"detail": "boom"}),
@@ -658,30 +568,11 @@ class TestFailureIsolation:
     def test_created_schema_version_post_failure_keeps_created_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SK", "v")
         schema_id = str(uuid.uuid4())
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-            json={"items": [], "total": 0}
-        )
-        respx.post("https://api.test/api/v1/schemas").mock(
-            return_value=httpx.Response(201, json=_schema_item("alpha", None, schema_id=schema_id))
-        )
-        respx.post(f"https://api.test/api/v1/schemas/{schema_id}/versions").mock(
-            return_value=httpx.Response(500, json={"detail": "version boom"})
-        )
-        config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  schemas:\n"
-            "    - name: alpha\n"
-            "      description: Alpha schema\n"
-            "      versions:\n"
-            "        - version: v1\n"
-            "          version_number: 1\n"
-            "          definition_json:\n"
-            "            type: object\n"
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+        respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
+        respx.post("https://api.test/api/v1/schemas").mock(return_value=httpx.Response(201, json=_schema_item("alpha", None, schema_id=schema_id)))
+        respx.post(f"https://api.test/api/v1/schemas/{schema_id}/versions").mock(return_value=httpx.Response(500, json={"detail": "version boom"}))
+        config_text = "api_version: modulo.dev/v1\nentities:\n  schemas:\n    - name: alpha\n      description: Alpha schema\n      versions:\n        - version: v1\n          version_number: 1\n          definition_json:\n            type: object\n"
         config = parse_apply_documents(config_text)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -694,12 +585,8 @@ class TestFailureIsolation:
 
 def _run_isolated_http_case(monkeypatch: pytest.MonkeyPatch, status_code: int) -> dict:
     monkeypatch.setenv("SK", "v")
-    respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": [], "total": 0}
-    )
-    respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-        json={"items": [], "total": 0}
-    )
+    respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0})
+    respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": [], "total": 0})
     respx.post("https://api.test/api/v1/schemas").mock(
         side_effect=[
             httpx.Response(status_code, json={"detail": "injected failure"}),
@@ -755,9 +642,7 @@ class TestHealthCheckSurfaced:
         assert routes["backends_post"].call_count == 1
 
     @respx.mock
-    def test_health_check_403_keeps_finding_out_of_failed_when_parent_write_failed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_health_check_403_keeps_finding_out_of_failed_when_parent_write_failed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A health-check failure is contained per-entity, not fatal."""
         monkeypatch.setenv("SK", "resolved-secret")
         routes = _mock_current([], [])
@@ -775,9 +660,7 @@ class TestHttpErrorSemantics:
     @respx.mock
     def test_3xx_treated_as_error(self) -> None:
         """Redirect responses (follow_redirects=False) are errors, not successes."""
-        route = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
-            status_code=302, headers={"Location": "https://api.test/elsewhere"}
-        )
+        route = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(status_code=302, headers={"Location": "https://api.test/elsewhere"})
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -788,9 +671,7 @@ class TestHttpErrorSemantics:
 
     @respx.mock
     def test_get_404_carries_status_and_path(self) -> None:
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
-            status_code=404, json={"detail": "not found"}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(status_code=404, json={"detail": "not found"})
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -801,9 +682,7 @@ class TestHttpErrorSemantics:
 
     @respx.mock
     def test_invalid_json_response_raises_apply_http_error(self) -> None:
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(
-            status_code=200, content=b"not-json{"
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(status_code=200, content=b"not-json{")
         config = parse_apply_documents("api_version: modulo.dev/v1\nentities: {}")
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -881,12 +760,8 @@ def _mock_new_kind_lists(empty_state: bool) -> None:
             }
         ]
     )
-    respx.get("https://api.test/api/v1/pipelines", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": pipelines_payload, "total": len(pipelines_payload), "page": 1, "page_size": 100}
-    )
-    respx.get("https://api.test/api/v1/agents", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": [{"id": _GOLDEN_AGENT_ID, "name": "worker"}], "total": 1, "page": 1, "page_size": 100}
-    )
+    respx.get("https://api.test/api/v1/pipelines", params={"page": "1", "page_size": "100"}).respond(json={"items": pipelines_payload, "total": len(pipelines_payload), "page": 1, "page_size": 100})
+    respx.get("https://api.test/api/v1/agents", params={"page": "1", "page_size": "100"}).respond(json={"items": [{"id": _GOLDEN_AGENT_ID, "name": "worker"}], "total": 1, "page": 1, "page_size": 100})
     triggers_payload = (
         []
         if empty_state
@@ -917,9 +792,7 @@ def _mock_new_kind_lists(empty_state: bool) -> None:
             },
         ]
     )
-    respx.get("https://api.test/api/v1/triggers", params={"page": "1", "page_size": "100"}).respond(
-        json={"items": triggers_payload, "total": len(triggers_payload), "page": 1, "page_size": 100}
-    )
+    respx.get("https://api.test/api/v1/triggers", params={"page": "1", "page_size": "100"}).respond(json={"items": triggers_payload, "total": len(triggers_payload), "page": 1, "page_size": 100})
 
 
 def _golden_plan_report(monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -930,12 +803,8 @@ def _golden_plan_report(monkeypatch: pytest.MonkeyPatch) -> dict:
     """
     monkeypatch.setenv("SK", "golden-secret")
     with respx.mock:
-        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [_STABLE_CURRENT], "total": 1, "page": 1, "page_size": 100}
-        )
-        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-            json={"items": [], "total": 0, "page": 1, "page_size": 100}
-        )
+        respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [_STABLE_CURRENT], "total": 1, "page": 1, "page_size": 100})
+        respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(json={"items": [], "total": 0, "page": 1, "page_size": 100})
         _mock_new_kind_lists(empty_state=True)
         config = parse_apply_documents(GOLDEN_CONFIG_TEXT)
         with httpx.Client() as client:
@@ -967,12 +836,8 @@ class TestGoldenSnapshot:
             default_params={"temperature": 0.5},
         )
         with respx.mock:
-            respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(
-                json={"items": [_STABLE_CURRENT, fresh_current], "total": 2, "page": 1, "page_size": 100}
-            )
-            respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(
-                json={"items": [created_state], "total": 1, "page": 1, "page_size": 100}
-            )
+            respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": "100"}).respond(json={"items": [_STABLE_CURRENT, fresh_current], "total": 2, "page": 1, "page_size": 100})
+            respx.get("https://api.test/api/v1/model-backends", params={"page": "1", "page_size": "100"}).respond(json={"items": [created_state], "total": 1, "page": 1, "page_size": 100})
             _mock_new_kind_lists(empty_state=False)
             graph_payload = {
                 "nodes": [

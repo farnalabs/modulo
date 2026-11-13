@@ -745,9 +745,7 @@ def test_build_node_patch_graph_404s_for_an_unknown_node() -> None:
 #: explicit ``null`` on them is then rejected by the MERGED node with a 422 —
 #: see the model docstring). Every other patchable field's annotation must be
 #: IDENTICAL to the node's.
-_NULL_WIDENED_NON_NULLABLE_BOOLEANS = frozenset(
-    {"enable_heartbeat", "idempotent", "single_pr_per_run", "await_completion"}
-)
+_NULL_WIDENED_NON_NULLABLE_BOOLEANS = frozenset({"enable_heartbeat", "idempotent", "single_pr_per_run", "await_completion"})
 
 #: Constraint metadata classes the parity guard KNOWS how to compare, by
 #: ``type(meta).__name__``. Membership is checked LOUDLY: any other metadata
@@ -824,17 +822,11 @@ def _assert_field_constraints_mirror(name: str, node_field: Any, patch_field: An
     node_groups = _constraint_metadata(node_field)
     patch_groups = _constraint_metadata(patch_field)
     unhandled = sorted((set(node_groups) | set(patch_groups)) - _HANDLED_CONSTRAINT_KINDS)
-    assert not unhandled, (
-        f"{name}: unhandled constraint metadata class(es) {unhandled} — the parity guard only "
-        "compares classes in _HANDLED_CONSTRAINT_KINDS; extend the guard (never skip the class) "
-        "before a patchable field may carry one"
-    )
+    assert not unhandled, f"{name}: unhandled constraint metadata class(es) {unhandled} — the parity guard only compares classes in _HANDLED_CONSTRAINT_KINDS; extend the guard (never skip the class) before a patchable field may carry one"
     for kind in sorted(set(node_groups) | set(patch_groups)):
         node_reprs = node_groups.get(kind, [])
         patch_reprs = patch_groups.get(kind, [])
-        assert node_reprs == patch_reprs, (
-            f"{name}: constraint {kind} must mirror between node and patch — node={node_reprs!r} patch={patch_reprs!r}"
-        )
+        assert node_reprs == patch_reprs, f"{name}: constraint {kind} must mirror between node and patch — node={node_reprs!r} patch={patch_reprs!r}"
 
 
 def _literal_groups(annotation: Any) -> tuple[tuple[Any, ...], ...]:
@@ -871,12 +863,7 @@ def _is_strict_field(field: Any) -> bool:
         return True
     annotation = field.annotation
     candidates = [annotation, *[arg for arg in get_args(annotation) if arg is not type(None)]]
-    for candidate in candidates:
-        if get_origin(candidate) is Annotated and any(
-            getattr(meta, "strict", None) is True for meta in get_args(candidate)[1:]
-        ):
-            return True
-    return False
+    return any(get_origin(candidate) is Annotated and any(getattr(meta, "strict", None) is True for meta in get_args(candidate)[1:]) for candidate in candidates)
 
 
 def test_every_patchable_field_exists_on_the_node_model() -> None:
@@ -921,30 +908,19 @@ def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> 
     node_fields = PipelineGraphNode.model_fields
 
     divergent = {name for name, pf in patch_fields.items() if pf.annotation != node_fields[name].annotation}
-    assert divergent == _NULL_WIDENED_NON_NULLABLE_BOOLEANS, (
-        "every patchable field's annotation must be identical to the node's except the "
-        f"documented None-widening of the four non-nullable booleans: divergent={sorted(divergent)}"
-    )
+    assert divergent == _NULL_WIDENED_NON_NULLABLE_BOOLEANS, f"every patchable field's annotation must be identical to the node's except the documented None-widening of the four non-nullable booleans: divergent={sorted(divergent)}"
 
     for name, pf in patch_fields.items():
         nf = node_fields[name]
 
         _assert_field_constraints_mirror(name, nf, pf)
 
-        assert _literal_groups(pf.annotation) == _literal_groups(nf.annotation), (
-            f"{name}: node Literal {_literal_groups(nf.annotation)} not mirrored by the "
-            f"patch annotation {_literal_groups(pf.annotation)}"
-        )
+        assert _literal_groups(pf.annotation) == _literal_groups(nf.annotation), f"{name}: node Literal {_literal_groups(nf.annotation)} not mirrored by the patch annotation {_literal_groups(pf.annotation)}"
 
         if name in _NULL_WIDENED_NON_NULLABLE_BOOLEANS:
             assert nf.annotation is bool, f"{name}: expected a non-nullable bool on the node, got {nf.annotation!r}"
-            assert _is_bool_like(_strip_optional(pf.annotation)), (
-                f"{name}: the patch annotation must be the node's bool widened to optional, got {pf.annotation!r}"
-            )
-            assert _is_strict_field(pf) == _is_strict_field(nf), (
-                f"{name}: strictness must be preserved across the None-widening "
-                f"(node strict={_is_strict_field(nf)}, patch strict={_is_strict_field(pf)})"
-            )
+            assert _is_bool_like(_strip_optional(pf.annotation)), f"{name}: the patch annotation must be the node's bool widened to optional, got {pf.annotation!r}"
+            assert _is_strict_field(pf) == _is_strict_field(nf), f"{name}: strictness must be preserved across the None-widening (node strict={_is_strict_field(nf)}, patch strict={_is_strict_field(pf)})"
 
 
 @pytest.mark.parametrize(
@@ -958,9 +934,7 @@ def test_patchable_field_annotations_and_constraints_mirror_the_node_model() -> 
         (Annotated[str, Field(pattern="^a")], "_PydanticGeneralMetadata"),
     ],
 )
-def test_constraint_mirror_catches_a_kind_the_old_whitelist_would_ignore(
-    node_annotation: Any, expected_kind: str
-) -> None:
+def test_constraint_mirror_catches_a_kind_the_old_whitelist_would_ignore(node_annotation: Any, expected_kind: str) -> None:
     """The guard must catch an OMITTED constraint of any kind — the exact
     defect the old ``_CONSTRAINT_ATTRS`` map had: a node field carrying
     ``Gt`` / a pattern was compared by neither the annotation check (the
@@ -1189,12 +1163,7 @@ def test_guardrail_strip_denial_is_translated_to_403(client: TestClient) -> None
     _STORED.nodes = [_sandbox_node(target_id)]
     denied = GuardrailBindingStripDenied(
         stripped_node_ids=[str(bound_id)],
-        detail=(
-            "Non-admin cannot strip a guardrail binding: removing node(s) "
-            + str(bound_id)
-            + " from the graph would drop a node-bound guardrail. Only an "
-            "admin can remove a node that has a bound guardrail."
-        ),
+        detail=("Non-admin cannot strip a guardrail binding: removing node(s) " + str(bound_id) + " from the graph would drop a node-bound guardrail. Only an admin can remove a node that has a bound guardrail."),
     )
 
     with (

@@ -92,12 +92,8 @@ def factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
 
 
 # Mock the dimension reads so record_run_facts doesn't need pipelines/teams/snapshots tables.
-_DIMENSION_PATCHER = patch(
-    "farna.core.analytics._snapshot_dimensions", new_callable=AsyncMock, return_value=(None, None, None)
-)
-_GRAPH_PATCHER = patch(
-    "farna.core.analytics._snapshot_graph_dimensions", new_callable=AsyncMock, return_value=(0, 0, None)
-)
+_DIMENSION_PATCHER = patch("farna.core.analytics._snapshot_dimensions", new_callable=AsyncMock, return_value=(None, None, None))
+_GRAPH_PATCHER = patch("farna.core.analytics._snapshot_graph_dimensions", new_callable=AsyncMock, return_value=(0, 0, None))
 
 
 class TestRecordRunFactsPopulatesRunColumns:
@@ -129,12 +125,8 @@ class TestRecordRunFactsPopulatesRunColumns:
 
         async with factory() as session:
             run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-            assert run.schema_validator_mode is not None, (
-                "schema_validator_mode must be non-NULL after record_run_facts — the assignment is missing"
-            )
-            assert run.schema_validation_outcome is not None, (
-                "schema_validation_outcome must be non-NULL after record_run_facts — the assignment is missing"
-            )
+            assert run.schema_validator_mode is not None, "schema_validator_mode must be non-NULL after record_run_facts — the assignment is missing"
+            assert run.schema_validation_outcome is not None, "schema_validation_outcome must be non-NULL after record_run_facts — the assignment is missing"
             assert run.schema_validator_mode == "strict"
             assert run.schema_validation_outcome == "native_decoded_and_validated"
 

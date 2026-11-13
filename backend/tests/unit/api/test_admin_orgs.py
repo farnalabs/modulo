@@ -569,14 +569,10 @@ class TestOrgLicenseAtomicPatch:
     @staticmethod
     def _assert_no_prelatch(get_recorder) -> None:
         """The existence read must NOT be a ``FOR UPDATE`` read (FAR-1832)."""
-        assert get_recorder.call_args.kwargs.get("for_update") is not True, (
-            "the org read must no longer take FOR UPDATE — atomicity comes from the single-statement patch"
-        )
+        assert get_recorder.call_args.kwargs.get("for_update") is not True, "the org read must no longer take FOR UPDATE — atomicity comes from the single-statement patch"
 
     @pytest.mark.anyio
-    async def test_set_license_patches_inside_one_transaction_without_prelatch(
-        self, client_admin, mock_session, monkeypatch
-    ):
+    async def test_set_license_patches_inside_one_transaction_without_prelatch(self, client_admin, mock_session, monkeypatch):
         from farna.api.routes import admin_orgs
 
         events: list[str] = []
@@ -635,9 +631,7 @@ class TestOrgLicenseAtomicPatch:
         patch_mock.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_remove_license_patches_delete_keys_inside_one_transaction(
-        self, client_admin, mock_session, monkeypatch
-    ):
+    async def test_remove_license_patches_delete_keys_inside_one_transaction(self, client_admin, mock_session, monkeypatch):
         from farna.api.routes import admin_orgs
 
         events: list[str] = []
@@ -746,9 +740,7 @@ class TestOrgLicenseValidationFailure:
     @pytest.mark.parametrize(
         ("reason", "error", "hint"),
         [
-            pytest.param(
-                REASON_MALFORMED, "Invalid license key format: expected <payload>.<signature>", None, id="malformed"
-            ),
+            pytest.param(REASON_MALFORMED, "Invalid license key format: expected <payload>.<signature>", None, id="malformed"),
             pytest.param(
                 REASON_SIGNATURE_MISMATCH,
                 "Signature verification failed",

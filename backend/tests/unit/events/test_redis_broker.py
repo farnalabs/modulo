@@ -204,9 +204,7 @@ async def test_publish_error_closes_old_connection(broker: RedisEventBroker, moc
     assert broker._pub is None
 
 
-async def test_publish_error_on_serialization_does_not_close_connection(
-    broker: RedisEventBroker, mock_redis: MagicMock
-) -> None:
+async def test_publish_error_on_serialization_does_not_close_connection(broker: RedisEventBroker, mock_redis: MagicMock) -> None:
     """A json.dumps TypeError should not close the connection or clear _pub."""
     await broker.publish("run:abc", {"event": object()})  # non-serializable
 
@@ -336,9 +334,7 @@ def _blocking_method(started: asyncio.Event) -> Callable[..., Awaitable[None]]:
     return _block
 
 
-async def _cancel_during(
-    started: asyncio.Event, start: Callable[[], Coroutine[Any, Any, object]]
-) -> asyncio.Task[object]:
+async def _cancel_during(started: asyncio.Event, start: Callable[[], Coroutine[Any, Any, object]]) -> asyncio.Task[object]:
     """Start *start*() as a task, wait for *started*, then cancel it.
 
     Returns the cancelled task so the caller can assert the CancelledError
@@ -538,9 +534,7 @@ def test_module_getattr_unknown_attribute_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_subscribe_pattern_psubscribes_to_prefixed_pattern(
-    broker: RedisEventBroker, mock_redis: MagicMock
-) -> None:
+async def test_subscribe_pattern_psubscribes_to_prefixed_pattern(broker: RedisEventBroker, mock_redis: MagicMock) -> None:
     mock_pubsub = MagicMock()
     mock_pubsub.psubscribe = AsyncMock()
     mock_redis.pubsub.return_value = mock_pubsub

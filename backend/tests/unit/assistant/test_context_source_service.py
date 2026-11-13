@@ -9,9 +9,7 @@ from farna.core.assistant.context_source_service import AssistantContextSourceSe
 from farna.db.models.assistant_context_source import AssistantContextSource
 
 
-def _mock_source_row(
-    source_key: str, source_mode: str, org_id: uuid.UUID, user_id: uuid.UUID | None = None
-) -> MagicMock:
+def _mock_source_row(source_key: str, source_mode: str, org_id: uuid.UUID, user_id: uuid.UUID | None = None) -> MagicMock:
     row = MagicMock(spec=AssistantContextSource)
     row.id = uuid.uuid4()
     row.organisation_id = org_id

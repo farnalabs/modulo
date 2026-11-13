@@ -33,9 +33,7 @@ async def test_clear_trigger_streak_after_reenable_settings_failure() -> None:
     trigger_id = uuid.uuid4()
     with patch.object(ts, "_ch", return_value=ch), patch.object(ts, "_log") as log:
         await ts.clear_trigger_streak_after_reenable(trigger_id)
-    log.warning.assert_called_once_with(
-        "cron_helpers.clear_streak_after_reenable failed trigger=%s", trigger_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.clear_streak_after_reenable failed trigger=%s", trigger_id, exc_info=True)
 
 
 async def test_count_recent_streak_deactivations_factory_failure() -> None:
@@ -72,9 +70,7 @@ async def test_trigger_active_state_factory_failure() -> None:
     with patch.object(ts, "_ch", return_value=ch), patch.object(ts, "_log") as log:
         result = await ts._trigger_active_state(org_id, trigger_id)
     assert result is None
-    log.warning.assert_called_once_with(
-        "streak.trigger_active_read_failed org=%s trigger=%s", org_id, trigger_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("streak.trigger_active_read_failed org=%s trigger=%s", org_id, trigger_id, exc_info=True)
 
 
 async def test_srem_streak_member_redis_failure() -> None:
@@ -149,8 +145,6 @@ async def test_retry_one_pending_member_dispatch_failure() -> None:
         patch.object(ts, "_dispatch_pending_member_notify", new=AsyncMock(side_effect=RuntimeError("boom"))),
         patch.object(ts, "_log") as log,
     ):
-        status, _attempted = await ts._retry_one_pending_member(
-            org_id, client, "key", "raw", attempted=0, max_retries=10
-        )
+        status, _attempted = await ts._retry_one_pending_member(org_id, client, "key", "raw", attempted=0, max_retries=10)
     assert status == "failed"
     log.warning.assert_called_once_with("streak.notify_pending_retry_failed org=%s", org_id, exc_info=True)

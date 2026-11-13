@@ -54,16 +54,11 @@ async def _create_admin_account(engine: AsyncEngine, org_id: uuid.UUID) -> uuid.
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(acc_id), "email": f"admin-{acc_id.hex[:8]}@example.com", "name": "Admin"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -133,12 +128,7 @@ async def _create_invitation(
     token_hash = inv_id.hex * 2
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO invitations "
-                "(id, organisation_id, email, display_name, org_role, token_hash, "
-                "invited_by, expires_at) "
-                "VALUES (:id, :oid, :email, :name, :role, :hash, :by, :exp)"
-            ),
+            text("INSERT INTO invitations (id, organisation_id, email, display_name, org_role, token_hash, invited_by, expires_at) VALUES (:id, :oid, :email, :name, :role, :hash, :by, :exp)"),
             {
                 "id": str(inv_id),
                 "oid": str(org_id),
@@ -172,11 +162,7 @@ async def _get_membership_role(engine: AsyncEngine, account_id: uuid.UUID, org_i
     async with engine.connect() as conn:
         return (
             await conn.execute(
-                text(
-                    "SELECT role FROM org_memberships "
-                    "WHERE account_id = :aid AND organisation_id = :oid "
-                    "AND deactivated_at IS NULL"
-                ),
+                text("SELECT role FROM org_memberships WHERE account_id = :aid AND organisation_id = :oid AND deactivated_at IS NULL"),
                 {"aid": str(account_id), "oid": str(org_id)},
             )
         ).scalar_one_or_none()

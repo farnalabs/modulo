@@ -711,9 +711,7 @@ class TestSerializeValue:
     """The shared deterministic serializer behind the briefing bundle."""
 
     def test_sorts_keys_and_stringifies_non_json_values(self):
-        assert serialize_value({"b": 1, "a": uuid.UUID("00000000-0000-0000-0000-000000000001")}) == (
-            '{"a": "00000000-0000-0000-0000-000000000001", "b": 1}'
-        )
+        assert serialize_value({"b": 1, "a": uuid.UUID("00000000-0000-0000-0000-000000000001")}) == ('{"a": "00000000-0000-0000-0000-000000000001", "b": 1}')
 
     def test_matches_dumps_sort_keys_default_str(self):
         value = {"k": 2, "z": [1, 2], "n": None}

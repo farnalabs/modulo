@@ -128,9 +128,7 @@ async def test_opt_in_false_removes_row(session: AsyncSession) -> None:
 
 
 async def test_partial_update_leaves_untouched_keys(session: AsyncSession) -> None:
-    await set_notification_preferences(
-        session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": True, "run.stalled": True}
-    )
+    await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": True, "run.stalled": True})
     await set_notification_preferences(session, org_id=_ORG, account_id=_USER, opt_outs={"run.failed": False})
     await session.commit()
     assert await get_opted_out_categories(session, org_id=_ORG, account_id=_USER) == {"run.stalled"}
@@ -237,9 +235,7 @@ async def session_no_prefs_table(engine_no_prefs_table: AsyncEngine) -> AsyncGen
         yield s
 
 
-async def test_prefs_read_failure_fails_open_on_all_four_read_paths(
-    session_no_prefs_table: AsyncSession, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_prefs_read_failure_fails_open_on_all_four_read_paths(session_no_prefs_table: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
     """PROVE-THE-FIX (FAR-247): prefs read raises -> rows still returned.
 
     All four read paths (dashboard list, full list, count, unread count)
@@ -360,9 +356,7 @@ class TestAdminScopeVisibility:
         assert {n.scope for n in listed} == {"org"}
 
     async def test_viewer_dashboard_count_and_unread_exclude_admin_rows(self, visibility_session: AsyncSession) -> None:
-        dashboard = await get_dashboard_notifications(
-            visibility_session, org_id=_ORG, user_id=_VIEWER, min_level="debug", limit=50
-        )
+        dashboard = await get_dashboard_notifications(visibility_session, org_id=_ORG, user_id=_VIEWER, min_level="debug", limit=50)
         assert {n.scope for n in dashboard} == {"org"}
         count = await count_notifications_for_user(visibility_session, org_id=_ORG, user_id=_VIEWER)
         assert count == 1

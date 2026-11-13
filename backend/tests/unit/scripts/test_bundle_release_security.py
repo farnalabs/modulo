@@ -73,11 +73,7 @@ def _bash() -> str:
 
 
 def _locked_packages() -> dict[str, dict[str, Any]]:
-    return {
-        package["name"]: package
-        for package in tomllib.loads(LOCKFILE.read_text(encoding="utf-8"))["package"]
-        if package["name"] in EXPECTED_PACKAGES
-    }
+    return {package["name"]: package for package in tomllib.loads(LOCKFILE.read_text(encoding="utf-8"))["package"] if package["name"] in EXPECTED_PACKAGES}
 
 
 def _workflow_build_constraints(text: str) -> dict[str, tuple[str, str]]:
@@ -149,9 +145,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
             raise AssertionError(f"failed to terminate subprocess tree {process.pid}: {exc}") from exc
         if taskkill.returncode != 0 and process.poll() is None:
             details = taskkill.stderr.decode(errors="replace").strip()
-            raise AssertionError(
-                f"taskkill failed for subprocess tree {process.pid} with exit {taskkill.returncode}: {details}"
-            )
+            raise AssertionError(f"taskkill failed for subprocess tree {process.pid} with exit {taskkill.returncode}: {details}")
         try:
             process.wait(timeout=cleanup_timeout)
         except subprocess.TimeoutExpired as exc:
@@ -444,9 +438,7 @@ def _run_download_helper(
 
 def test_download_verified_retries_transient_503_and_504_then_succeeds() -> None:
     expected = hashlib.sha256(b"verified payload").hexdigest()
-    result, attempts, sleeps, destination, part_exists = _run_download_helper(
-        _download_helper(_workflow_text()), "transient_then_success", expected
-    )
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(_download_helper(_workflow_text()), "transient_then_success", expected)
     assert result.returncode == 0, result.stderr
     assert attempts == "3"
     assert len(sleeps.splitlines()) == 2
@@ -472,9 +464,7 @@ def test_download_verified_replaces_existing_destination_atomically_after_retry(
 
 
 def test_download_verified_does_not_retry_permanent_404() -> None:
-    result, attempts, sleeps, destination, part_exists = _run_download_helper(
-        _download_helper(_workflow_text()), "permanent_404", hashlib.sha256(b"not found").hexdigest()
-    )
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(_download_helper(_workflow_text()), "permanent_404", hashlib.sha256(b"not found").hexdigest())
     assert result.returncode == 22
     assert attempts == "1"
     assert sleeps == ""
@@ -483,9 +473,7 @@ def test_download_verified_does_not_retry_permanent_404() -> None:
 
 
 def test_download_verified_checksum_mismatch_fails_without_consumable_destination() -> None:
-    result, attempts, sleeps, destination, part_exists = _run_download_helper(
-        _download_helper(_workflow_text()), "checksum_mismatch", hashlib.sha256(b"expected").hexdigest()
-    )
+    result, attempts, sleeps, destination, part_exists = _run_download_helper(_download_helper(_workflow_text()), "checksum_mismatch", hashlib.sha256(b"expected").hexdigest())
     assert result.returncode == 1
     assert attempts == "1"
     assert sleeps == ""
@@ -573,9 +561,7 @@ def test_bundle_ibm_install_is_executable_and_provenance_verified() -> None:
         _run_python_probe(python, absent_code, site_packages, project, deadline, env)
 
         constraints = root / "build-constraints.txt"
-        constraint_lines = [
-            f"{name}=={version} \\\n  --hash={digest}" for name, (version, digest) in BUILD_CONSTRAINTS.items()
-        ]
+        constraint_lines = [f"{name}=={version} \\\n  --hash={digest}" for name, (version, digest) in BUILD_CONSTRAINTS.items()]
         constraints.write_text("\n".join(constraint_lines) + "\n", encoding="utf-8")
         requirements = _workflow_install_requirements(text)
         install_args = [

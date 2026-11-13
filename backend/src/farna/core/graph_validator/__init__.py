@@ -3592,10 +3592,7 @@ class GraphValidator:
         else:
             per_item_timeout = _DEFAULT_TIMEOUT
         max_retries_raw = fanout.get("max_retries")
-        if isinstance(max_retries_raw, int) and not isinstance(max_retries_raw, bool) and max_retries_raw >= 0:
-            attempts = max_retries_raw + 1
-        else:
-            attempts = 3
+        attempts = max_retries_raw + 1 if isinstance(max_retries_raw, int) and not isinstance(max_retries_raw, bool) and max_retries_raw >= 0 else 3
         return (max_cardinality, per_item_timeout, attempts)
 
     # ------------------------------------------------------------------

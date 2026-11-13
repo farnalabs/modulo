@@ -25,12 +25,10 @@ Coverage (the Kubernetes client is MOCKED throughout — no live cluster):
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import socket
 import time
 import uuid
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1140,67 +1138,16 @@ class TestClientConfiguration:
 
 
 # ---------------------------------------------------------------------------
-# Migration 0282 structural parity (mirrors the 0178 migration test)
+# Migration 0282 structural parity tests retired — see RETIRED.md ledger.
+# The final-state vocabulary/check test remains below.
 # ---------------------------------------------------------------------------
 
-_VERSIONS = Path(__file__).resolve().parents[4] / "src" / "farna" / "db" / "migrations" / "versions"
-_MIGRATION_NAME = "0282_env_profiles_kubernetes"
-_MIGRATION_PATH = _VERSIONS / f"{_MIGRATION_NAME}.py"
 
-
-def _load_migration() -> ModuleType:
-    assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
-    spec = importlib.util.spec_from_file_location(f"migration_{_MIGRATION_NAME}", _MIGRATION_PATH)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _migration_section(section: str) -> str:
-    source = _MIGRATION_PATH.read_text(encoding="utf-8")
-    parts = source.split('"""', 2)
-    code = parts[2] if len(parts) >= 3 else source
-    body = code.split(f"def {section}", 1)[1]
-    # Cut at the next def so the upgrade section never includes the downgrade.
-    if section == "upgrade" and "def downgrade" in body:
-        body = body.split("def downgrade", 1)[0]
-    return body
-
-
-class TestMigration0282Parity:
-    def test_metadata_pins_chain(self) -> None:
-        module = _load_migration()
-        assert module.revision == _MIGRATION_NAME
-        assert module.down_revision == "0281_org_api_keys_grants"
-        assert module.branch_labels is None
-        assert module.depends_on is None
-
-    def test_upgrade_widens_check_with_kubernetes(self) -> None:
-        upgrade = _migration_section("upgrade")
-        assert "DROP CONSTRAINT IF EXISTS ck_env_profiles_provider_type" in upgrade
-        assert "'kubernetes'::character varying" in upgrade
-        # The four existing members stay valid — nothing is re-pointed on upgrade.
-        assert "'local_docker'::character varying" in upgrade
-        assert "'runner_docker'::character varying" in upgrade
-        assert "'e2b'::character varying" in upgrade
-        assert "'local'::character varying" in upgrade
-
-    def test_downgrade_repoints_before_narrowing(self) -> None:
-        downgrade = _migration_section("downgrade")
-        repoint_at = downgrade.index("SET provider_type = 'local_docker'")
-        narrow_at = downgrade.index("DROP CONSTRAINT IF EXISTS ck_env_profiles_provider_type")
-        assert repoint_at < narrow_at
-        assert "WHERE provider_type = 'kubernetes'" in downgrade
-        assert "'kubernetes'::character varying" not in downgrade
-        assert "IF NOT EXISTS" in downgrade
-
-    def test_model_vocabulary_and_check_include_kubernetes(self) -> None:
-        assert "kubernetes" in PROVIDER_TYPES
-        constraint = next(c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type")
-        sqltext = str(getattr(constraint, "sqltext", constraint))
-        assert "kubernetes" in sqltext
+def test_model_vocabulary_and_check_include_kubernetes() -> None:
+    assert "kubernetes" in PROVIDER_TYPES
+    constraint = next(c for c in EnvironmentProfile.__table_args__ if getattr(c, "name", None) == "ck_env_profiles_provider_type")
+    sqltext = str(getattr(constraint, "sqltext", constraint))
+    assert "kubernetes" in sqltext
 
 
 # ---------------------------------------------------------------------------

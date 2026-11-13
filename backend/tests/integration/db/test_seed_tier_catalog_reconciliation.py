@@ -55,18 +55,9 @@ async def test_seed_tier_catalog_prunes_stale_rows(migrated_db_url: str, monkeyp
     try:
         async with engine.begin() as conn:
             # The two FK targets the seeder and the sentinel need.
+            await conn.execute(text("INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) VALUES ('community', 'Community', 0, false, 'Free tier'), ('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"))
             await conn.execute(
-                text(
-                    "INSERT INTO tier_catalog (tier_id, label, rank, requires_license, description) VALUES "
-                    "('community', 'Community', 0, false, 'Free tier'), "
-                    "('team', 'Team', 1, true, 'Paid tier') ON CONFLICT (tier_id) DO NOTHING"
-                )
-            )
-            await conn.execute(
-                text(
-                    "INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) "
-                    "VALUES (:n, :n, 'team', NULL, true) ON CONFLICT (name) DO NOTHING"
-                ),
+                text("INSERT INTO feature_flag_catalog (name, description, tier_id, depends_on, is_active) VALUES (:n, :n, 'team', NULL, true) ON CONFLICT (name) DO NOTHING"),
                 {"n": STALE_SENTINEL},
             )
 

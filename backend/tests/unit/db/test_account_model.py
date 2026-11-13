@@ -29,9 +29,7 @@ def test_account_columns() -> None:
 
 def test_account_email_unique() -> None:
     table = Base.metadata.tables["accounts"]
-    has_unique = any(
-        isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["email"] for c in table.constraints
-    )
+    has_unique = any(isinstance(c, UniqueConstraint) and [col.name for col in c.columns] == ["email"] for c in table.constraints)
     assert has_unique
 
 
@@ -159,20 +157,12 @@ def test_account_decommissioned_check_effective_on_sqlite() -> None:
     with Session(engine) as session:
         with pytest.raises(IntegrityError):
             session.execute(
-                text(
-                    "INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, "
-                    "is_system_admin, is_break_glass, preferences, decommissioned_at) "
-                    "VALUES (:id, :email, :name, 'human', 1, 0, 0, 0, '{}', :ts)"
-                ),
+                text("INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, is_system_admin, is_break_glass, preferences, decommissioned_at) VALUES (:id, :email, :name, 'human', 1, 0, 0, 0, '{}', :ts)"),
                 {"id": "00000000-0000-0000-0000-0000000000aa", "email": "h@example.com", "name": "H", "ts": now},
             )
         session.rollback()
         session.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, "
-                "is_system_admin, is_break_glass, preferences, decommissioned_at) "
-                "VALUES (:id, NULL, :name, 'service', 1, 0, 0, 0, '{}', :ts)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, kind, active, must_change_password, is_system_admin, is_break_glass, preferences, decommissioned_at) VALUES (:id, NULL, :name, 'service', 1, 0, 0, 0, '{}', :ts)"),
             {"id": "00000000-0000-0000-0000-0000000000bb", "name": "svc", "ts": now},
         )
     engine.dispose()
@@ -204,9 +194,7 @@ def test_org_membership_is_org_scoped() -> None:
 
 
 def test_org_membership_role_check() -> None:
-    checks = " ".join(
-        str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext")
-    )
+    checks = " ".join(str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext"))
     for role in ("admin", "operator", "runner", "viewer"):
         assert role in checks
 
@@ -214,16 +202,11 @@ def test_org_membership_role_check() -> None:
 def test_org_membership_role_check_has_no_owner() -> None:
     """The 'owner' role was dropped (ADR 047 A1a) — the model CHECK constraint
     must not silently regress and re-admit it."""
-    checks = " ".join(
-        str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext")
-    )
+    checks = " ".join(str(c.sqltext) for c in Base.metadata.tables["org_memberships"].constraints if hasattr(c, "sqltext"))
     assert "owner" not in checks
 
 
 def test_org_membership_account_org_unique() -> None:
     table = Base.metadata.tables["org_memberships"]
-    has_unique = any(
-        isinstance(c, UniqueConstraint) and sorted(col.name for col in c.columns) == ["account_id", "organisation_id"]
-        for c in table.constraints
-    )
+    has_unique = any(isinstance(c, UniqueConstraint) and sorted(col.name for col in c.columns) == ["account_id", "organisation_id"] for c in table.constraints)
     assert has_unique

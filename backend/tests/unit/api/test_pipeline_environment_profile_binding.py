@@ -166,9 +166,7 @@ class _RouteHarness:
         mock_plan.feature_enabled.return_value = True
         app.dependency_overrides[get_plan_context] = lambda: mock_plan
 
-        async def _fake_update(
-            _session: Any, _pipeline_id: uuid.UUID, updates: dict[str, Any], **_kwargs: Any
-        ) -> _StandInPipeline:
+        async def _fake_update(_session: Any, _pipeline_id: uuid.UUID, updates: dict[str, Any], **_kwargs: Any) -> _StandInPipeline:
             self.captured_updates.update(updates)
             if "environment_profile_id" in updates:
                 self.pipeline.environment_profile_id = updates["environment_profile_id"]

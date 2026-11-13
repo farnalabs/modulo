@@ -46,9 +46,7 @@ def _make_org(
     org.daily_spend_limit = None
     org.triggers_paused = triggers_paused
     org.triggers_paused_at = None
-    org.settings_json = (
-        {"cost_controls": {"circuit_breaker_enabled": circuit_breaker_enabled}} if circuit_breaker_enabled else {}
-    )
+    org.settings_json = {"cost_controls": {"circuit_breaker_enabled": circuit_breaker_enabled}} if circuit_breaker_enabled else {}
     return org
 
 

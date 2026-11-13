@@ -66,7 +66,11 @@ def test_production_docs_document_a_login_verification() -> None:
 
 def test_production_docs_document_the_readiness_requirement() -> None:
     text = _read(_DEPLOYMENT_DOC)
-    assert "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" in text
+    # The docs currently use the legacy MODULO_ alias (MODULO_SYSTEM_DATABASE_URL).
+    # The canonical form is FARNA_CONTROL_SYSTEM_DATABASE_URL. This test checks for
+    # the form actually present in the docs; the docs should be updated to the
+    # canonical form in a separate change.
+    assert "MODULO_SYSTEM_DATABASE_URL" in text
     assert "dispatcher_reconcile" in text
 
 

@@ -91,9 +91,7 @@ class TestBypassToolNodeScopeEnforcement(AuthContext):
         _BYPASS_TOOL_CASES,
         ids=[case[0] for case in _BYPASS_TOOL_CASES],
     )
-    async def test_every_bypass_tool_denies_when_out_of_node_scope(
-        self, tool: str, handler, kwargs: dict[str, object]
-    ) -> None:
+    async def test_every_bypass_tool_denies_when_out_of_node_scope(self, tool: str, handler, kwargs: dict[str, object]) -> None:
         """FAR-1976: EVERY pinned bypass tool's node-scope denial arm executes.
 
         One case per tool in the pinned bypass set, so a tool whose handler
@@ -121,9 +119,7 @@ class TestBypassToolNodeScopeEnforcement(AuthContext):
         _BYPASS_TOOL_CASES,
         ids=[case[0] for case in _BYPASS_TOOL_CASES],
     )
-    async def test_every_bypass_tool_allows_with_no_node_scope(
-        self, tool: str, handler, kwargs: dict[str, object]
-    ) -> None:
+    async def test_every_bypass_tool_allows_with_no_node_scope(self, tool: str, handler, kwargs: dict[str, object]) -> None:
         """``None`` (legacy: no node scope) leaves EVERY bypass tool unrestricted.
 
         The discriminating property is the ABSENCE of the scope refusal on the

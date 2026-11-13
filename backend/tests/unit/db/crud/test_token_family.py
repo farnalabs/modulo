@@ -214,9 +214,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         await session.flush()
         return family
 
-    async def test_reuse_within_window_advances_and_mints(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_reuse_within_window_advances_and_mints(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """Stale within grace window → advance normally (reuse_replay=True), NOT blacklisted."""
         now = datetime.now(UTC)
         _freeze_now(monkeypatch, now)
@@ -261,9 +259,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         assert reuse_replay is False
         assert family.is_blacklisted is True
 
-    async def test_reuse_with_grace_disabled_blacklists(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_reuse_with_grace_disabled_blacklists(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         now = datetime.now(UTC)
         _freeze_now(monkeypatch, now)
         family = await self._seed_stale_family(
@@ -284,9 +280,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         assert reuse_replay is False
         assert family.is_blacklisted is True
 
-    async def test_reuse_with_never_rotated_family_blacklists(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_reuse_with_never_rotated_family_blacklists(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         now = datetime.now(UTC)
         _freeze_now(monkeypatch, now)
         family = await _seed_family(session, account_id=_ACCOUNT_A, org_id=_ORG_A)
@@ -304,9 +298,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         assert reuse_replay is False
         assert family.is_blacklisted is True
 
-    async def test_reuse_with_naive_rotated_at_normalises_window(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_reuse_with_naive_rotated_at_normalises_window(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         now = datetime.now(UTC)
         _freeze_now(monkeypatch, now)
         family = await self._seed_stale_family(
@@ -349,9 +341,7 @@ class TestAdvanceSequenceReuseGraceWindow:
         assert reuse_replay is False
         assert family.is_blacklisted is True
 
-    async def test_normal_advance_advances_and_mints(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_normal_advance_advances_and_mints(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         now = datetime.now(UTC)
         _freeze_now(monkeypatch, now)
         family = await self._seed_stale_family(

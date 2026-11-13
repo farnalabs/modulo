@@ -112,14 +112,7 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
             "INSERT INTO far1546_failing_orgs (organisation_id) VALUES (?)",
             (str(ORG1),),
         )
-        await conn.exec_driver_sql(
-            "CREATE TRIGGER far1546_seed_failure BEFORE INSERT ON schemas "
-            "BEGIN "
-            "SELECT RAISE(ABORT, 'FAR-1546 injected per-org seed failure') "
-            "WHERE replace(NEW.organisation_id, '-', '') IN "
-            "(SELECT replace(organisation_id, '-', '') FROM far1546_failing_orgs); "
-            "END"
-        )
+        await conn.exec_driver_sql("CREATE TRIGGER far1546_seed_failure BEFORE INSERT ON schemas BEGIN SELECT RAISE(ABORT, 'FAR-1546 injected per-org seed failure') WHERE replace(NEW.organisation_id, '-', '') IN (SELECT replace(organisation_id, '-', '') FROM far1546_failing_orgs); END")
     yield eng
     await eng.dispose()
 
@@ -190,11 +183,7 @@ async def _seeded_rows(
     """(schema ids, schema-version ids) committed for *org_id*."""
     async with factory() as session, session.begin():
         schemas = (await session.execute(select(Schema.id).where(Schema.organisation_id == org_id))).scalars().all()
-        versions = (
-            (await session.execute(select(SchemaVersion.id).where(SchemaVersion.organisation_id == org_id)))
-            .scalars()
-            .all()
-        )
+        versions = (await session.execute(select(SchemaVersion.id).where(SchemaVersion.organisation_id == org_id))).scalars().all()
     return list(schemas), list(versions)
 
 

@@ -115,9 +115,7 @@ def _gate_on_reject(ctx: dict[str, Any], mode: str) -> None:
 
 
 @given("a run is waiting at the gate")
-def _run_waiting(
-    ctx: dict[str, Any], db_engine: AsyncEngine, migrated_db_url: str, executed_prompts: list[str]
-) -> None:
+def _run_waiting(ctx: dict[str, Any], db_engine: AsyncEngine, migrated_db_url: str, executed_prompts: list[str]) -> None:
     async def _go() -> None:
         org_id = await rt._seed_org(db_engine, "HitlRejectBdd")
         account_id = await rt._seed_account(db_engine, org_id, f"hitl-reject-bdd-{uuid.uuid4().hex[:8]}@test.local")
@@ -165,9 +163,7 @@ def _reject_and_resume(ctx: dict[str, Any], db_engine: AsyncEngine, reason: str)
         # authoritative run state back from the database.
         hub = await rt._run_executor_hub(ctx["backend_id"], _FIXTURES)()
         try:
-            await rt.pe.resume_run(
-                async_engine=db_engine, run_id=str(run_id), org_id=str(org_id), resume_data=resume_data
-            )
+            await rt.pe.resume_run(async_engine=db_engine, run_id=str(run_id), org_id=str(org_id), resume_data=resume_data)
         finally:
             rt.set_model_backend_hub(None)
             await hub.__aexit__(None, None, None)

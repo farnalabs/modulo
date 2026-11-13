@@ -128,12 +128,7 @@ def when_query_test_report(ctx, resource, repo_id, report_id) -> None:
     _run_query(ctx, ConnectorQuery(resource=resource, filters={"repo_id": repo_id, "id": report_id}))
 
 
-@when(
-    parsers.parse(
-        'I write a test report for repo "{repo_id}" duration {duration:d} '
-        'exit_code {exit_code:d} branch "{branch}" sha "{commit_sha}"'
-    )
-)
+@when(parsers.parse('I write a test report for repo "{repo_id}" duration {duration:d} exit_code {exit_code:d} branch "{branch}" sha "{commit_sha}"'))
 def when_write_test_report(ctx, repo_id, duration, exit_code, branch, commit_sha) -> None:
     _run_write(
         ctx,

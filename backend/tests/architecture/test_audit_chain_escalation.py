@@ -46,11 +46,7 @@ EVALUATE_STEP = "Evaluate blind-cycle escalation state (FAR-2160)"
 
 def _health_module() -> Any:
     """Load ``audit_chain_monitor.py`` so the tests compare its real constants."""
-    path = next(
-        parent / ".github" / "scripts" / "audit_chain_monitor.py"
-        for parent in Path(__file__).resolve().parents
-        if (parent / ".github" / "scripts" / "audit_chain_monitor.py").exists()
-    )
+    path = next(parent / ".github" / "scripts" / "audit_chain_monitor.py" for parent in Path(__file__).resolve().parents if (parent / ".github" / "scripts" / "audit_chain_monitor.py").exists())
     loader = SourceFileLoader("audit_chain_monitor", str(path))
     module = module_from_spec(spec_from_loader("audit_chain_monitor", loader))
     sys.modules["audit_chain_monitor"] = module

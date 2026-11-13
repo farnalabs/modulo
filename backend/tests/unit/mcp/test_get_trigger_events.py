@@ -14,10 +14,7 @@ _API_KEY = "mk_testprefix_testsecretkey1234567890abc"
 
 def _executed_sql(session: AsyncMock) -> list[str]:
     """Compile every statement passed to ``session.execute`` with literal binds."""
-    return [
-        str(call.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
-        for call in session.execute.call_args_list
-    ]
+    return [str(call.args[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})) for call in session.execute.call_args_list]
 
 
 def _make_mock_event(

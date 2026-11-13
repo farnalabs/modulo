@@ -26,20 +26,18 @@
         pass_filenames: false
       - id: ruff
         name: ruff (locked backend environment)
-        # pass_filenames: true — pre-commit passes only the staged .py files,
-        # so ruff checks/fixes only what changed, not the entire backend.
-        # CI (ci.yml backend-lint job) still runs `ruff check .` against the
-        # whole backend on every PR/push.
-        entry: uv run --project backend --no-sync --frozen ruff check --fix
+        # Keep pre-commit's scope identical to CI: lint the complete backend,
+        # including tests, from backend/ rather than only staged files.
+        entry: uv --directory backend run --no-sync --frozen ruff check .
         language: system
-        types: [python]
         files: ^backend/
-        pass_filenames: true
+        pass_filenames: false
         stages: [pre-commit]
       - id: ruff-format
         name: ruff format (locked backend environment)
-        # Same scoping as ruff — staged files only at commit time, full
-        # backend in CI (ci.yml backend-lint job: `ruff format --check .`).
+        # CI runs the format check across the whole backend; pre-commit keeps
+        # its fixer scoped to files being committed to avoid rewriting unrelated
+        # pre-existing formatting drift.
         entry: uv run --project backend --no-sync --frozen ruff format
         language: system
         types: [python]

@@ -60,18 +60,10 @@ def _backend_item(name: str, provider: str) -> dict:
 
 def _mock_backends(backends: list[dict]) -> dict:
     routes: dict = {}
-    routes["schemas_get"] = respx.get(
-        "https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}
-    ).respond(json={"items": [], "total": 0, "page": 1, "page_size": PAGE_SIZE})
-    routes["backends_get"] = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(
-        json={"items": backends, "total": len(backends), "page": 1, "page_size": PAGE_SIZE}
-    )
-    routes["backends_post"] = respx.post("https://api.test/api/v1/model-backends").respond(
-        json=_backend_item("openai", "openai")
-    )
-    routes["health"] = respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[^/]+/health-check")).respond(
-        json={"status": "ok"}
-    )
+    routes["schemas_get"] = respx.get("https://api.test/api/v1/schemas", params={"page": "1", "page_size": str(PAGE_SIZE)}).respond(json={"items": [], "total": 0, "page": 1, "page_size": PAGE_SIZE})
+    routes["backends_get"] = respx.get("https://api.test/api/v1/model-backends", params=_BACKENDS_LIST_PARAMS).respond(json={"items": backends, "total": len(backends), "page": 1, "page_size": PAGE_SIZE})
+    routes["backends_post"] = respx.post("https://api.test/api/v1/model-backends").respond(json=_backend_item("openai", "openai"))
+    routes["health"] = respx.post(re.compile(r"https://api\.test/api/v1/model-backends/[^/]+/health-check")).respond(json={"status": "ok"})
     return routes
 
 
@@ -372,16 +364,7 @@ class TestPlanTimeValidation:
         """A literal / env-ref / secretref api_key config makes no MCP call."""
         _mock_backends([])
         mcp = respx.post("https://api.test/mcp/").respond(json=_mcp_envelope([]))
-        config_text = (
-            "api_version: modulo.dev/v1\n"
-            "entities:\n"
-            "  model_backends:\n"
-            "    - name: openai\n"
-            "      display_name: OpenAI\n"
-            "      provider: openai\n"
-            "      model_id: gpt-x\n"
-            "      api_key: secretref://vault/openai-key\n"
-        )
+        config_text = "api_version: modulo.dev/v1\nentities:\n  model_backends:\n    - name: openai\n      display_name: OpenAI\n      provider: openai\n      model_id: gpt-x\n      api_key: secretref://vault/openai-key\n"
         config = parse_apply_documents(config_text)
         with httpx.Client() as client:
             executor = ApplyExecutor("https://api.test", "key", client=client)
@@ -448,10 +431,7 @@ class TestValidationDetailFormatting:
         assert executor_module._format_validation_detail({"type": "x", "msg": "boom", "loc": []}) == "x: boom"
 
     def test_dict_item_with_loc_appends_loc_suffix(self) -> None:
-        assert (
-            executor_module._format_validation_detail({"type": "x", "msg": "boom", "loc": ["body", "api_key"]})
-            == "x: boom (loc=body.api_key)"
-        )
+        assert executor_module._format_validation_detail({"type": "x", "msg": "boom", "loc": ["body", "api_key"]}) == "x: boom (loc=body.api_key)"
 
     def test_extract_detail_renders_a_list_of_entries(self) -> None:
         """``_extract_detail`` joins a FastAPI validation-detail list with ``; ``."""
