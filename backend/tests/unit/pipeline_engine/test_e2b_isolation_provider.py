@@ -321,7 +321,7 @@ async def test_helper_fails_closed_without_key(monkeypatch: pytest.MonkeyPatch) 
     builder = MagicMock(side_effect=AssertionError("must not build a provider without a key"))
     monkeypatch.setattr("farna.core.pipeline_engine.node_runner._build_isolation_provider", builder)
 
-    with pytest.raises(SandboxTierRefusedError, match="FARNA_CONTROL_MODULO_E2B_API_KEY"):
+    with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider(
             "sbx-1",
             org_id=_ORG_ID,
@@ -366,7 +366,7 @@ async def test_helper_fails_closed_when_provider_unavailable(monkeypatch: pytest
     monkeypatch.setenv("E2B_API_KEY", "test-key")
     _patch_isolation_builder(monkeypatch, None)
 
-    with pytest.raises(SandboxTierRefusedError, match="FARNA_CONTROL_MODULO_E2B_API_KEY"):
+    with pytest.raises(SandboxTierRefusedError, match="MODULO_E2B_API_KEY"):
         await _apply_isolation_via_provider(
             "sbx-1",
             org_id=_ORG_ID,

@@ -1061,7 +1061,7 @@ def build_gh_pr_guard_script(marker_path: str, *, pre_spent: bool = False) -> st
         '    printf "MARKER=\'%s\'\\n" "$MARKER"\n'
         "    cat <<'FARNA_CONTROL_MODULO_GH_GUARD_EOF'\n"
         f"{_GH_PR_GUARD_SHIM_BODY}"
-        "MODULO_GH_GUARD_EOF\n"
+        "FARNA_CONTROL_MODULO_GH_GUARD_EOF\n"
         f'  }} > "$tmp" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
         'echo "modulo: gh guard: cannot write shim in $d" >&2; continue; fi\n'
         '  if ! chmod 755 "$tmp" 2>/dev/null; then rm -f "$tmp" 2>/dev/null || true; '
