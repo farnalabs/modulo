@@ -174,7 +174,7 @@ def _resolve_database_url(data_dir: Path | None, *, readonly: bool = False) -> s
 
 
 def _guard_modulo_users(force: bool) -> None:
-    """Refuse writes when MODULO_USERS is set, unless --force is given."""
+    """Refuse writes when FARNA_CONTROL_MODULO_USERS is set, unless --force is given."""
     from farna.settings import get_settings
 
     try:
@@ -183,7 +183,11 @@ def _guard_modulo_users(force: bool) -> None:
         modulo_users = ""
     if not modulo_users:
         return
-    message = "WARNING: MODULO_USERS is set — the boot seeder re-applies its entries on every boot, but ONLY for accounts whose stored hash is missing or already non-bcrypt (plaintext). A bcrypt hash written by this CLI is NOT reverted, and accounts not listed in MODULO_USERS are never touched."
+    message = (
+        "WARNING: FARNA_CONTROL_MODULO_USERS is set — the boot seeder re-applies its entries on every boot, "
+        "but ONLY for accounts whose stored hash is missing or already non-bcrypt (plaintext). "
+        "A bcrypt hash written by this CLI is NOT reverted, and accounts not listed in FARNA_CONTROL_MODULO_USERS are never touched."
+    )
     if force:
         click.echo(f"{message} Proceeding (--force).", err=True)
         return

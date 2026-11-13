@@ -87,7 +87,7 @@ def _print_version() -> None:
 
 
 class ModuloGroup(click.Group):
-    """Top-level group where an unrecognised first token defaults to backup."""
+    """Top-level farna-control group where an unrecognised first token defaults to backup."""
 
     def resolve_command(self, ctx: click.Context, args: list[str]) -> tuple[str | None, click.Command | None, list[str]]:
         if args and args[0] not in self.commands:
@@ -105,7 +105,7 @@ class ModuloGroup(click.Group):
     help="Print the modulo version and exit.",
 )
 def cli() -> None:
-    """Modulo command line: start/stop/status plus backup and restore."""
+    """Farna Control command line: start/stop/status plus backup and restore."""
 
 
 def _eager_version(ctx: click.Context, value: bool) -> None:
@@ -119,7 +119,7 @@ def _init_once_register_legacy_commands() -> None:
     for name, command in _legacy_backup_cli.commands.items():
         existing = cli.commands.get(name)
         if existing is not None and existing is not command:
-            raise RuntimeError(f"command {name!r} is already registered on the farna-control group")
+            raise RuntimeError(f"command {name!r} is already registered on the modulo group")
         cli.add_command(command, name=name)
 
 
@@ -132,7 +132,7 @@ def _init_once_register_users_command() -> None:
 
     existing = cli.commands.get("users")
     if existing is not None and existing is not users:
-        raise RuntimeError("command 'users' is already registered on the farna-control group")
+        raise RuntimeError("command 'users' is already registered on the modulo group")
     cli.add_command(users, name="users")
 
 
@@ -145,7 +145,7 @@ def _init_once_register_evidence_command() -> None:
 
     existing = cli.commands.get("evidence")
     if existing is not None and existing is not evidence_command:
-        raise RuntimeError("command 'evidence' is already registered on the farna-control group")
+        raise RuntimeError("command 'evidence' is already registered on the modulo group")
     cli.add_command(evidence_command, name="evidence")
 
 
@@ -159,7 +159,7 @@ def _init_once_register_backfill_base_url_command() -> None:
     name = "backfill-model-backend-base-url"
     existing = cli.commands.get(name)
     if existing is not None and existing is not backfill_model_backend_base_url:
-        raise RuntimeError(f"command {name!r} is already registered on the farna-control group")
+        raise RuntimeError(f"command {name!r} is already registered on the modulo group")
     cli.add_command(backfill_model_backend_base_url, name=name)
 
 
@@ -172,7 +172,7 @@ def _init_once_register_migrate_command() -> None:
 
     existing = cli.commands.get("migrate")
     if existing is not None and existing is not migrate_cli:
-        raise RuntimeError("command 'migrate' is already registered on the farna-control group")
+        raise RuntimeError("command 'migrate' is already registered on the modulo group")
     cli.add_command(migrate_cli, name="migrate")
 
 
@@ -185,7 +185,7 @@ def _init_once_register_break_glass_command() -> None:
 
     existing = cli.commands.get("break-glass")
     if existing is not None and existing is not break_glass_cli:
-        raise RuntimeError("command 'break-glass' is already registered on the farna-control group")
+        raise RuntimeError("command 'break-glass' is already registered on the modulo group")
     cli.add_command(break_glass_cli, name="break-glass")
 
 
@@ -368,7 +368,7 @@ def status(data_dir: Path | None, as_json: bool) -> None:
 
 @cli.command("version")
 def version_cmd() -> None:
-    """Print the modulo version."""
+    """Print the farna-control version."""
     _print_version()
 
 

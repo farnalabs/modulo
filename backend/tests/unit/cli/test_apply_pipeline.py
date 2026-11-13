@@ -97,7 +97,7 @@ _MASKED_SECRET_GRAPH = {
             "agent_id": "00000000-0000-0000-0000-0000000000ff",
             "label": "Do work",
             "position": {"x": 0, "y": 0},
-            "env_vars": {"FARNA_CONTROL_MODULO_USERS": "••••••", "LOG_LEVEL": "debug"},
+            "env_vars": {"FARNA_CONTROL_USERS": "••••••", "LOG_LEVEL": "debug"},
             "context_files": {"runbook.md": "token ••••••"},
             "parameter_overrides": {"nested": {"api_key": "••••••"}},
         }
@@ -483,7 +483,7 @@ class TestGraphRefreshSecrets:
         assert update.graph_json is not None
         agent_nodes = [n for n in update.graph_json.nodes if n.node_type == "agent"]
         # The TRUE declared values (not the masked sentinel) write through.
-        assert agent_nodes[0].env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
+        assert agent_nodes[0].env_vars["FARNA_CONTROL_USERS"] == "admin:pw123"
         assert agent_nodes[0].env_vars["LOG_LEVEL"] == "debug"
 
     @respx.mock
@@ -551,7 +551,7 @@ class TestGraphRefreshSecrets:
         assert update.graph_json is not None
         node = update.graph_json.nodes[0]
         assert node.env_vars is not None
-        assert node.env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
+        assert node.env_vars["FARNA_CONTROL_USERS"] == "admin:pw123"
         assert node.context_files is not None
         assert node.context_files["runbook.md"] == "token ghp_00112233445566778899aabbccddeeff00112233"
         assert node.parameter_overrides is not None
@@ -1395,7 +1395,7 @@ class TestGraphSecretEnvVarConvergence:
         existing = dict(_pipeline_item("sample", "00000000-0000-0000-0000-0000000000aa"))
         drifted = dict(_MASKED_SECRET_GRAPH)
         drifted_node = dict(drifted["nodes"][0])
-        drifted_node["env_vars"] = {"FARNA_CONTROL_MODULO_USERS": "••••••", "LOG_LEVEL": "info"}
+        drifted_node["env_vars"] = {"FARNA_CONTROL_USERS": "••••••", "LOG_LEVEL": "info"}
         drifted["nodes"] = [drifted_node]
         routes = _mock_current_with_pipelines([existing], graphs={"sample": drifted})
         config = parse_apply_documents(_GRAPH_SECRET_CONFIG_TEXT)
@@ -1424,7 +1424,7 @@ class TestGraphSecretEnvVarConvergence:
         assert update.graph_json is not None
         env_vars = update.graph_json.nodes[0].env_vars
         assert env_vars is not None
-        assert env_vars["FARNA_CONTROL_MODULO_USERS"] == "admin:pw123"
+        assert env_vars["FARNA_CONTROL_USERS"] == "admin:pw123"
 
 
 class TestFailureIsolation:

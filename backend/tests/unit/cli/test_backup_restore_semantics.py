@@ -667,7 +667,7 @@ def test_as_asyncpg_url_refuses_a_non_postgres_url_without_leaking_the_password(
     URL's password must never appear in it.
     """
     with pytest.raises(click.ClickException) as excinfo:
-        backup_mod._as_asyncpg_url("postgresql://user:pass@host:5432/farna_control")
+        backup_mod._as_asyncpg_url("mysql://user:sup3r-s3cret@host:5432/farna_control")
     message = excinfo.value.message
     assert "sup3r-s3cret" not in message
     assert "mysql://" in message
@@ -689,7 +689,7 @@ def test_as_asyncpg_url_survives_an_unparseable_url() -> None:
     remediation message rather than a raw traceback.
     """
     with pytest.raises(click.ClickException) as excinfo:
-        backup_mod._as_asyncpg_url("postgresql://user:pass@host:5432/farna_control")
+        backup_mod._as_asyncpg_url("postgresql://user:pass@[bad:5432/farna_control")
     assert "<unparseable URL>" in excinfo.value.message
 
 
@@ -1143,7 +1143,7 @@ def test_backup_pg_dump_no_password_in_argv(tmp_path: Path) -> None:
     joined = " ".join(str(a) for a in seen["argv"])
     assert "secret" not in joined
     assert seen["env"]["PGPASSWORD"] == "secret"
-    assert seen["argv"][-1] == "postgresql://user:pass@host:5432/farna_control"
+    assert seen["argv"][-1] == "postgresql://user@host:5432/farna_control"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="creation-mode guarantee is POSIX-only")
