@@ -1541,7 +1541,7 @@ jobs:
           fi
           # One source of truth for the host and project key inside this script.
           SONAR_HOST="https://sonarcloud.io"
-          SONAR_COMPONENT="farnalabs_modulo-new"
+          SONAR_COMPONENT="farnalabs_farna-control"
           BODY="$(mktemp)"
           CURL_ERR="$(mktemp)"
           trap 'rm -f "$BODY" "$CURL_ERR"' EXIT
