@@ -72,7 +72,7 @@ class ProviderNotConfiguredError(RuntimeError):
         self.provider_type = provider_type
         self.env_var = env_var
         if env_var and env_var in _DOCKER_ENV_VARS:
-            message = f"No runtime provider registered for provider_type '{provider_type}'. Set MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, or choose a different provider type for the profile."
+            message = f"No runtime provider registered for provider_type '{provider_type}'. Set FARNA_CONTROL_MODULO_DOCKER_HOST (or DOCKER_HOST) and restart to enable it, or choose a different provider type for the profile."
         elif env_var:
             message = f"No runtime provider registered for provider_type '{provider_type}'. Set the {env_var} environment variable (and restart) to enable it, or choose a different provider type for the profile."
         else:
