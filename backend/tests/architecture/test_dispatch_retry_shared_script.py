@@ -47,7 +47,6 @@ SCRIPT_MARKER = "bash scripts/dispatch_with_retry.sh"
 WEBHOOK_SECRET_MARKERS = (
     "MODULO_BRANCH_FIXER_WEBHOOK_URL",
     "MODULO_PR_REVIEW_WEBHOOK_URL",
-    "MODULO_PR_REVIEW_WEBHOOK_SECRET",
 )
 
 #: The retry policy's helpers. Their DEFINITION in a workflow means the policy
