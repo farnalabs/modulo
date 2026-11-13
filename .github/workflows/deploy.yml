@@ -286,7 +286,7 @@ jobs:
             exit 0
           fi
           # Anchor the throttle on the most recent run that ACTUALLY deployed to
-          # production — the "Deploy to app.modulo.run" job concluded with success.
+          # production — the "Deploy to control.farna.dev" job concluded with success.
           # A run that was itself throttled (all jobs skipped), failed pre-deploy or
           # staging E2E, was cancelled, or is still in progress must NOT count as an
           # attempt; using it as the anchor would push the window forward on every
@@ -297,7 +297,7 @@ jobs:
           # FAR-2152: the anchor is a JOB conclusion, never the RUN conclusion.
           # This is what makes the livelock (a throttled success resetting the
           # window that throttled it) impossible: on a throttled run the
-          # "Deploy to app.modulo.run" job is SKIPPED, so it can never be the
+          # "Deploy to control.farna.dev" job is SKIPPED, so it can never be the
           # anchor. Verified against the 2026-10-25 run history: the throttle
           # anchored on run 40183128848 (created 10:02:33Z, deploy job
           # `success`), skipped four re-dispatch runs at 11:24-12:44Z, then
@@ -315,7 +315,7 @@ jobs:
             # grows past the API's default page of 30 (a silent miss would
             # anchor on a stale/failed run instead of the real deploy).
             DEPLOY_JOB_CONCLUSION="$(gh api "repos/${{ github.repository }}/actions/runs/$RID/jobs?per_page=100" \
-              --jq '[.jobs[] | select(.name == "Deploy to app.modulo.run") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
+              --jq '[.jobs[] | select(.name == "Deploy to control.farna.dev") | .conclusion] | .[0] // empty' 2>/dev/null || echo "")"
             if [ "$DEPLOY_JOB_CONCLUSION" = "success" ]; then
               LAST="$(gh api "repos/${{ github.repository }}/actions/runs/$RID" \
                 --jq '.created_at' 2>/dev/null || echo "")"
@@ -1065,7 +1065,7 @@ jobs:
           PR_NUMBER: "0"
           HEAD_SHA: ${{ github.sha }}
           PRIMARY_STAGE: prod-smoke
-          FEEDBACK: "Production smoke tests failed after deploy to app.modulo.run. The Branch Fixer should create a fix branch from main, diagnose the Playwright @smoke failure, fix it, and raise a PR."
+          FEEDBACK: "Production smoke tests failed after deploy to control.farna.dev. The Branch Fixer should create a fix branch from main, diagnose the Playwright @smoke failure, fix it, and raise a PR."
         shell: bash
         run: |
           # headSha + fingerprint: see notify-deploy-failure (FAR-1034
@@ -2030,13 +2030,13 @@ jobs:
       - name: Verify deployment
         uses: ./.github/actions/verify-deployment
         with:
-          url: https://staging.modulo.run
+          url: https://staging-control.farna.dev
 
       - name: Check deployed SHA
         shell: pwsh
         run: |
           $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
-          $info = curl -s -m 10 "https://staging.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://staging-control.farna.dev/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
@@ -2044,7 +2044,7 @@ jobs:
             Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
             exit 1
           }
-          Write-Host "staging.modulo.run SHA match: $deployedSha"
+          Write-Host "staging-control.farna.dev SHA match: $deployedSha"
 
       - name: Self-report deployed PRs to Modulo (fail-open, best-effort)
         shell: bash
@@ -2272,17 +2272,17 @@ jobs:
           attempt=0
           while [ "$attempt" -lt "$ATTEMPTS" ]; do
             attempt=$(( attempt + 1 ))
-            if curl -fsS -m 10 https://staging.modulo.run/healthz/ready >/dev/null 2>&1; then
-              echo "staging.modulo.run /healthz/ready OK (attempt ${attempt})"
+            if curl -fsS -m 10 https://staging-control.farna.dev/healthz/ready >/dev/null 2>&1; then
+              echo "staging-control.farna.dev /healthz/ready OK (attempt ${attempt})"
               exit 0
             fi
             echo "healthz not ready yet (attempt ${attempt}/${ATTEMPTS}) - retrying in ${INTERVAL_SEC}s"
             sleep "$INTERVAL_SEC"
           done
-          echo "::error::staging.modulo.run did not become healthy after deploy - rolling back to previous release"
+          echo "::error::staging-control.farna.dev did not become healthy after deploy - rolling back to previous release"
           fly releases rollback staging-modulo
           sleep 30
-          if curl -fsS -m 10 https://staging.modulo.run/healthz/ready >/dev/null 2>&1; then
+          if curl -fsS -m 10 https://staging-control.farna.dev/healthz/ready >/dev/null 2>&1; then
             echo "Rollback restored service."
             exit 0
           fi
@@ -2406,10 +2406,10 @@ jobs:
         shell: pwsh
         timeout-minutes: 5
         run: |
-          Write-Host "Waiting for staging.modulo.run ..."
+          Write-Host "Waiting for staging-control.farna.dev ..."
           for ($i=0; $i -lt 60; $i++) {
             try {
-              $r = curl -s -f "https://staging.modulo.run/healthz/ready" 2>$null
+              $r = curl -s -f "https://staging-control.farna.dev/healthz/ready" 2>$null
               if ($LASTEXITCODE -eq 0) { Write-Host "Staging ready after ${i}s"; exit 0 }
             } catch {}
             Start-Sleep -Seconds 5
@@ -2447,7 +2447,7 @@ jobs:
           if-no-files-found: ignore
 
   deploy-production:
-    name: Deploy to app.modulo.run
+    name: Deploy to control.farna.dev
     # deploy-throttle added to needs so this job can consume the run-identity
     # outputs; it was already a transitive dependency via pre-deploy-gate, so
     # the graph's behaviour is unchanged (the always() condition below is
@@ -2858,7 +2858,7 @@ jobs:
             exit 0
           fi
           status=$(curl -sS --max-time 15 -o /tmp/deploy-drain-enter.json -w '%{http_code}' \
-            -X POST "https://app.modulo.run/api/v1/deployment/drain?active=true" \
+            -X POST "https://control.farna.dev/api/v1/deployment/drain?active=true" \
             -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
             -H "Content-Type: application/json") || {
             echo "::error::could not reach the deployment drain control; refusing production deploy."
@@ -3209,7 +3209,7 @@ jobs:
           deadline=$(( $(date +%s) + timeout_s ))
           while [ "$(date +%s)" -lt "$deadline" ]; do
             body=""
-            if body=$(curl -fsS --max-time 15 "https://app.modulo.run/api/v1/deployment" 2>/dev/null); then
+            if body=$(curl -fsS --max-time 15 "https://control.farna.dev/api/v1/deployment" 2>/dev/null); then
               drain_state=$(printf '%s' "$body" | jq -r '
                 if type != "object" then "ERROR"
                 elif (has("deployment_drain") | not) then "ABSENT"
@@ -3466,13 +3466,13 @@ jobs:
             done
             echo "TIMEOUT"; return 1
           }
-          if wait_healthy "https://app.modulo.run" "$HEALTH_GATE_MIN"; then
+          if wait_healthy "https://control.farna.dev" "$HEALTH_GATE_MIN"; then
             echo "deploy_healthy=true" >> "$GITHUB_OUTPUT"
             echo "rolled_back=false" >> "$GITHUB_OUTPUT"
-            echo "app.modulo.run healthy - new release deployed."
+            echo "control.farna.dev healthy - new release deployed."
             exit 0
           fi
-          echo "::error::app.modulo.run not healthy after deploy - rolling back to last complete release"
+          echo "::error::control.farna.dev not healthy after deploy - rolling back to last complete release"
           LAST_GOOD=$(fly releases --app app-modulo --json 2>/dev/null | python3 -c 'import json,sys
           try:
               rels=json.load(sys.stdin)
@@ -3505,7 +3505,7 @@ jobs:
         shell: pwsh
         run: |
           $expectedSha = "${{ steps.git.outputs.git-sha }}".Substring(0, 7)
-          $info = curl -s -m 10 "https://app.modulo.run/api/v1/deployment" 2>$null
+          $info = curl -s -m 10 "https://control.farna.dev/api/v1/deployment" 2>$null
           if (-not $info) { Write-Host "No deployment info"; exit 1 }
           $deployInfo = $info | ConvertFrom-Json
           $deployedSha = if ($deployInfo.git_sha) { $deployInfo.git_sha.Substring(0, 7) } else { "?" }
@@ -3513,7 +3513,7 @@ jobs:
             Write-Host "SHA MISMATCH: deployed=$deployedSha expected=$expectedSha"
             exit 1
           }
-          Write-Host "app.modulo.run SHA match: $deployedSha"
+          Write-Host "control.farna.dev SHA match: $deployedSha"
           "deployed_sha=$deployedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       # FAR-954: annotate the deployed SHA on the job log so the Actions UI
@@ -3522,7 +3522,7 @@ jobs:
         if: steps.verify.outputs.rolled_back == 'false' && steps.deployed.outputs.deployed_sha
         shell: bash
         run: |
-          echo "::notice::DEPLOYED: app.modulo.run is now running ${{ steps.deployed.outputs.deployed_sha }} (commit ${{ steps.git.outputs.git-sha }})"
+          echo "::notice::DEPLOYED: control.farna.dev is now running ${{ steps.deployed.outputs.deployed_sha }} (commit ${{ steps.git.outputs.git-sha }})"
 
       - name: Ensure worker machine exists (production)
         if: steps.verify.outputs.rolled_back == 'false'
@@ -3675,7 +3675,7 @@ jobs:
             exit 0
           fi
           status=$(curl -sS --max-time 15 -o /tmp/deploy-drain-clear.json -w '%{http_code}' \
-            -X POST "https://app.modulo.run/api/v1/deployment/drain?active=false" \
+            -X POST "https://control.farna.dev/api/v1/deployment/drain?active=false" \
             -H "Authorization: Bearer $MODULO_DEPLOY_DRAIN_TOKEN" \
             -H "Content-Type: application/json") || {
             echo "::error::could not reach the deployment drain control to clear it; admission may still be frozen."
@@ -3871,7 +3871,7 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium
 
-      - name: Run @smoke Playwright tests against app.modulo.run
+      - name: Run @smoke Playwright tests against control.farna.dev
         id: smoke-tests
         run: pnpm run test:e2e:smoke -- --reporter=line
         timeout-minutes: 10
@@ -3880,7 +3880,7 @@ jobs:
           E2E_NO_WEBSERVER: "true"
           E2E_ADMIN_EMAIL: ${{ secrets.E2E_PROD_ADMIN_EMAIL }}
           E2E_ADMIN_PASSWORD: ${{ secrets.E2E_PROD_ADMIN_PASSWORD }}
-          # app.modulo.run has more than one login-active org (default + demo),
+          # control.farna.dev has more than one login-active org (default + demo),
           # so /login renders the org-slug entry step instead of the
           # email/password form. Point the smoke login at the E2E admin's org
           # so it lands on the direct form. Not a secret — the slug is public.
@@ -3961,7 +3961,7 @@ jobs:
                 ;;
             esac
             NEXT_LINE="${NEXT_DEPLOY:-unknown - see the Deploy throttle job log}"
-            PROD_SHA="$(curl -fsS -m 10 'https://app.modulo.run/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown')"
+            PROD_SHA="$(curl -fsS -m 10 'https://control.farna.dev/api/v1/deployment' 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("git_sha","unknown")[:7])' 2>/dev/null || echo 'unknown')"
             # ::warning:: not ::notice:: - the run is green but deployed
             # nothing, which is exactly the state that reads as success at a
             # glance. A warning-level annotation carries a yellow marker in

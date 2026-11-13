@@ -106,8 +106,8 @@ const ENVS: Record<string, TestEnv> = {
 
 export const BASE_URLS: Record<string, string> = {
   local: 'http://127.0.0.1:5173',
-  staging: 'https://staging.modulo.run',
-  app: 'https://app.modulo.run',
+  staging: 'https://staging-control.farna.dev',
+  app: 'https://control.farna.dev',
 }
 
 // ---------------------------------------------------------------------------

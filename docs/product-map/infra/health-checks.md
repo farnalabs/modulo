@@ -111,7 +111,7 @@ unavailable. The AI agent can also be redirected to this infra-health surface vi
 - [x] Fly.io deployment wiring – `fly.toml` `[[http_service.checks]]` probes `/healthz/ready`
 - [x] Worker process-group health check via top-level `[checks]` (ADR 021)
 - [x] External uptime monitoring is GONE – `.github/workflows/uptime-monitor.yml`
-      (the 10-minute off-platform probe of `app.modulo.run/healthz/ready` that failed
+      (the 10-minute off-platform probe of `control.farna.dev/healthz/ready` that failed
       and opened a Linear ticket on outage or on a degraded sub-check, FAR-400 /
       FAR-1156) has been removed in favor of dogfooding the product's own alerting:
       GitHub's scheduler was dropping its `*/10` cron (FAR-492) and it false-fired

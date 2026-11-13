@@ -1660,7 +1660,7 @@ def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -
     FAR-2152's suspected livelock: if the throttle counted *successful runs*, a
     throttled success would reset the window that throttled it and the pipeline
     would never deploy again. It does not - it requires the
-    "Deploy to app.modulo.run" JOB to have concluded `success`, and a throttled
+    "Deploy to control.farna.dev" JOB to have concluded `success`, and a throttled
     run skips that job (`skipped`), so a throttled run can never be the anchor.
     Verified against the 2026-10-25 history: the throttle anchored on run
     40183128848 (created 10:02:33Z, deploy job success), skipped the 11:24-12:44Z
@@ -1671,8 +1671,8 @@ def test_throttle_anchor_is_the_deploy_job_conclusion_not_the_run_conclusion() -
     """
     script = _throttle_script()
     violations: list[str] = []
-    if 'select(.name == "Deploy to app.modulo.run") | .conclusion' not in script:
-        violations.append("  the anchor no longer selects the Deploy to app.modulo.run JOB conclusion")
+    if 'select(.name == "Deploy to control.farna.dev") | .conclusion' not in script:
+        violations.append("  the anchor no longer selects the Deploy to control.farna.dev JOB conclusion")
     if 'DEPLOY_JOB_CONCLUSION" = "success"' not in script:
         violations.append("  the anchor no longer requires the deploy job to have concluded success")
     if "--json databaseId,conclusion" in script:
@@ -1828,7 +1828,7 @@ def test_deploy_consumers_classify_a_throttled_noop_by_the_deploy_job() -> None:
 
     A throttled run's RUN conclusion is success. The consumers that count a
     failure streak (the staleness check's evaluator and the deploy watchdog's
-    inline walk) must enrich the run records with the "Deploy to app.modulo.run"
+    inline walk) must enrich the run records with the "Deploy to control.farna.dev"
     job conclusion, or a throttled no-op between two real failures breaks the
     streak and suppresses the alert (FAR-2152).
     """

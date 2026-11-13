@@ -405,7 +405,7 @@ JOB_TO_STAGE: dict[str, str] = {
     # Job id: staging-e2e
     "Staging E2E (smoke + WCAG + regression)": "staging_e2e",
     # Job id: deploy-production
-    "Deploy to app.modulo.run": "migration",
+    "Deploy to control.farna.dev": "migration",
     # Job id: prod-smoke, a SEPARATE job (needs deploy-production) - the one
     # stage where prod is deployed but broken.
     "Prod smoke tests": "prod_smoke",
@@ -424,7 +424,7 @@ DEPLOYMENT_ORDER: tuple[str, ...] = (
     "Pre-deploy gate",
     "Deploy to staging",
     "Staging E2E (smoke + WCAG + regression)",
-    "Deploy to app.modulo.run",
+    "Deploy to control.farna.dev",
     "Prod smoke tests",
 )
 
@@ -534,7 +534,7 @@ def deploy_attempted(run: dict[str, Any]) -> bool | None:
     """``True``/``False`` when the run's deploy attempt is known, else ``None``.
 
     FAR-2152: a throttled run concludes SUCCESS but every job (including
-    ``Deploy to app.modulo.run``) is skipped - it deployed nothing. Reading the
+    ``Deploy to control.farna.dev``) is skipped - it deployed nothing. Reading the
     run conclusion alone counts that no-op as a success, which breaks a streak
     of real deploy failures and delays the alert.
 

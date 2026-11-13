@@ -24,7 +24,7 @@ is merged on the P1 branches.
    no-op in the validator (`_validate_sandbox_managed_inputs_config`)
    and in `_sandbox_agent_impl`.
 2. **Stage 1 – internal single pipeline.** Enable MWI on ONE internal
-   app.modulo.run pipeline (one input, github.com, fixed SHA ref – no movable
+   control.farna.dev pipeline (one input, github.com, fixed SHA ref – no movable
    refs in stage 1). Watch: `workspace_input.resolution_failed`,
    `workspace_input.provisioning_failed`, `workspace_input.drift_detection_*`
    warning logs, node failure rate on that pipeline.

@@ -324,7 +324,7 @@ if [[ "$DISPATCHED" != "true" ]]; then
     transient)
       DISPATCH_FAILURE="webhook unreachable"
       DISPATCH_CAUSE="the ${DISPATCH_LABEL} webhook or a gateway in front of it was unavailable (HTTP ${LAST_HTTP}) for the whole retry budget"
-      DISPATCH_ACTION="Check that app.modulo.run is healthy and that the webhook secret points at it, then re-run this workflow job."
+      DISPATCH_ACTION="Check that control.farna.dev is healthy and that the webhook secret points at it, then re-run this workflow job."
       ;;
     *)
       DISPATCH_FAILURE="non-retryable rejection"

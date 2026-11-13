@@ -8,7 +8,7 @@ is restarted.
 
 ## Symptoms
 
-- Requests to app.modulo.run time out.
+- Requests to control.farna.dev time out.
 - `flyctl checks list -a app-modulo` shows `servicecheck-00-http-8080`
   critical with output like "context deadline exceeded".
 - Fly proxy logs show "could not find a good candidate within 40 attempts at
@@ -58,7 +58,7 @@ flyctl logs -a app-modulo --no-tail
    flyctl checks list -a app-modulo
 
    # Site returns HTTP 200:
-   curl -sS -o /dev/null -w "%{http_code}\n" https://app.modulo.run
+   curl -sS -o /dev/null -w "%{http_code}\n" https://control.farna.dev
    ```
 
 ## Notes

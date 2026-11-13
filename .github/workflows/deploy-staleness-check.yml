@@ -123,11 +123,11 @@ jobs:
             echo "::warning::Deploy health check could not read origin/$REF_NAME HEAD (gh api error) - the staleness half is UNKNOWN this cycle."
           fi
 
-          if curl -fsS -m 15 "https://app.modulo.run/api/v1/deployment" > "$WORK/prod.json" 2>/dev/null; then
+          if curl -fsS -m 15 "https://control.farna.dev/api/v1/deployment" > "$WORK/prod.json" 2>/dev/null; then
             echo "Read the production deployment metadata."
           else
             rm -f "$WORK/prod.json"
-            echo "::warning::Deploy health check could not read the production build metadata from https://app.modulo.run/api/v1/deployment (unreachable, or the build metadata env vars are missing) - the staleness half is UNKNOWN this cycle."
+            echo "::warning::Deploy health check could not read the production build metadata from https://control.farna.dev/api/v1/deployment (unreachable, or the build metadata env vars are missing) - the staleness half is UNKNOWN this cycle."
           fi
 
           if gh run list --repo "$REPOSITORY" --workflow deploy.yml --branch main --limit 15 \
@@ -140,7 +140,7 @@ jobs:
           fi
 
           # FAR-2152: a throttled run concludes SUCCESS but skipped
-          # "Deploy to app.modulo.run" - it deployed nothing. Enrich the run
+          # "Deploy to control.farna.dev" - it deployed nothing. Enrich the run
           # records with the deploy JOB's conclusion so the consecutive-failure
           # walk classifies an ATTEMPT by the artefact, not by the run's colour.
           # Fails open: without the field the evaluator falls back to run

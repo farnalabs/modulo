@@ -26,7 +26,7 @@ describe('buildRunSupportReference', () => {
   })
 
   it('carries the FULL run id and the error code for a failed run', () => {
-    const text = buildRunSupportReference(FAILED_RUN, 'https://app.modulo.run')
+    const text = buildRunSupportReference(FAILED_RUN, 'https://control.farna.dev')
 
     // The two fields a support engineer cannot reconstruct from anything else.
     expect(text).toContain(RUN_ID)
@@ -34,18 +34,18 @@ describe('buildRunSupportReference', () => {
   })
 
   it('emits the canonical run shape, one field group per line', () => {
-    const text = buildRunSupportReference(FAILED_RUN, 'https://app.modulo.run')
+    const text = buildRunSupportReference(FAILED_RUN, 'https://control.farna.dev')
 
     expect(text.split('\n')).toEqual([
       `run ${RUN_ID} · pipeline ${PIPELINE_ID} (PR Reviewer) · status failed · error node_deadline_exceeded`,
-      `url https://app.modulo.run/runs/${RUN_ID}`,
+      `url https://control.farna.dev/runs/${RUN_ID}`,
     ])
   })
 
   it('omits the parenthetical name when the pipeline name is unknown', () => {
     const text = buildRunSupportReference(
       { ...FAILED_RUN, pipelineName: null },
-      'https://app.modulo.run',
+      'https://control.farna.dev',
     )
 
     expect(text).toContain(`pipeline ${PIPELINE_ID} ·`)
@@ -55,7 +55,7 @@ describe('buildRunSupportReference', () => {
   it('reads error none for a run that did not fail', () => {
     const text = buildRunSupportReference(
       { ...FAILED_RUN, status: 'complete', errorCode: null },
-      'https://app.modulo.run',
+      'https://control.farna.dev',
     )
 
     expect(text).toContain('status complete')
@@ -74,9 +74,9 @@ describe('buildRunSupportReference', () => {
   })
 
   it('drops a duplicate trailing slash from the supplied origin', () => {
-    const text = buildRunSupportReference(FAILED_RUN, 'https://app.modulo.run/')
+    const text = buildRunSupportReference(FAILED_RUN, 'https://control.farna.dev/')
 
-    expect(text).toContain(`url https://app.modulo.run/runs/${RUN_ID}`)
+    expect(text).toContain(`url https://control.farna.dev/runs/${RUN_ID}`)
   })
 
   it('omits the url line when no origin is available', () => {

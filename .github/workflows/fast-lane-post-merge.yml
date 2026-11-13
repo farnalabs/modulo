@@ -14,7 +14,7 @@ name: "Fast Lane: Post-merge review"
 # What this workflow DOES:
 #   1. Detects fast-lane merge commits on main (the [auto-merge: test-infra]
 #      marker in the squash commit message).
-#   2. Dispatches the PR Reviewer webhook to app.modulo.run for analysis.
+#   2. Dispatches the PR Reviewer webhook to control.farna.dev for analysis.
 #   3. The Modulo app (PR Reviewer pipeline) analyses the squash diff and
 #      can raise follow-up PRs and set the suspension via the Modulo admin API.
 #
@@ -123,4 +123,4 @@ jobs:
           DISPATCH_BODY="${BODY}" bash scripts/dispatch_with_retry.sh
 
           echo "Post-merge review dispatched for PR #${PR_NUMBER}."
-          echo "::notice::The review runs asynchronously on app.modulo.run. If a critical/major finding is discovered, the Modulo app will raise a follow-up PR through the normal lane and set the fast-lane suspension."
+          echo "::notice::The review runs asynchronously on control.farna.dev. If a critical/major finding is discovered, the Modulo app will raise a follow-up PR through the normal lane and set the fast-lane suspension."

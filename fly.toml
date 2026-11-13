@@ -1,4 +1,4 @@
-# fly.toml app configuration for app.modulo.run
+# fly.toml app configuration for control.farna.dev
 # See https://fly.io/docs/reference/configuration/
 
 app = 'app-modulo'
@@ -218,7 +218,7 @@ kill_timeout = 180
   # FARNA_CONTROL_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the farna_control_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.
-  FARNA_CONTROL_PUBLIC_URL = "https://app.modulo.run"
+  FARNA_CONTROL_PUBLIC_URL = "https://control.farna.dev"
   # FARNA_CONTROL_USERS is set with `fly secrets set` and must not be committed.
   FARNA_CONTROL_PLUGIN_DISCOVERY = "false"
   # Caps in-process local-run concurrency on the web machine to reduce worst-case event-loop load (paired with the CPU bump).
@@ -245,7 +245,7 @@ kill_timeout = 180
   # audit derivation that sized these knobs (staging runs the right-sized 2/10).
   # Enable auto-upgrade on the add-on as a safety net:
   # `flyctl redis update <name>` -> select plan, then enable auto-upgrade.
-  CORS_ORIGINS = "https://modulo.run,https://app.modulo.run,http://localhost:5173"
+  CORS_ORIGINS = "https://modulo.run,https://control.farna.dev,https://app.modulo.run,http://localhost:5173"
   # --- DB capacity hard stop (FAR-1882) ---
   # On Fly the app and the DB are SEPARATE machines with no mountable volume, so
   # auto-detection resolves no source ("none"), capacity_percent stays null and the

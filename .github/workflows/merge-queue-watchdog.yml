@@ -98,7 +98,7 @@ on:
         required: false
         default: ""
   repository_dispatch:
-    # Accept poke from app.modulo.run or other automation so the queue can be
+    # Accept poke from control.farna.dev or other automation so the queue can be
     # re-armed on demand without waiting for the next cron tick.
     types: [merge-queue-watchdog-poke]
 

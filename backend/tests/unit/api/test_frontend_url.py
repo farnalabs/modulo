@@ -86,10 +86,10 @@ class TestSsoFrontendUrlDelegate:
         """FAR-837 regression: redirect must use MODULO_PUBLIC_URL, not CORS[0]."""
         settings = _base_settings(
             modulo_frontend_url="",
-            modulo_public_url="https://app.modulo.run",
-            cors_origins="https://modulo.run,https://app.modulo.run,http://localhost:5173",
+            modulo_public_url="https://control.farna.dev",
+            cors_origins="https://modulo.run,https://control.farna.dev,http://localhost:5173",
         )
-        assert _frontend_url(settings) == "https://app.modulo.run"
+        assert _frontend_url(settings) == "https://control.farna.dev"
 
     def test_sso_prefers_frontend_url_when_set(self) -> None:
         settings = _base_settings(
@@ -131,9 +131,9 @@ class TestSsoFrontendUrlDelegate:
         """Redirect target is stable regardless of CORS list ordering."""
         settings = _base_settings(
             modulo_frontend_url="",
-            modulo_public_url="https://app.modulo.run",
-            cors_origins="https://modulo.run,https://app.modulo.run",
+            modulo_public_url="https://control.farna.dev",
+            cors_origins="https://modulo.run,https://control.farna.dev",
         )
         tokens = {"access_token": "tok", "refresh_token": "ref"}
         resp = _redirect_to_frontend(tokens, settings)
-        assert resp.headers["location"].startswith("https://app.modulo.run/")
+        assert resp.headers["location"].startswith("https://control.farna.dev/")

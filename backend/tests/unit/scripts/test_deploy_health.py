@@ -205,7 +205,7 @@ _JOB_DISPLAY_NAMES: dict[str, str] = {
     "pre-deploy-gate": "Pre-deploy gate",
     "deploy-staging": "Deploy to staging",
     "staging-e2e": "Staging E2E (smoke + WCAG + regression)",
-    "deploy-production": "Deploy to app.modulo.run",
+    "deploy-production": "Deploy to control.farna.dev",
     "prod-smoke": "Prod smoke tests",
 }
 

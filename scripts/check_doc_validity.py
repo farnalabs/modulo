@@ -83,7 +83,7 @@ RETIRED_TOKENS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(r"(?<![\w.-])staging\.modulo\.app\b"),
-        "retired host 'staging.modulo.app' (use staging.modulo.run)",
+        "retired host 'staging.modulo.app' (use staging-control.farna.dev)",
     ),
     (NON_FARNALABS_IMAGE_RE, NON_FARNALABS_IMAGE_MESSAGE),
 )
@@ -117,7 +117,7 @@ API_BASE_URLS: frozenset[str] = frozenset(
     {
         "https://api.e2b.app",
         "https://gitlab.com/api/v4",
-        "https://staging.modulo.run/api/v1",
+        "https://staging-control.farna.dev/api/v1",
     }
 )
 

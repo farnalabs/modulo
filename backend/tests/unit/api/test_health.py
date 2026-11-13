@@ -2296,7 +2296,7 @@ class TestDbHygieneAggregation:
 
 # --- FAR-1510: a db_hygiene probe that did NOT complete is advisory -------
 #
-# Production: app.modulo.run emailed "[Modulo] Readiness degraded" several
+# Production: control.farna.dev emailed "[Modulo] Readiness degraded" several
 # times a day, and every incident's detail was "database hygiene check timed
 # out after 1s" — never a real hygiene reading (live db_hygiene was clean).
 # The timeout co-occurred with the ADVISORY event_loop_lag check reporting a

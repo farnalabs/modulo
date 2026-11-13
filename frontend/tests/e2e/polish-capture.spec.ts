@@ -42,7 +42,7 @@
  *     E2E_ADMIN_EMAIL=<admin> E2E_ADMIN_PASSWORD=<password> \
  *     POLISH_ROUTE=/pipelines pnpm exec playwright test polish-capture.spec.ts
  *
- *   # Against production (app.modulo.run) — the ONLY real-data deployment, so
+ *   # Against production (control.farna.dev) — the ONLY real-data deployment, so
  *   # the one to capture when polish findings must be adjudicated on real data.
  *   # Same shape as staging, target `app`:
  *   E2E_TARGET=app E2E_NO_WEBSERVER=true E2E_SKIP_SEED=1 \
@@ -79,7 +79,7 @@
  *                               than resolving against Playwright's cwd.
  *   E2E_TARGET     (optional) Target selector — `local` (default, mock API),
  *                               `staging` (no real data) or `app`
- *                               (app.modulo.run — the real-data target).
+ *                               (control.farna.dev — the real-data target).
  *   E2E_SKIP_SEED  (optional) Non-local targets only. `1` / `true` / `yes` /
  *                               `on` (trimmed, case-insensitive) makes the run
  *                               READ-ONLY by skipping global-setup's data
@@ -93,7 +93,7 @@
  *   `getTarget()` reads `process.env.E2E_TARGET` and lowercases it; valid
  *   values are `local` (default), `staging`, `app`. `getBaseUrl()` honours
  *   `E2E_BASE_URL` when set, else the per-target default
- *   (staging `https://staging.modulo.run`, app `https://app.modulo.run`).
+ *   (staging `https://staging-control.farna.dev`, app `https://control.farna.dev`).
  *   For `local` the default is NOT a fixed port: it is the worktree-derived
  *   `http://127.0.0.1:<port>` (FAR-1900), overridable with `E2E_PORT`, or
  *   `http://127.0.0.1:5173` when `E2E_NO_WEBSERVER=true` targets a hand-started

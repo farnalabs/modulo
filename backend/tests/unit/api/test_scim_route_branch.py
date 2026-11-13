@@ -61,7 +61,7 @@ def _make_account(**overrides):
 def test_user_to_scim_basic():
     """Basic conversion with display name containing first+last."""
     account = _make_account(display_name="Alice Smith")
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert result["schemas"] == ["urn:ietf:params:scim:schemas:core:2.0:User"]
     assert result["userName"] == "alice@example.com"
     assert result["name"]["givenName"] == "Alice"
@@ -73,7 +73,7 @@ def test_user_to_scim_basic():
 def test_user_to_scim_single_name():
     """Display name with only one word → familyName is empty."""
     account = _make_account(display_name="Cher")
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert result["name"]["givenName"] == "Cher"
     assert not result["name"]["familyName"]
 
@@ -81,7 +81,7 @@ def test_user_to_scim_single_name():
 def test_user_to_scim_none_display_name():
     """None display_name → empty given/family."""
     account = _make_account(display_name=None)
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert not result["name"]["givenName"]
     assert not result["name"]["familyName"]
     assert result["name"]["formatted"] is None
@@ -90,7 +90,7 @@ def test_user_to_scim_none_display_name():
 def test_user_to_scim_none_timestamps():
     """None timestamps → empty strings."""
     account = _make_account(created_at=None, updated_at=None)
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert not result["meta"]["created"]
     assert not result["meta"]["lastModified"]
 
@@ -98,7 +98,7 @@ def test_user_to_scim_none_timestamps():
 def test_user_to_scim_multi_word_name():
     """Display name with multiple parts → familyName is everything after first."""
     account = _make_account(display_name="Mary Jane Watson")
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert result["name"]["givenName"] == "Mary"
     assert result["name"]["familyName"] == "Jane Watson"
 
@@ -106,7 +106,7 @@ def test_user_to_scim_multi_word_name():
 def test_user_to_scim_emails():
     """Emails list is properly constructed."""
     account = _make_account(email="bob@example.com")
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert len(result["emails"]) == 1
     assert result["emails"][0]["value"] == "bob@example.com"
     assert result["emails"][0]["type"] == "work"
@@ -116,14 +116,14 @@ def test_user_to_scim_emails():
 def test_user_to_scim_location():
     """Location URL is properly constructed."""
     account = _make_account()
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert f"/scim/v2/Users/{account.id}" in result["meta"]["location"]
 
 
 def test_user_to_scim_external_id():
     """externalId matches the account id."""
     account = _make_account()
-    result = _user_to_scim(account, "https://app.modulo.run")
+    result = _user_to_scim(account, "https://control.farna.dev")
     assert result["externalId"] == str(account.id)
 
 
@@ -146,7 +146,7 @@ def test_group_to_scim_basic():
     """Basic group conversion."""
     group = _make_group(name="Engineering")
     members = [{"value": str(uuid.uuid4()), "type": "User"}]
-    result = _group_to_scim(group, members, "https://app.modulo.run")
+    result = _group_to_scim(group, members, "https://control.farna.dev")
     assert result["schemas"] == ["urn:ietf:params:scim:schemas:core:2.0:Group"]
     assert result["displayName"] == "Engineering"
     assert result["members"] == members
@@ -155,14 +155,14 @@ def test_group_to_scim_basic():
 def test_group_to_scim_empty_members():
     """Empty members list."""
     group = _make_group()
-    result = _group_to_scim(group, [], "https://app.modulo.run")
+    result = _group_to_scim(group, [], "https://control.farna.dev")
     assert not result["members"]
 
 
 def test_group_to_scim_none_timestamps():
     """None timestamps → empty strings."""
     group = _make_group(created_at=None, updated_at=None)
-    result = _group_to_scim(group, [], "https://app.modulo.run")
+    result = _group_to_scim(group, [], "https://control.farna.dev")
     assert not result["meta"]["created"]
     assert not result["meta"]["lastModified"]
 
@@ -170,14 +170,14 @@ def test_group_to_scim_none_timestamps():
 def test_group_to_scim_location():
     """Location URL is properly constructed."""
     group = _make_group()
-    result = _group_to_scim(group, [], "https://app.modulo.run")
+    result = _group_to_scim(group, [], "https://control.farna.dev")
     assert f"/scim/v2/Groups/{group.id}" in result["meta"]["location"]
 
 
 def test_group_to_scim_external_id():
     """externalId matches the group id."""
     group = _make_group()
-    result = _group_to_scim(group, [], "https://app.modulo.run")
+    result = _group_to_scim(group, [], "https://control.farna.dev")
     assert result["externalId"] == str(group.id)
 
 
@@ -189,15 +189,15 @@ def test_group_to_scim_external_id():
 def test_get_base_url_strips_trailing_slash():
     """Trailing slash is stripped."""
     settings = MagicMock()
-    settings.modulo_public_url = "https://app.modulo.run/"
-    assert _get_base_url(settings) == "https://app.modulo.run"
+    settings.modulo_public_url = "https://control.farna.dev/"
+    assert _get_base_url(settings) == "https://control.farna.dev"
 
 
 def test_get_base_url_no_trailing_slash():
     """No trailing slash → returned as-is."""
     settings = MagicMock()
-    settings.modulo_public_url = "https://app.modulo.run"
-    assert _get_base_url(settings) == "https://app.modulo.run"
+    settings.modulo_public_url = "https://control.farna.dev"
+    assert _get_base_url(settings) == "https://control.farna.dev"
 
 
 def test_get_base_url_none_raises():

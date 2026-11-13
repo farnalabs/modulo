@@ -3,7 +3,7 @@ description: Wait for /healthz endpoint and smoke test frontend title
 
 inputs:
   url:
-    description: Base URL of the deployment (e.g. https://staging.modulo.run)
+    description: Base URL of the deployment (e.g. https://staging-control.farna.dev)
     required: true
   max-retries:
     description: Maximum health check retries (2s apart)

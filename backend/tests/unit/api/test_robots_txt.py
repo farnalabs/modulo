@@ -5,8 +5,8 @@ The staging/app/demo split is implemented in nginx config
 These tests pin the *contract* those blocks must uphold so the behaviour is
 regression-tested without a live nginx instance:
 
-- ``staging.modulo.run`` must receive a ``Disallow: /`` body.
-- ``app.modulo.run`` / ``demo.modulo.run`` receive the static allow-all file
+- ``staging-control.farna.dev`` must receive a ``Disallow: /`` body.
+- ``control.farna.dev`` / ``demo.modulo.run`` receive the static allow-all file
   (frontend/public/robots.txt), which Vite copies into the built dist.
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _FRONTEND_ROBOTS_TXT = _REPO_ROOT / "frontend" / "public" / "robots.txt"
 
-# Body returned by nginx for staging.modulo.run.
+# Body returned by nginx for staging-control.farna.dev.
 STAGING_ROBOTS_BODY = "User-agent: *\nDisallow: /\n"
 
 # Static allow-all file served to app/demo hosts (fallback constant — the

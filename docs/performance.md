@@ -186,7 +186,7 @@ jobs:
 
 ```bash
 k6 cloud tests/performance/pipeline-crud.js \
-  --env BASE_URL=https://staging.modulo.run/api/v1
+  --env BASE_URL=https://staging-control.farna.dev/api/v1
 ```
 
 ### Pre-merge Gate (optional)

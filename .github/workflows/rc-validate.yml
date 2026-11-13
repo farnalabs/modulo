@@ -1,4 +1,4 @@
-name: "RC Validation (pen test vs app.modulo.run + clean-host compose)"
+name: "RC Validation (pen test vs control.farna.dev + clean-host compose)"
 
 # Runs during the alpha release freeze against the LIVE production soak
 # deployment - NOT an in-process app (that is schemathesis-nightly.yml).
@@ -412,7 +412,7 @@ jobs:
     permissions:
       contents: write
     env:
-      BASE_URL: https://app.modulo.run
+      BASE_URL: https://control.farna.dev
       RC_TAG: ${{ inputs.rc_tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -436,7 +436,7 @@ jobs:
         run: |
           if [ -z "$RC_USER" ] || [ -z "$RC_PASS" ]; then
             echo "::error::Repo secrets RC_PENTEST_USERNAME / RC_PENTEST_PASSWORD are not set."
-            echo "        Configure an app.modulo.run account for the pen test before cutting an RC:"
+            echo "        Configure an control.farna.dev account for the pen test before cutting an RC:"
             echo "        gh secret set RC_PENTEST_USERNAME ; gh secret set RC_PENTEST_PASSWORD"
             exit 1
           fi
