@@ -80,7 +80,7 @@ def _resolve_private_key(private_key_hex: str | None) -> str:
     configured = get_settings().modulo_license_private_key
     if configured:
         return configured
-    raise LicenseSigningError("No license signing private key configured — set MODULO_LICENSE_PRIVATE_KEY or pass private_key_hex.")
+    raise LicenseSigningError("No license signing private key configured — set FARNA_CONTROL_MODULO_LICENSE_PRIVATE_KEY or pass private_key_hex.")
 
 
 def _validate_term_inputs(

@@ -76,7 +76,7 @@ _log = logging.getLogger(__name__)
 
 BUNDLED_BIN_DIR_ENV = "FARNA_CONTROL_BUNDLED_BIN_DIR"
 POSTGRES_HOST = "127.0.0.1"
-APP_DB_NAME = "modulo"
+APP_DB_NAME = "farna_control"
 
 # Strict grammar for any SQL identifier the launcher interpolates into DDL
 # (CREATE DATABASE cannot take a bound parameter). re.ASCII pins \w to

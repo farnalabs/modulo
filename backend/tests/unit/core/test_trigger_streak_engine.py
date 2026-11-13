@@ -350,9 +350,9 @@ class TestMigrationBackfillGrace:
         from tests.unit.db._migration_graph import assert_single_linear_head, script_directory
 
         versions_dir = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
-        source = (versions_dir / "0110_schema_pipeline_runtime.py").read_text(encoding="utf-8")
-        # The reconciliation DDL adds the column with a server default (backfill).
-        assert 'ADD COLUMN IF NOT EXISTS "streak_epoch" timestamp with time zone DEFAULT CURRENT_TIMESTAMP' in source
+        source = (versions_dir / "0350_baseline_schema.py").read_text(encoding="utf-8")
+        # The native baseline creates the column with a server default (backfill).
+        assert "streak_epoch timestamp with time zone DEFAULT CURRENT_TIMESTAMP" in source
         assert "ix_runs_unclassified_terminal" in source
         # The shared helper owns the whole chain-shape invariant: exactly one
         # head AND strict linearity (a diamond reconciled by a merge migration

@@ -67,7 +67,7 @@ _DUMP_NAME = "database.sql"
 _PGDATA_DIRNAME = "pgdata"
 _PG_VERSION_FILE = "PG_VERSION"
 _POSTGRES_HOST = "127.0.0.1"
-_APP_DB_NAME = "modulo"
+_APP_DB_NAME = "farna_control"
 _SECRETS_FILENAME = "secrets.json"
 _STATE_FILENAME = "state.json"
 _DUMP_TIMEOUT_SECONDS = 1800
@@ -300,7 +300,7 @@ def _resolve_pg_bin_dir(bin_dir: Path | None) -> Path:
     """Resolve the bundled pg/ binaries directory (param > env > install default)."""
     if bin_dir is not None:
         return bin_dir
-    from_env = os.environ.get("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR")
+    from_env = os.environ.get("FARNA_CONTROL_BUNDLED_BIN_DIR")
     if from_env:
         return Path(from_env)
     return Path(sys.prefix) / "bundled" / "bin"

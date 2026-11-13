@@ -1172,26 +1172,26 @@ def test_run_boot_failing_child_reports_clean_upgrade_error(tmp_path):
 
 class TestDecredentialUrl:
     def test_no_password_returns_original(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://user@host:5432/farna_control"
         result, pwd = upgrade_module._decredential_url(url)
         assert result == url
         assert pwd is None
 
     def test_with_password_strips_from_url(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://modulo:secret123@host:5432/farna_control"
         result, pwd = upgrade_module._decredential_url(url)
         assert "secret123" not in result
         assert pwd == "secret123"
         assert "modulo@" in result
 
     def test_with_password_and_port(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://modulo:p%40ss@host:15432/farna_control"
         result, pwd = upgrade_module._decredential_url(url)
         assert pwd == "p@ss"
         assert ":15432" in result
 
     def test_no_username_with_password(self):
-        url = "postgresql://user:pass@host:5432/farna_control"
+        url = "postgresql://:secret@127.0.0.1:5432/farna_control"
         result, pwd = upgrade_module._decredential_url(url)
         assert pwd == "secret"
         assert "127.0.0.1" in result

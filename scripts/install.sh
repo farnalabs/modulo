@@ -78,8 +78,8 @@ REPO="farnalabs/modulo"
 RELEASES_LATEST_URL="https://github.com/${REPO}/releases/latest"
 RELEASES_DOWNLOAD_URL="https://github.com/${REPO}/releases/download"
 
-INSTALL_ROOT="${MODULO_INSTALL_ROOT:-${HOME}/.local/opt/modulo}"
-BIN_DIR="${MODULO_BIN_DIR:-${HOME}/.local/bin}"
+INSTALL_ROOT="${FARNA_CONTROL_MODULO_INSTALL_ROOT:-${MODULO_INSTALL_ROOT:-${HOME}/.local/opt/modulo}}"
+BIN_DIR="${FARNA_CONTROL_MODULO_BIN_DIR:-${MODULO_BIN_DIR:-${HOME}/.local/bin}}"
 MARKER_FILE="${INSTALL_ROOT}/.modulo-native-install"
 
 FORCE=0
@@ -425,7 +425,7 @@ validate_legacy_shim_collision() {
   # Refuse an unmanaged legacy shim BEFORE downloads, extraction, or any install
   # root mutation. A dangling symlink is also a collision and must not be
   # silently replaced.
-  local legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+  local legacy_shim="${FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH:-${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}}"
   if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]] && [[ ! -f "${MARKER_FILE}" ]] && [[ "${FORCE}" -ne 1 ]]; then
     die "found an existing ${legacy_shim} that this installer did not create.\\nRe-run with --force to rename it aside and let the native install take over, or remove it manually."
   fi
@@ -950,7 +950,7 @@ info "current -> $(readlink "${INSTALL_ROOT}/current")"
 # This phase only performs the already-authorised rename.
 
 stage "finalise (PATH shim and summary)"
-legacy_shim="${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}"
+legacy_shim="${FARNA_CONTROL_MODULO_LEGACY_SHIM_PATH:-${MODULO_LEGACY_SHIM_PATH:-/usr/local/bin/modulo}}"
 if [[ -e "${legacy_shim}" || -L "${legacy_shim}" ]]; then
   if [[ -f "${MARKER_FILE}" ]] || [[ "${FORCE}" -eq 1 ]]; then
     backup="${legacy_shim}.pre-native-$(date +%Y%m%d%H%M%S)"
