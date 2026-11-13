@@ -105,6 +105,8 @@ The following broader unit-test files were also retired because their migration-
 | `tests/unit/db/test_run_cancel_reason.py` | Historical migration vocabulary/column/revision tests. | `0350_baseline_schema.py`  | LEGITIMATE | Only historical chain position, downgrade/intermediate state, one-off backfill, or migration source contract remains. |
 | `tests/unit/db/test_run_status_vocabulary.py` | Historical widening migration and downgrade tests. | `0350_baseline_schema.py`  | RECOVERABLE | Final run status vocabulary remains required. |
 | `tests/unit/db/test_trigger_event_vocabulary.py` | Historical trigger-event vocabulary migration tests. | `0350_baseline_schema.py`  | RECOVERABLE | Final trigger-event vocabulary remains required. |
+| `tests/unit/core/runtime_provider/test_k8s.py::TestMigration0282Parity` | Migration 0282 structural parity (upgrade/downgrade DDL, check constraint widening with 'kubernetes', chain position). | Revision 0282 and its intermediate DDL/check states disappeared in the baseline collapse. | `0350_baseline_schema.py` | LEGITIMATE | Only historical chain position, downgrade/intermediate state, one-off backfill, or migration source contract remains. |
+| `tests/unit/core/test_guardrails_contract.py::test_site_e_orm_and_migration_check_include_guardrail` (migration portion) | Historical migration 0110 source contract: CHECK constraint widening to include 'guardrail'. | Revision 0110 and its intermediate DDL/check state disappeared in the baseline collapse. | `0350_baseline_schema.py` | LEGITIMATE | Only historical chain position, downgrade/intermediate state, one-off backfill, or migration source contract remains. |
 
 ## Retired integration tests
 
