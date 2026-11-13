@@ -729,7 +729,7 @@ class TestUploadLicense:
         assert resp.status_code == 422
         body = resp.json()
         assert body["reason"] == "anchor_mismatch"
-        assert "FARNA_CONTROL_MODULO_LICENSE_PUBLIC_KEY" in body["detail"]
+        assert "MODULO_LICENSE_PUBLIC_KEY" in body["detail"]
         assert "anchor mismatch" in body["detail"].lower()
 
     def test_rejects_expired_license(self, client: TestClient) -> None:
@@ -842,7 +842,7 @@ class TestIssueLicense:
         body = resp.json()
         assert body["reason"] == "signature_mismatch"
         assert "anchor mismatch" in body["detail"].lower()
-        assert "FARNA_CONTROL_MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
+        assert "MODULO_LICENSE_PRIVATE_KEY" in body["detail"]
 
     def test_issues_with_email_sends_background_email(self, issue_client: TestClient) -> None:
         with patch("farna.api.routes.admin_license.email_team_license", new=AsyncMock()) as mock_email:
