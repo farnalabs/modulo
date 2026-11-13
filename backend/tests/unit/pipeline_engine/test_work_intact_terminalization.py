@@ -177,20 +177,20 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migr
 
 class TestMigrationRunEvidenceFinalState:
     """The run_evidence surface now ships in the reconciliation chain
-    (``0110_schema_pipeline_runtime``) instead of the deleted ``0091_run_evidence``
+    (``0350_baseline_schema``) instead of the deleted ``0091_run_evidence``
     migration. Assert the reconciliation DDL creates the run_evidence table with
     its evidence columns and adds ``runs.work_intact``."""
 
     def _source(self) -> str:
-        path = _VERSIONS / "0110_schema_pipeline_runtime.py"
+        path = _VERSIONS / "0350_baseline_schema.py"
         assert path.exists(), f"Migration file missing: {path}"
         return path.read_text(encoding="utf-8")
 
     def test_0008_creates_run_evidence_table(self) -> None:
         source = self._source()
-        assert "CREATE TABLE IF NOT EXISTS public.run_evidence" in source
+        assert "CREATE TABLE public.run_evidence" in source
         for column in ("run_id", "node_id", "evidence_state", "evidence_detail", "evidence_written_at"):
-            assert f'"{column}"' in source, f"0008 run_evidence missing column {column}"
+            assert f"    {column} " in source, f"0008 run_evidence missing column {column}"
 
     def test_0008_creates_run_evidence_pk_and_fk(self) -> None:
         source = self._source()
@@ -199,7 +199,7 @@ class TestMigrationRunEvidenceFinalState:
 
     def test_0008_adds_runs_work_intact(self) -> None:
         source = self._source()
-        assert 'ADD COLUMN IF NOT EXISTS "work_intact" boolean' in source
+        assert "work_intact boolean" in source
 
 
 # ---------------------------------------------------------------------------

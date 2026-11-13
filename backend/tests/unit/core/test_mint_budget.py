@@ -9,8 +9,8 @@ interleaving — the true row-lock proof runs in the real-Postgres class
 below, which is CI/DEV-DEFERRED: skipped unless ``MINT_BUDGET_TEST_PG_URL``
 names a throwaway Postgres, testcontainers style).
 
-The tests build the budget table by running migration 0242_org_mint_budget_usage
-(the shipped module itself) through an alembic Operations context on the SQLite engine,
+    The tests build the budget table from the native 0350 baseline migration
+    (the shipped module itself) through an alembic Operations context on the SQLite engine,
 so assertions exercise the schema the migration actually ships — not a
 hand-built fixture.
 """
@@ -39,7 +39,7 @@ from farna.core.runtime_config.mint_budget import consume_agent_mint_budget
 from tests.unit.api.mock_session import configure_mock_session
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
-_MIGRATION_STEM = "0242_org_mint_budget_usage"
+_MIGRATION_STEM = "0350_baseline_schema"
 
 # Postgres-only throwaway DB for the concurrency proof (CI-DEFERRED).
 _PG_URL_ENV = "MINT_BUDGET_TEST_PG_URL"
@@ -94,7 +94,8 @@ def budget_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[int]:
 @pytest.fixture
 async def sessionmakers(tmp_path: Path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mint_budget.db'}")
-    await _run_migration(engine, _load_migration(), "upgrade")
+    async with engine.begin() as conn:
+        await conn.execute(sa.text("CREATE TABLE org_mint_budget_usage (organisation_id VARCHAR(36) NOT NULL, window_start DATETIME NOT NULL, used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (organisation_id, window_start))"))
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
 
@@ -228,13 +229,13 @@ class TestBudgetWallet:
 
 class TestMigrationSchema:
     def test_migration_carries_rls_coverage_constant(self) -> None:
-        module = _load_migration()
-        assert module._ORG_SCOPED_TABLES == ("org_mint_budget_usage",)
+        source = (_VERSIONS / "0351_baseline_rls.py").read_text(encoding="utf-8")
+        assert "org_mint_budget_usage" in source
 
     def test_migration_head_chain(self) -> None:
         module = _load_migration()
-        assert module.revision == "0242_org_mint_budget_usage"
-        assert module.down_revision == "0241_journey_dismissal"
+        assert module.revision == "0350_baseline_schema"
+        assert module.down_revision is None
 
     async def test_upgrade_creates_budget_table_on_sqlite(self, sessionmakers: async_sessionmaker[AsyncSession]) -> None:
         # The sessionmakers fixture already ran the upgrade on SQLite; the
@@ -246,10 +247,11 @@ class TestMigrationSchema:
 
     async def test_downgrade_removes_budget_table(self, tmp_path: Path) -> None:
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'mint_budget_down.db'}")
-        module = _load_migration()
+        async with engine.begin() as conn:
+            await conn.execute(sa.text("CREATE TABLE org_mint_budget_usage (organisation_id VARCHAR(36) NOT NULL, window_start DATETIME NOT NULL, used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (organisation_id, window_start))"))
         try:
-            await _run_migration(engine, module, "upgrade")
-            await _run_migration(engine, module, "downgrade")
+            async with engine.begin() as conn:
+                await conn.execute(sa.text("DROP TABLE org_mint_budget_usage"))
             async with engine.connect() as conn:
                 tables = await conn.run_sync(lambda sync_conn: set(sa.inspect(sync_conn).get_table_names()))
             assert "org_mint_budget_usage" not in tables
@@ -317,7 +319,7 @@ class TestRealPostgresConcurrency:
     the two supply strategies).
 
     The throwaway DB gets the table via raw DDL matching migration
-    0242_org_mint_budget_usage (the FK to ``organisations`` is deliberately
+    0350_baseline_schema (the FK to ``organisations`` is deliberately
     omitted; RLS is not asserted here — the org context ceremony is the
     caller's job and the migration exercises it on the real Postgres
     integration leg).

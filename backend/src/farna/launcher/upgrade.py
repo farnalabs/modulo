@@ -574,7 +574,7 @@ def restore_guidance(
     if snapshot is None:
         link_cmd = f"ln -sfn versions/{link_version} {install_root / 'current'}"
         return f"{fault}\n{head}\nExact manual restore command:\n  {link_cmd}"
-    restore_cmd = f"modulo restore {snapshot} --data-dir {data_dir} --yes"
+    restore_cmd = f"farna-control restore {snapshot} --data-dir {data_dir} --yes"
     link_cmd = f"ln -sfn versions/{link_version} {install_root / 'current'}"
     compound = link_cmd + " && " + restore_cmd
     return f"{fault}\n{head}\nPre-upgrade snapshot: {snapshot}\nExact manual restore command:\n  {compound}"
@@ -1026,7 +1026,7 @@ def check_no_downgrade(
             "migration head.\n"
             "Restore guidance: re-point `current` back to the previous version (ln -sfn "
             "versions/<previous> <install-root>/current) and restore the pre-upgrade snapshot "
-            "(modulo restore <snapshot-dir> --yes)."
+            "(farna-control restore <snapshot-dir> --yes)."
         )
 
 

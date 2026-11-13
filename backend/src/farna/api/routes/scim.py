@@ -248,7 +248,7 @@ def _get_base_url(settings: Settings) -> str:
     if not url:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SCIM cannot resolve base URL: MODULO_PUBLIC_URL is not configured",
+            detail="SCIM cannot resolve base URL: FARNA_CONTROL_MODULO_PUBLIC_URL is not configured",
         )
     return url.rstrip("/")
 

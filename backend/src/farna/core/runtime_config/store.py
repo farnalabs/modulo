@@ -229,7 +229,7 @@ class RuntimeConfigStore:
             if removed is not None:
                 _log.info("Runtime config override cleared: %s", _sanitise_log_value(key))
             else:
-                _log.debug("Runtime config override not found (no-op): %s", _sanitise_log_value(key))
+                _log.debug("Runtime config override not found (no-op): %s", key)
 
     def clear_all_overrides(self) -> None:
         """Remove all runtime overrides."""

@@ -278,7 +278,7 @@ class TestRuntimeConfigStore:
             caplog.set_level(logging.DEBUG, logger="farna.core.runtime_config.store")
             store.clear_override("FARNA_CONTROL_MODULO_LOG_LEVEL")
         assert store.get("FARNA_CONTROL_MODULO_LOG_LEVEL") == DEFAULT_VALUES["FARNA_CONTROL_MODULO_LOG_LEVEL"]
-        assert any(r.levelno == logging.DEBUG and r.getMessage() == "Runtime config override not found (no-op): MODULO_LOG_LEVEL" for r in caplog.records)
+        assert any(r.levelno == logging.DEBUG and r.getMessage() == "Runtime config override not found (no-op): FARNA_CONTROL_MODULO_LOG_LEVEL" for r in caplog.records)
 
     # ----------------------------------------------------------------
     # Golden-value pins

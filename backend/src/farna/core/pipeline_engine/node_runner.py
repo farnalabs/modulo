@@ -1452,7 +1452,7 @@ async def _apply_isolation_via_provider(
         api_key = get_e2b_api_key() or os.environ.get("E2B_API_KEY")
         provider = _build_isolation_provider(api_key) if api_key else None
         if provider is None:
-            raise SandboxTierRefusedError("sandbox isolation could not resolve the E2B runtime provider (set MODULO_E2B_API_KEY and restart)")
+            raise SandboxTierRefusedError("sandbox isolation could not resolve the E2B runtime provider (set FARNA_CONTROL_MODULO_E2B_API_KEY and restart)")
     elif borrowed_provider is not None:
         # FAR-1051: reuse the dispatch's already-resolved provider — no hub
         # build per policy step; the dispatch's finally closes it.
