@@ -340,9 +340,7 @@ def test_parse_step_finish_evidence_skips_an_overflowing_cost(monkeypatch: pytes
         return real_coerce(value)
 
     monkeypatch.setattr(agent_event_evidence, "_coerce_step_cost", _coerce)
-    stream = '{"type": "step_finish", "part": {"cost": "overflow", "tokens": {"total": 5}}}\n' + _event(
-        cost=0.5, tokens={"total": 7}
-    )
+    stream = '{"type": "step_finish", "part": {"cost": "overflow", "tokens": {"total": 5}}}\n' + _event(cost=0.5, tokens={"total": 7})
 
     tokens, cost = parse_step_finish_evidence(stream)
 

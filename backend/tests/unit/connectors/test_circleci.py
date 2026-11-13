@@ -228,9 +228,7 @@ async def test_get_run_logs(cc_runner):
 async def test_get_run_logs_corrupt_body_no_crash(cc_runner):
     """A corrupt/hostile non-dict workflow body must not crash get_run_logs."""
     pipeline_uuid = "pipe-uuid-123"
-    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(
-        return_value=httpx.Response(200, json=["corrupt", "body"])
-    )
+    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(return_value=httpx.Response(200, json=["corrupt", "body"]))
     logs = await cc_runner.get_run_logs(pipeline_uuid)
     assert not logs.lines
 
@@ -239,9 +237,7 @@ async def test_get_run_logs_corrupt_body_no_crash(cc_runner):
 async def test_get_run_logs_non_list_items_no_crash(cc_runner):
     """A corrupt body placing a non-list in ``items`` must fall back to no lines."""
     pipeline_uuid = "pipe-uuid-123"
-    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(
-        return_value=httpx.Response(200, json={"items": "corrupt"})
-    )
+    respx.get(f"{_CIRCLECI_API}/pipeline/{pipeline_uuid}/workflow").mock(return_value=httpx.Response(200, json={"items": "corrupt"}))
     logs = await cc_runner.get_run_logs(pipeline_uuid)
     assert not logs.lines
 
@@ -380,9 +376,7 @@ async def test_query_runs(cc_runner):
 async def test_list_runs_corrupt_body_no_crash(cc_runner):
     """A non-dict body from the pipeline list endpoint must degrade to an
     empty page instead of crashing with AttributeError on ``.get()``."""
-    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(return_value=httpx.Response(200, json=["garbage"]))
     runs = await cc_runner.list_runs(pipeline_id="gh/owner/repo")
     assert runs == []
 
@@ -391,9 +385,7 @@ async def test_list_runs_corrupt_body_no_crash(cc_runner):
 async def test_list_runs_non_list_items_no_crash(cc_runner):
     """A corrupt body placing a non-list in ``items`` must fall back to an
     empty page instead of returning a bare string as the records list."""
-    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
-        return_value=httpx.Response(200, json={"items": "not-a-list"})
-    )
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(return_value=httpx.Response(200, json={"items": "not-a-list"}))
     runs = await cc_runner.list_runs(pipeline_id="gh/owner/repo")
     assert runs == []
 
@@ -401,9 +393,7 @@ async def test_list_runs_non_list_items_no_crash(cc_runner):
 @respx.mock
 async def test_query_pipelines_corrupt_body_no_crash(cc_runner):
     """A non-dict pipelines body must degrade to an empty page, not crash."""
-    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(
-        return_value=httpx.Response(200, json=["garbage"])
-    )
+    respx.get(f"{_CIRCLECI_API}/project/gh/owner/repo/pipeline").mock(return_value=httpx.Response(200, json=["garbage"]))
     result = await cc_runner.query(ConnectorQuery(resource="pipelines", filters={"slug": "gh/owner/repo"}))
     assert not result.records
     assert result.total == 0

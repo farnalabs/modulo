@@ -296,9 +296,7 @@ _ARGS = [
 ]
 
 
-def test_collision_warns_comments_and_labelled_but_exits_zero(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_collision_warns_comments_and_labelled_but_exits_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     fake = _FakeGh([PR(2017, "feat(FAR-1883): pipeline queue timeout")])
     fake.install(monkeypatch)
 
@@ -357,9 +355,7 @@ def test_a_title_without_a_ticket_posts_nothing(monkeypatch: pytest.MonkeyPatch)
     fake = _FakeGh([PR(2017, "feat(FAR-1883): pipeline queue timeout")])
     fake.install(monkeypatch)
 
-    exit_code = _guard.main(
-        ["--repo", "farnalabs/modulo", "--number", "2029", "--title", "chore: tidy up", "--base", "main"]
-    )
+    exit_code = _guard.main(["--repo", "farnalabs/modulo", "--number", "2029", "--title", "chore: tidy up", "--base", "main"])
 
     assert exit_code == 0
     assert not fake.posts

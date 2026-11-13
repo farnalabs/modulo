@@ -414,9 +414,7 @@ def test_each_write_surface_calls_the_shared_resolver_for_the_default():
         "api/mcp_server.py": inspect.getsource(mcp_server._apply_node_connector_binding),
     }
     for path, source in surfaces.items():
-        assert "connector_binding_operation(" in source, (
-            f"{path} must derive the operation default from the shared resolver, not a local rule"
-        )
+        assert "connector_binding_operation(" in source, f"{path} must derive the operation default from the shared resolver, not a local rule"
 
 
 # ---------------------------------------------------------------------------

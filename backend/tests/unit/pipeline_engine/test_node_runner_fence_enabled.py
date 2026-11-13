@@ -267,8 +267,7 @@ async def test_dispatch_failure_clears_marker_so_successor_can_acquire():
     # A successor (same token still owns the row) can now acquire the slot.
     session = _MarkerSession(state, executed)
     acquire = await session.execute(
-        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
-        "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' RETURNING id",
+        "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' RETURNING id",
         {"tok": "tok-owner", "sid": None},
     )
     assert acquire.fetchone() == ("id",)
@@ -311,9 +310,7 @@ async def test_reclaimed_run_produces_different_attempt_key():
     keys: list[str] = []
     for claim_count in (1, 2):
         row = _row(claim_count=claim_count)
-        node_fn, _state, _executed, create_mock = _make_fence_env(
-            row=row, sandbox=_make_sandbox_mock(sandbox_id=f"sbx-{claim_count}")
-        )
+        node_fn, _state, _executed, create_mock = _make_fence_env(row=row, sandbox=_make_sandbox_mock(sandbox_id=f"sbx-{claim_count}"))
         result = await _run_fence(node_fn, create_mock)
         keys.append(result["telemetry"]["attempt_key"])
 
@@ -328,9 +325,7 @@ async def test_same_claim_attempt_key_stable_across_invocations():
     keys: list[str] = []
     for _ in range(2):
         row = _row(claim_count=4)
-        node_fn, _state, _executed, create_mock = _make_fence_env(
-            row=row, sandbox=_make_sandbox_mock(sandbox_id="sbx-x")
-        )
+        node_fn, _state, _executed, create_mock = _make_fence_env(row=row, sandbox=_make_sandbox_mock(sandbox_id="sbx-x"))
         result = await _run_fence(node_fn, create_mock)
         keys.append(result["telemetry"]["attempt_key"])
 

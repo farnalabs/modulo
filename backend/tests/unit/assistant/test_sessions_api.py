@@ -128,9 +128,7 @@ class TestCreateSession:
             patch("farna.api.routes.assistant.AssistantConfigService") as mock_svc,
             patch("farna.api.routes.assistant.ChatSession", side_effect=_make_chat_session(created)),
         ):
-            mock_svc.return_value.get_config = AsyncMock(
-                return_value=AssistantConfig(default_provider="opencode", default_model="")
-            )
+            mock_svc.return_value.get_config = AsyncMock(return_value=AssistantConfig(default_provider="opencode", default_model=""))
             resp = client.post(
                 "/api/v1/assistant/sessions",
                 json={"provider": "opencode", "context_window_tokens": 200000},

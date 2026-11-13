@@ -34,9 +34,7 @@ def test_assert_supported_platform_allows_posix(monkeypatch: pytest.MonkeyPatch)
     assert secrets_file_module.assert_supported_platform() is None
 
 
-def test_load_or_create_refuses_windows_before_writing_any_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_or_create_refuses_windows_before_writing_any_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The refusal must happen BEFORE a credential file is created or opened."""
     monkeypatch.setattr(secrets_file_module, "is_windows", lambda: True)
     path = tmp_path / "secrets.json"

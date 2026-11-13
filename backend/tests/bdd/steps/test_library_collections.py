@@ -184,24 +184,18 @@ def _draft_collection_exists(ctx: dict[str, Any]) -> None:
     ctx["collection_id"] = uuid.uuid4()
     ctx["install"] = _mk_install()
     ctx["install_id"] = ctx["install"].install_id
-    ctx["install_error"] = CollectionNotPublishedError(
-        "Collection 'Test Collection' must be published before installing (current status: draft)"
-    )
+    ctx["install_error"] = CollectionNotPublishedError("Collection 'Test Collection' must be published before installing (current status: draft)")
     ctx["collection"] = _mk_collection_primitive(ctx, status="draft")
 
 
 @given("the collection pins do not resolve")
 def _collection_pins_unresolved(ctx: dict[str, Any]) -> None:
-    ctx["install_error"] = PinResolutionError(
-        "Pin 'input-schema@1.0' does not resolve to a visible primitive in this organisation"
-    )
+    ctx["install_error"] = PinResolutionError("Pin 'input-schema@1.0' does not resolve to a visible primitive in this organisation")
 
 
 @given("the collection is already installed in the organisation")
 def _collection_already_installed(ctx: dict[str, Any]) -> None:
-    ctx["install_error"] = CollectionInstallError(
-        "Collection 'Test Collection' is already installed in this organisation"
-    )
+    ctx["install_error"] = CollectionInstallError("Collection 'Test Collection' is already installed in this organisation")
 
 
 @given("the collection is installed")
@@ -239,9 +233,7 @@ def _collection_installed_community(ctx: dict[str, Any]) -> None:
 
 @given("the collection is installed from a local source")
 def _collection_installed_local(ctx: dict[str, Any]) -> None:
-    ctx["grant_error"] = NotCommunitySourcedError(
-        "Install is not community-sourced; grant is only available for community-sourced collection installs"
-    )
+    ctx["grant_error"] = NotCommunitySourcedError("Install is not community-sourced; grant is only available for community-sourced collection installs")
 
 
 @given("the install already has agent access granted")
@@ -288,9 +280,7 @@ def _uninstall_collection_unknown(ctx: dict[str, Any], request: pytest.FixtureRe
     _start_route_patches(
         patches,
         install_collection=AsyncMock(return_value=ctx["install"]),
-        uninstall_collection=AsyncMock(
-            side_effect=UninstallInstallNotFoundError(f"Install {unknown_id} not found for organisation {ORG_ID}")
-        ),
+        uninstall_collection=AsyncMock(side_effect=UninstallInstallNotFoundError(f"Install {unknown_id} not found for organisation {ORG_ID}")),
     )
     resp = client.post(
         f"/api/v1/libraries/collections/{ctx['collection_id']}/uninstall",
@@ -333,9 +323,7 @@ def _install_response_runnable(ctx: dict[str, Any]) -> None:
 @then(parsers.parse("the install response has agents_granted {expected}"))
 def _install_response_agents_granted(ctx: dict[str, Any], expected: str) -> None:
     data = ctx["response"].json()
-    assert data.get("agents_granted") is (expected != "false"), (
-        f"Expected agents_granted {expected}, got {data.get('agents_granted')!r}"
-    )
+    assert data.get("agents_granted") is (expected != "false"), f"Expected agents_granted {expected}, got {data.get('agents_granted')!r}"
 
 
 @then("the uninstall response lists deleted entities")
@@ -354,9 +342,7 @@ def _uninstall_response_no_detached(ctx: dict[str, Any]) -> None:
 def _uninstall_response_detached(ctx: dict[str, Any]) -> None:
     data = ctx["response"].json()
     detached = data.get("detached") or []
-    assert any(item.get("entity_type") == "schema" for item in detached), (
-        f"Expected the modified schema to be detached, got {detached!r}"
-    )
+    assert any(item.get("entity_type") == "schema" for item in detached), f"Expected the modified schema to be detached, got {detached!r}"
 
 
 @then(parsers.parse('the error mentions "{text}"'))
@@ -432,9 +418,7 @@ def _collection_pins_over_cap(ctx: dict[str, Any]) -> None:
 
 
 @when(parsers.parse('the operator creates the collection with pins for "{spec}"'))
-def _operator_creates_collection(
-    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str
-) -> None:
+def _operator_creates_collection(ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str) -> None:
     client = _active_client(request)
     prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
     existing = None
@@ -460,9 +444,7 @@ def _operator_creates_collection(
 
 
 @when(parsers.parse('the operator updates the collection to pin "{spec}"'))
-def _operator_updates_collection(
-    ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str
-) -> None:
+def _operator_updates_collection(ctx: dict[str, Any], request: pytest.FixtureRequest, patches: list[Any], spec: str) -> None:
     client = _active_client(request)
     prim = ctx.get("collection") or _mk_collection_primitive(ctx, status="draft")
     prim.manifest_pins = [_parse_pin_spec(spec)]

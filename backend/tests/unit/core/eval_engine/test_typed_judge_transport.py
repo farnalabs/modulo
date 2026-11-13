@@ -203,9 +203,7 @@ class TestDerivedPassConfidence:
         assert verdict.outcome is JudgeOutcome.FAIL
 
     async def test_choice_mass_is_the_sum_of_passing_keys(self) -> None:
-        backend = _RecordingBackend(
-            lambda _: _payload({"answer": "neutral", "probabilities": {"neutral": 0.7, "informal": 0.3}})
-        )
+        backend = _RecordingBackend(lambda _: _payload({"answer": "neutral", "probabilities": {"neutral": 0.7, "informal": 0.3}}))
 
         verdict = await _judge(backend, [_choice(passing_keys=["neutral", "informal"])])
 

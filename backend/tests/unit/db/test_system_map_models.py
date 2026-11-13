@@ -64,9 +64,7 @@ class TestSystemMapModels:
         )
 
     def test_system_map_revision_published_index_is_partial_unique(self):
-        index = next(
-            item for item in SystemMapRevision.__table__.indexes if item.name == "uq_system_map_revisions_one_published"
-        )
+        index = next(item for item in SystemMapRevision.__table__.indexes if item.name == "uq_system_map_revisions_one_published")
         assert index.unique is True
         assert str(index.dialect_options["postgresql"]["where"]) == "status = 'published'"
 

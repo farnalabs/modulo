@@ -58,12 +58,7 @@ async def _insert_pipeline(
     pipeline_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
-                "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, "
-                "graph_nodes_json, default_autonomy_level) "
-                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json, :default)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json, default_autonomy_level) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json, :default)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -158,9 +153,7 @@ async def test_contended_mcp_graph_update_degrades_within_the_bounded_lock_timeo
         assert result.get("error") == "lock_timeout", result
         assert "another change is in progress" in result["detail"], result
         # The wait really happened (it did not resolve instantly)...
-        assert elapsed >= expected_seconds * 0.5, (
-            f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
-        )
+        assert elapsed >= expected_seconds * 0.5, f"the wait ended after {elapsed:.2f}s - before the {expected_seconds}s lock_timeout could fire"
         # ...and it was really BOUNDED (the holder never released the lock).
         assert elapsed < bounded_ceiling, f"the wait was NOT bounded - {elapsed:.2f}s for a held row lock"
 

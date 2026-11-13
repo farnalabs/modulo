@@ -41,9 +41,7 @@ async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, "
-                "password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :pw_hash, 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :pw_hash, 'local', true)",
             ),
             {
                 "id": str(user_id),
@@ -54,8 +52,7 @@ async def _create_user_in_org(db_engine: AsyncEngine, org_id: uuid.UUID, email: 
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, organisation_id, account_id, role) "
-                "VALUES (:mid, :org_id, :account_id, :role)",
+                "INSERT INTO org_memberships (id, organisation_id, account_id, role) VALUES (:mid, :org_id, :account_id, :role)",
             ),
             {
                 "mid": str(uuid.uuid4()),

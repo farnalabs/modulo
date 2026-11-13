@@ -36,11 +36,7 @@ def _make_valid_license_key(tier: str = "team") -> str:
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -173,11 +169,7 @@ def _make_saml_response(email: str, display_name: str, groups: list[str] | None 
     if groups:
         values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
         groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
-    xml = (
-        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
-        .replace("__DISPLAY_NAME__", display_name)
-        .replace("__GROUPS_XML__", groups_xml)
-    )
+    xml = _SAML_RESPONSE_XML.replace("__EMAIL__", email).replace("__DISPLAY_NAME__", display_name).replace("__GROUPS_XML__", groups_xml)
     return base64.b64encode(xml.encode()).decode()
 
 
@@ -214,19 +206,7 @@ def _browser_bound_state(provider_id: str, secret_key: str = _VALID_32) -> tuple
 def _setup_plan(license_key: str = _VALID_LICENSE_KEY) -> None:
     from farna.api.main import app as _app
 
-    if not license_key:
-        _plan = CommunityTier()
-    else:
-        _plan = LicenseKeyTier(
-            LicenseData(
-                tier="team",
-                features=["sso"],
-                expires_at="",
-                org_id="",
-                raw_payload={},
-                raw_key=license_key,
-            )
-        )
+    _plan = CommunityTier() if not license_key else LicenseKeyTier(LicenseData(tier="team", features=["sso"], expires_at="", org_id="", raw_payload={}, raw_key=license_key))
     _app.dependency_overrides[get_plan_context] = lambda: _plan
     _app.dependency_overrides[get_anonymous_plan_context] = lambda: _plan
 
@@ -542,9 +522,7 @@ def mapping_assigns_role(expected_role: str, ctx: dict[str, Any]) -> None:
     assert call is not None
     group_mappings = call[0][4]
     assert len(group_mappings) > 0, "Expected at least one mapping"
-    assert group_mappings[0]["team_role"] == expected_role, (
-        f"Expected role {expected_role}, got {group_mappings[0]['team_role']}"
-    )
+    assert group_mappings[0]["team_role"] == expected_role, f"Expected role {expected_role}, got {group_mappings[0]['team_role']}"
 
 
 @then("apply_group_mappings had no matching groups")

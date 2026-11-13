@@ -708,9 +708,7 @@ class TestRecordFactForTerminalFailedRun:
         record.assert_not_awaited()
         assert any("run_missing" in m for m in caplog.messages)
 
-    async def test_write_failure_is_fail_open(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_write_failure_is_fail_open(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         run = _make_run()
         session = _session(execute_side_effect=[])
 
@@ -774,9 +772,7 @@ class TestGetMeter:
 
     def test_returns_meter_from_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
         meter = SimpleNamespace(name="modulo.analytics")
-        monkeypatch.setattr(
-            _otel_metrics, "get_meter_provider", lambda: SimpleNamespace(get_meter=lambda *a, **k: meter)
-        )
+        monkeypatch.setattr(_otel_metrics, "get_meter_provider", lambda: SimpleNamespace(get_meter=lambda *a, **k: meter))
         assert metrics_mod._get_meter() is meter
 
     def test_returns_none_when_import_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -861,9 +857,7 @@ class TestRecorders:
         meter = _FakeMeter()
         monkeypatch.setattr(metrics_mod, "_get_meter", lambda: meter)
         metrics_mod.record_reconcile_alert("org-1", "ledger_exceeds_facts")
-        assert metrics_mod._reconcile_alert_total.calls == [
-            ("add", 1, {"org_id": "org-1", "drift_type": "ledger_exceeds_facts"})
-        ]
+        assert metrics_mod._reconcile_alert_total.calls == [("add", 1, {"org_id": "org-1", "drift_type": "ledger_exceeds_facts"})]
 
     def test_set_retention_lag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         meter = _FakeMeter()
@@ -943,10 +937,7 @@ class TestBackfillBatches:
         # One ledger upsert per batch, same day as the facts backfill.
         assert maintenance_mod.backfill_ledger.await_count == 3
         for i in range(3):
-            assert (
-                maintenance_mod.backfill_ledger.await_args_list[i].args[1]
-                == maintenance_mod.backfill_facts.await_args_list[i].args[1]
-            )
+            assert maintenance_mod.backfill_ledger.await_args_list[i].args[1] == maintenance_mod.backfill_facts.await_args_list[i].args[1]
         set_rows.assert_called_once_with(12)
         set_ts.assert_called_once()
 
@@ -968,10 +959,7 @@ class TestBackfillBatches:
         assert maintenance_mod.backfill_facts.await_args_list[0].args[1] == today
         assert maintenance_mod.backfill_facts.await_args_list[1].args[1] == today - timedelta(days=1)
         for i in range(2):
-            assert (
-                maintenance_mod.backfill_ledger.await_args_list[i].args[1]
-                == maintenance_mod.backfill_facts.await_args_list[i].args[1]
-            )
+            assert maintenance_mod.backfill_ledger.await_args_list[i].args[1] == maintenance_mod.backfill_facts.await_args_list[i].args[1]
         set_rows.assert_called_once_with(2)
 
 
@@ -1067,10 +1055,7 @@ class TestBackfillFactsProvenanceColumns:
         # Positional alignment: from_select maps names onto the SELECT's
         # columns in order, so both lists must be identical, in the same order.
         selected = [c.name for c in captured["select"].selected_columns]
-        assert selected == names, (
-            "the INSERT name list must align positionally with the SELECT columns — "
-            "a drift writes the wrong value into the wrong column"
-        )
+        assert selected == names, "the INSERT name list must align positionally with the SELECT columns — a drift writes the wrong value into the wrong column"
 
 
 class TestBackfillQueueWaitNonNegative:
@@ -1082,9 +1067,7 @@ class TestBackfillQueueWaitNonNegative:
     re-dispatch/resume the ordering inverts and the difference is meaningless.
     """
 
-    async def test_queue_wait_expression_excludes_the_redispatched_inversion(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_queue_wait_expression_excludes_the_redispatched_inversion(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured = TestBackfillFactsProvenanceColumns._capturing_from_select(monkeypatch)
         insert_result = MagicMock()
         insert_result.rowcount = 1
@@ -1095,9 +1078,7 @@ class TestBackfillQueueWaitNonNegative:
 
         expr = next(c for c in captured["select"].selected_columns if c.name == "queue_wait_ms")
         sql = str(expr.compile(dialect=postgresql.dialect()))
-        assert "dispatched_at <= runs.started_at" in sql, (
-            "the backfill must only derive a queue wait when dispatched_at precedes started_at"
-        )
+        assert "dispatched_at <= runs.started_at" in sql, "the backfill must only derive a queue wait when dispatched_at precedes started_at"
         assert "CASE WHEN" in sql.upper(), "the invalid ordering must degrade to NULL, not a negative difference"
 
 
@@ -1430,9 +1411,7 @@ class TestRunMaintenance:
 
     async def test_runs_full_pass_on_postgres(self, monkeypatch: pytest.MonkeyPatch) -> None:
         session = self._postgres_session()
-        monkeypatch.setattr(
-            maintenance_mod, "backfill_batches", AsyncMock(return_value={"backfill_rows": 5, "backfill_batches": 1})
-        )
+        monkeypatch.setattr(maintenance_mod, "backfill_batches", AsyncMock(return_value={"backfill_rows": 5, "backfill_batches": 1}))
         monkeypatch.setattr(
             maintenance_mod,
             "reconcile_facts",

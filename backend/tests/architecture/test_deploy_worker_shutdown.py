@@ -34,6 +34,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -62,6 +63,7 @@ BASH = shutil.which("bash")
 _popen = subprocess.Popen
 
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash is required to exercise the release entrypoint")
+needs_unix = pytest.mark.skipif(sys.platform == "win32", reason="tests Unix-specific process group signal handling; skipped on Windows")
 
 
 @pytest.mark.parametrize("toml_path", FLY_TOMLS, ids=[p.name for p in FLY_TOMLS])
@@ -73,27 +75,16 @@ def test_kill_window_outlasts_saq_shutdown(toml_path: Path) -> None:
     """
     config = tomllib.loads(toml_path.read_text(encoding="utf-8"))
 
-    assert config.get("kill_signal") == "SIGTERM", (
-        f"{toml_path.name}: kill_signal must be top-level SIGTERM "
-        "(the entrypoint and SAQ both trap SIGTERM; the default SIGINT is not the contract)"
-    )
+    assert config.get("kill_signal") == "SIGTERM", f"{toml_path.name}: kill_signal must be top-level SIGTERM (the entrypoint and SAQ both trap SIGTERM; the default SIGINT is not the contract)"
 
     kill_timeout = config.get("kill_timeout")
-    assert isinstance(kill_timeout, int), (
-        f"{toml_path.name}: kill_timeout must be a TOP-LEVEL integer. Fly's default is 5s, and the "
-        "worker group does not inherit a value nested under [http_service]."
-    )
+    assert isinstance(kill_timeout, int), f"{toml_path.name}: kill_timeout must be a TOP-LEVEL integer. Fly's default is 5s, and the worker group does not inherit a value nested under [http_service]."
     assert kill_timeout >= SAQ_DRAIN_CEILING_S + HANDBACK_HEADROOM_S, (
-        f"{toml_path.name}: kill_timeout={kill_timeout}s is shorter than SAQ's shutdown ceiling "
-        f"({SAQ_DRAIN_CEILING_S}s) + handback headroom ({HANDBACK_HEADROOM_S}s). Fly would SIGKILL "
-        "the worker before the FAR-1627 handback releases its in-flight runs."
+        f"{toml_path.name}: kill_timeout={kill_timeout}s is shorter than SAQ's shutdown ceiling ({SAQ_DRAIN_CEILING_S}s) + handback headroom ({HANDBACK_HEADROOM_S}s). Fly would SIGKILL the worker before the FAR-1627 handback releases its in-flight runs."
     )
 
     http_service = config.get("http_service", {})
-    assert "kill_timeout" not in http_service, (
-        f"{toml_path.name}: kill_timeout is a TOP-LEVEL fly.toml key. Nested under [http_service] it "
-        "does not apply to the worker process group — the exact configuration that orphaned runs."
-    )
+    assert "kill_timeout" not in http_service, f"{toml_path.name}: kill_timeout is a TOP-LEVEL fly.toml key. Nested under [http_service] it does not apply to the worker process group — the exact configuration that orphaned runs."
 
 
 @pytest.mark.parametrize("toml_path", FLY_TOMLS, ids=[p.name for p in FLY_TOMLS])
@@ -105,15 +96,9 @@ def test_worker_drain_deadline_fits_inside_kill_timeout(toml_path: Path) -> None
 
     assert deadline is not None, f"{toml_path.name}: [env] WORKER_DRAIN_DEADLINE_S must be set"
     deadline_s = int(deadline)
-    assert deadline_s >= SAQ_DRAIN_CEILING_S + HANDBACK_HEADROOM_S, (
-        f"{toml_path.name}: WORKER_DRAIN_DEADLINE_S={deadline_s}s is shorter than SAQ's shutdown "
-        f"ceiling ({SAQ_DRAIN_CEILING_S}s) + handback headroom ({HANDBACK_HEADROOM_S}s)"
-    )
+    assert deadline_s >= SAQ_DRAIN_CEILING_S + HANDBACK_HEADROOM_S, f"{toml_path.name}: WORKER_DRAIN_DEADLINE_S={deadline_s}s is shorter than SAQ's shutdown ceiling ({SAQ_DRAIN_CEILING_S}s) + handback headroom ({HANDBACK_HEADROOM_S}s)"
     assert isinstance(kill_timeout, int)
-    assert kill_timeout >= deadline_s + TEARDOWN_HEADROOM_S, (
-        f"{toml_path.name}: kill_timeout={kill_timeout}s must leave at least {TEARDOWN_HEADROOM_S}s "
-        f"after the entrypoint's {deadline_s}s drain deadline, or Fly SIGKILLs mid-shutdown"
-    )
+    assert kill_timeout >= deadline_s + TEARDOWN_HEADROOM_S, f"{toml_path.name}: kill_timeout={kill_timeout}s must leave at least {TEARDOWN_HEADROOM_S}s after the entrypoint's {deadline_s}s drain deadline, or Fly SIGKILLs mid-shutdown"
 
 
 def test_entrypoint_never_broadcasts_a_signal_to_its_own_process_group() -> None:
@@ -126,10 +111,7 @@ def test_entrypoint_never_broadcasts_a_signal_to_its_own_process_group() -> None
     content = ENTRYPOINT.read_text(encoding="utf-8")
     # The explanatory comments name the old broadcast form; check executable lines only.
     executable = "\n".join(line for line in content.splitlines() if not line.lstrip().startswith("#"))
-    assert "kill 0" not in executable, (
-        "deploy/fly/entrypoint.sh must not use `kill 0`: it signals this shell too, re-entering the "
-        "SIGTERM trap forever instead of draining the children (FAR-2004)."
-    )
+    assert "kill 0" not in executable, "deploy/fly/entrypoint.sh must not use `kill 0`: it signals this shell too, re-entering the SIGTERM trap forever instead of draining the children (FAR-2004)."
     assert "drain_workers" in content
     assert "drain_app" in content
     assert "WORKER_DRAIN_DEADLINE_S" in content
@@ -166,18 +148,15 @@ class _EntrypointHarness:
         # too: falling through to the no-op branch would make it exit
         # immediately and re-register a new PID every second, leaving the
         # drain loop racing a churning (sometimes dead) PID file.
-        if self.ignore_term:
-            # The marker is written only AFTER the TERM-ignoring trap is in
-            # place. The wrapper writes the PID file before this stub even
-            # starts, so PID-file readiness alone delivers SIGTERM while the
-            # stub still has the default disposition: the worker dies with
-            # `code=143` and the entrypoint takes the `complete` branch instead
-            # of the deadline path under test (CI run 40075008826). Readiness
-            # waits for the marker for the same reason it waits for live PIDs —
-            # the bounded-drain assertion must not race stub startup.
-            saq_command = 'trap "" TERM; : > "$WORKER_STUB_READY_DIR/$2.ready"; exec sleep 300'
-        else:
-            saq_command = "exec sleep 300"
+        # The marker is written only AFTER the TERM-ignoring trap is in place.
+        # The wrapper writes the PID file before this stub even starts, so
+        # PID-file readiness alone delivers SIGTERM while the stub still has
+        # the default disposition: the worker dies with `code=143` and the
+        # entrypoint takes the `complete` branch instead of the deadline path
+        # under test (CI run 40075008826). Readiness waits for the marker for
+        # the same reason it waits for live PIDs — the bounded-drain assertion
+        # must not race stub startup.
+        saq_command = 'trap "" TERM; : > "$WORKER_STUB_READY_DIR/$2.ready"; exec sleep 300' if self.ignore_term else "exec sleep 300"
         python_stub = f"""#!/bin/bash
 if [ "$1" = "-m" ]; then
   case "$2" in
@@ -238,11 +217,7 @@ exit 0
         assert self.proc is not None
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if (
-                "WORKER_READY" in self.log_path.read_text(encoding="utf-8")
-                and self._workers_registered()
-                and self._worker_traps_installed()
-            ):
+            if "WORKER_READY" in self.log_path.read_text(encoding="utf-8") and self._workers_registered() and self._worker_traps_installed():
                 return True
             if self.proc.poll() is not None:
                 return False
@@ -278,16 +253,25 @@ exit 0
     def cleanup(self) -> None:
         """Kill this harness's own session (never a global process kill)."""
         assert self.proc is not None
-        try:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
+        if sys.platform != "win32":
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+        else:
+            try:
+                self.proc.kill()
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
         self._log_handle.close()
 
 
 @needs_bash
+@needs_unix
 def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Path) -> None:
     """SIGTERM must reach the SAQ workers and the entrypoint must exit cleanly.
 
@@ -306,21 +290,16 @@ def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Pat
 
         assert rc == 0, f"entrypoint exited {rc}:\n{log}"
         assert elapsed < 15, f"drain took {elapsed:.1f}s with responsive workers:\n{log}"
-        assert log.count("WORKER_DRAIN: begin") == 1, (
-            "the SIGTERM handler ran more than once — the trap is re-signalling its own shell:\n" + log
-        )
+        assert log.count("WORKER_DRAIN: begin") == 1, "the SIGTERM handler ran more than once — the trap is re-signalling its own shell:\n" + log
         assert "WORKER_DRAIN: complete" in log, log
-        assert "SAQ runs worker drained — not restarting (worker shutdown requested)" in log, (
-            "the runs crash-guard wrapper restarted a worker during the drain:\n" + log
-        )
-        assert "SAQ system worker drained — not restarting (worker shutdown requested)" in log, (
-            "the system crash-guard wrapper restarted a worker during the drain:\n" + log
-        )
+        assert "SAQ runs worker drained — not restarting (worker shutdown requested)" in log, "the runs crash-guard wrapper restarted a worker during the drain:\n" + log
+        assert "SAQ system worker drained — not restarting (worker shutdown requested)" in log, "the system crash-guard wrapper restarted a worker during the drain:\n" + log
     finally:
         harness.cleanup()
 
 
 @needs_bash
+@needs_unix
 def test_entrypoint_drain_is_bounded_when_a_worker_ignores_sigterm(tmp_path: Path) -> None:
     """A wedged worker must not hang the stop past the drain deadline."""
     harness = _EntrypointHarness(tmp_path, deadline_s=2, ignore_term=True)

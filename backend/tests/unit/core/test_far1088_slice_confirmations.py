@@ -145,10 +145,7 @@ class TestHealthyRunNeverSelectedByNodelessMachinery:
             ).compile(compile_kwargs={"literal_binds": True})
         )
 
-        assert (
-            "runs.status = 'running' AND runs.dispatcher = 'saq' "
-            "AND runs.heartbeat_at < now() - 300 * interval '1 second'"
-        ) in sql
+        assert ("runs.status = 'running' AND runs.dispatcher = 'saq' AND runs.heartbeat_at < now() - 300 * interval '1 second'") in sql
 
 
 # ---------------------------------------------------------------------------
@@ -316,9 +313,7 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
             started_minutes_ago=started_minutes_ago,
             heartbeat_minutes_ago=0.5,  # executor alive — only the nodeless branch matches
         )
-        row.dispatched_at = datetime.now(UTC) - timedelta(
-            minutes=started_minutes_ago if dispatched_minutes_ago is None else dispatched_minutes_ago
-        )
+        row.dispatched_at = datetime.now(UTC) - timedelta(minutes=started_minutes_ago if dispatched_minutes_ago is None else dispatched_minutes_ago)
         row.sandbox_dispatch_state = json.dumps(
             {"state": "dispatching", "attempt_key": "att-1", "provider": "e2b"},
         )
@@ -427,11 +422,7 @@ class TestInFlightDispatchExcludedFromNodelessBackstop:
 
         Fails without F3: the leg compared ``runs.started_at`` directly.
         """
-        sql = str(
-            sa.select(Run.id)
-            .where(ch._nodeless_zombie_predicate(35))
-            .compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
-        )
+        sql = str(sa.select(Run.id).where(ch._nodeless_zombie_predicate(35)).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
         assert "greatest(runs.started_at, coalesce(runs.dispatched_at, runs.started_at))" in sql
 

@@ -115,9 +115,7 @@ class TestResourceNodeScopeEnforcement(AuthContext):
         _RESOURCE_CASES,
         ids=[case[0] for case in _RESOURCE_CASES],
     )
-    async def test_out_of_scope_resource_read_is_denied(
-        self, uri: str, tool: str, handler, kwargs: dict[str, str]
-    ) -> None:
+    async def test_out_of_scope_resource_read_is_denied(self, uri: str, tool: str, handler, kwargs: dict[str, str]) -> None:
         """A node scope excluding the duplicated tool denies the resource read.
 
         ``_session`` raises if entered, proving the refusal happens on the

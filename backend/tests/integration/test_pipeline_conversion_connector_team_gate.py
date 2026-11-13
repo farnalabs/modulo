@@ -79,9 +79,7 @@ async def _seed_team(db_engine: AsyncEngine, org_id: uuid.UUID, owner_id: uuid.U
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
     async with factory() as session, session.begin():
         await session.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
-        team = await create_team(
-            session, org_id=org_id, name=f"conv-conn-{label}-{uuid.uuid4().hex[:6]}", account_id=owner_id
-        )
+        team = await create_team(session, org_id=org_id, name=f"conv-conn-{label}-{uuid.uuid4().hex[:6]}", account_id=owner_id)
         return team.id
 
 
@@ -228,13 +226,9 @@ async def _cleanup(
     async with db_engine.begin() as conn:
         await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
         await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
-        await conn.execute(
-            text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(scenario.pipeline_id)}
-        )
+        await conn.execute(text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(scenario.pipeline_id)})
         await conn.execute(text("DELETE FROM runs WHERE pipeline_id = :pid"), {"pid": str(scenario.pipeline_id)})
-        await conn.execute(
-            text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"), {"pid": str(scenario.pipeline_id)}
-        )
+        await conn.execute(text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"), {"pid": str(scenario.pipeline_id)})
         await conn.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(scenario.pipeline_id)})
         for connector_id in (*extra_connector_ids, scenario.connector_id):
             await conn.execute(text("DELETE FROM connector_instances WHERE id = :id"), {"id": str(connector_id)})
@@ -300,11 +294,7 @@ async def _seed_scenario(
             db_engine,
             test_org,
             test_user,
-            connector_type_refs=(
-                [{"connector_type": _GITHUB, "capabilities": ["issue_read"]}]
-                if agent_connector_type_refs is None
-                else agent_connector_type_refs
-            ),
+            connector_type_refs=([{"connector_type": _GITHUB, "capabilities": ["issue_read"]}] if agent_connector_type_refs is None else agent_connector_type_refs),
         )
         created["agents"].append(agent_id)
         backend_id = await _seed_model_backend(db_engine, test_org, test_user)
@@ -345,12 +335,8 @@ async def _cleanup_partial_seed(
             await conn.execute(text("SELECT set_config('app.organisation_id', :oid, true)"), {"oid": str(org_id)})
             await conn.execute(text("SELECT set_config('app.execution_context', 'true', true)"))
             for pipeline_id in created["pipelines"]:
-                await conn.execute(
-                    text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)}
-                )
-                await conn.execute(
-                    text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)}
-                )
+                await conn.execute(text("DELETE FROM pipeline_snapshots WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
+                await conn.execute(text("DELETE FROM pipeline_edges WHERE pipeline_id = :pid"), {"pid": str(pipeline_id)})
                 await conn.execute(text("DELETE FROM pipelines WHERE id = :id"), {"id": str(pipeline_id)})
             for connector_id in created["connectors"]:
                 await conn.execute(text("DELETE FROM connector_instances WHERE id = :id"), {"id": str(connector_id)})
@@ -471,9 +457,7 @@ async def test_rejection_comes_from_the_enforcement_itself(
                 headers=_auth_headers(test_org, test_user, role="admin"),
                 timeout=30.0,
             )
-        assert resp.status_code != 409, (
-            f"the cross-team 409 survived the enforcement being removed - it is coming from somewhere else: {resp.text}"
-        )
+        assert resp.status_code != 409, f"the cross-team 409 survived the enforcement being removed - it is coming from somewhere else: {resp.text}"
         assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         await _cleanup(db_engine, test_org, scenario)
@@ -508,9 +492,7 @@ async def test_org_visibility_connector_on_team_pipeline_is_accepted(
             headers=_auth_headers(test_org, test_user, role="admin"),
             timeout=30.0,
         )
-        assert resp.status_code != 409, (
-            f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
-        )
+        assert resp.status_code != 409, f"team pipeline + org-visibility connector must not be a connector_team_mismatch: {resp.text}"
         assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         await _cleanup(db_engine, test_org, scenario, org_connector)
@@ -538,9 +520,7 @@ async def test_org_pipeline_with_org_connector_is_accepted(
             headers=_auth_headers(test_org, test_user, role="admin"),
             timeout=30.0,
         )
-        assert resp.status_code != 409, (
-            f"org pipeline + org connector must not be a connector_team_mismatch: {resp.text}"
-        )
+        assert resp.status_code != 409, f"org pipeline + org connector must not be a connector_team_mismatch: {resp.text}"
         assert "connector_team_mismatch" not in str(resp.json().get("detail", "")), resp.text
     finally:
         await _cleanup(db_engine, test_org, scenario, org_connector)

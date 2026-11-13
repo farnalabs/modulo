@@ -168,9 +168,7 @@ async def test_exec_stream_unknown_ref_raises(monkeypatch: pytest.MonkeyPatch) -
 # ---------------------------------------------------------------------------
 
 
-def _fake_process(
-    chunks: list[ExecStreamChunk], *, delay: float = 0.0, error: str | None = None
-) -> tuple[ExecProcess, dict[str, bool]]:
+def _fake_process(chunks: list[ExecStreamChunk], *, delay: float = 0.0, error: str | None = None) -> tuple[ExecProcess, dict[str, bool]]:
     killed: dict[str, bool] = {"killed": False}
 
     async def _chunks():
@@ -212,9 +210,7 @@ async def test_consume_collects_all_chunks() -> None:
 
 async def test_consume_deadline_kills_and_reports_timeout() -> None:
     process, killed = _fake_process([ExecStreamChunk(stream="stdout", data="x")], delay=10.0)
-    collected, timed_out, _stalled = await _consume_stream(
-        process, node_id="n", sandbox_timeout=0.1, stall_timeout=10.0
-    )
+    collected, timed_out, _stalled = await _consume_stream(process, node_id="n", sandbox_timeout=0.1, stall_timeout=10.0)
     assert timed_out is True
     assert collected == []
     assert killed["killed"]
@@ -252,9 +248,7 @@ async def test_consume_publishes_live_chunks_throttled() -> None:
 
 
 async def test_consume_stream_error_sets_process_error_for_caller() -> None:
-    process, _ = _fake_process(
-        [ExecStreamChunk(stream="stdout", data="partial")], error="ConnectionResetError: dropped"
-    )
+    process, _ = _fake_process([ExecStreamChunk(stream="stdout", data="partial")], error="ConnectionResetError: dropped")
     collected, timed_out, _stalled = await _consume_stream(process, node_id="n", sandbox_timeout=5.0, stall_timeout=3.0)
     assert timed_out is False
     assert collected == [("stdout", "partial")]

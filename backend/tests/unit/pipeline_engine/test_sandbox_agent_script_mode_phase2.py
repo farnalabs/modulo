@@ -359,9 +359,7 @@ def test_failure_event_matches_still_retries_llm_mode_schema_validation():
 
 def test_failure_event_matches_still_retries_llm_mode_and_preclaim():
     """LLM-mode / pre-claim retryable codes still retry on a ``failure`` event."""
-    assert (
-        _failure_event_matches({"failure"}, "failed", "SandboxNodeFailedError", "sandbox.no_output_json", None) is True
-    )
+    assert _failure_event_matches({"failure"}, "failed", "SandboxNodeFailedError", "sandbox.no_output_json", None) is True
 
 
 def test_script_mode_schema_failure_never_retried():
@@ -395,9 +393,7 @@ def test_retry_after_policy_never_retries_script_post_claim_schema_failure():
     script whose process already started could double-execute a side effect.
     """
     policy = {"on": ["failure"], "max_retries": 3}
-    script_failure = _failure_event_matches(
-        {"failure"}, "failed", "ScriptInvalidOutputError", "script.invalid_output", None
-    )
+    script_failure = _failure_event_matches({"failure"}, "failed", "ScriptInvalidOutputError", "script.invalid_output", None)
     assert script_failure is False
     assert _retry_after_policy(policy, "failed", "ScriptInvalidOutputError") is None
     assert _retry_after_policy(policy, "failed", "script.invalid_output") is None

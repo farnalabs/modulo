@@ -164,9 +164,7 @@ _ACCOUNTS_GRANTS: tuple[str, ...] = (
     'GRANT SELECT, INSERT, DELETE ON public.accounts TO "modulo_app"',
     'REVOKE UPDATE ON public.accounts FROM "modulo_app"',
     "REVOKE UPDATE ON public.accounts FROM PUBLIC",
-    "GRANT UPDATE (email, display_name, password_hash, active, auth_provider, "
-    "sso_subject, preferences, last_login, is_system_admin, updated_at) "
-    'ON public.accounts TO "modulo_app"',
+    'GRANT UPDATE (email, display_name, password_hash, active, auth_provider, sso_subject, preferences, last_login, is_system_admin, updated_at) ON public.accounts TO "modulo_app"',
     'GRANT SELECT, INSERT ON public.accounts TO "modulo_breakglass"',
     'ALTER TABLE public.accounts OWNER TO "modulo_migrate"',
 )
@@ -205,11 +203,7 @@ async def _fk_exists(conn: asyncpg.Connection, child: str, constraint: str) -> b
     """Return True when the FK constraint exists on the given child table."""
     return bool(
         await conn.fetchval(
-            "SELECT 1 FROM pg_constraint c "
-            "JOIN pg_class rel ON rel.oid = c.conrelid "
-            "JOIN pg_namespace n ON n.oid = rel.relnamespace "
-            "WHERE c.conname = $1 AND c.contype = 'f' "
-            "AND n.nspname = 'public' AND rel.relname = $2",
+            "SELECT 1 FROM pg_constraint c JOIN pg_class rel ON rel.oid = c.conrelid JOIN pg_namespace n ON n.oid = rel.relnamespace WHERE c.conname = $1 AND c.contype = 'f' AND n.nspname = 'public' AND rel.relname = $2",
             constraint,
             child,
         )
@@ -243,9 +237,7 @@ async def _run_fk_probe(conn: asyncpg.Connection) -> tuple[bool, str]:
     """
     await conn.execute("DROP TABLE IF EXISTS public._fk_probe")
     try:
-        await conn.execute(
-            "CREATE TABLE public._fk_probe (id uuid PRIMARY KEY, account_id uuid REFERENCES public.accounts (id))"
-        )
+        await conn.execute("CREATE TABLE public._fk_probe (id uuid PRIMARY KEY, account_id uuid REFERENCES public.accounts (id))")
     except Exception as exc:
         return False, f"FK probe FAILED at CREATE (corrupt catalog signature): {exc}"
     try:
@@ -257,9 +249,7 @@ async def _run_fk_probe(conn: asyncpg.Connection) -> tuple[bool, str]:
             )
             return True, "FK probe passed (valid account id accepted by the FK check)"
         try:
-            await conn.execute(
-                "INSERT INTO public._fk_probe (id, account_id) VALUES (gen_random_uuid(), gen_random_uuid())"
-            )
+            await conn.execute("INSERT INTO public._fk_probe (id, account_id) VALUES (gen_random_uuid(), gen_random_uuid())")
         except asyncpg.exceptions.ForeignKeyViolationError:
             return True, "FK probe passed (empty accounts: FK violation correctly raised)"
         return False, "FK probe FAILED: missing account id did not raise an FK violation"
@@ -316,9 +306,7 @@ def _canonical_constraint_name(contype: str, definition: str) -> str | None:
         return "accounts_email_key"
     if contype == "c" and "auth_provider" in definition:
         return "ck_accounts_auth_provider"
-    if contype == "c" and any(
-        token in definition for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")
-    ):
+    if contype == "c" and any(token in definition for token in ("is_break_glass", "break_glass_expires_at", "break_glass_deactivated_at")):
         return "ck_accounts_break_glass_expiry"
     return None
 
@@ -399,11 +387,7 @@ async def _cmd_rebuild(conn: asyncpg.Connection, confirmed: bool = False) -> int
     if await conn.fetchval("SELECT to_regclass('public.accounts')") is None:
         print("ERROR: public.accounts does not exist - nothing to rebuild.")
         return 1
-    existing = [
-        f"{child}.{constraint}"
-        for child, constraint, _fk_column, _on_delete in ACCOUNTS_FKS
-        if await _fk_exists(conn, child, constraint)
-    ]
+    existing = [f"{child}.{constraint}" for child, constraint, _fk_column, _on_delete in ACCOUNTS_FKS if await _fk_exists(conn, child, constraint)]
     if existing:
         print("ERROR: FKs referencing accounts still exist - drop them before rebuilding:")
         for name in existing:
@@ -462,8 +446,7 @@ async def _add_one_fk(
     if await conn.fetchval("SELECT to_regclass($1)", f"public.{child}") is None:
         return "missing", f"{label}: child table missing"
     if not await conn.fetchval(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
+        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
         child,
         fk_column,
     ):
@@ -472,10 +455,7 @@ async def _add_one_fk(
     orphans = await conn.fetchval(_orphan_count_sql(child, fk_column))
     if orphans:
         return "orphan", f"{label}: {orphans} orphaned row(s) in {fk_column} - resolve before adding"
-    await conn.execute(
-        f"ALTER TABLE {_q(child)} ADD CONSTRAINT {_q(constraint)} "
-        f"FOREIGN KEY ({_q(fk_column)}) REFERENCES public.accounts (id) ON DELETE {on_delete}"
-    )
+    await conn.execute(f"ALTER TABLE {_q(child)} ADD CONSTRAINT {_q(constraint)} FOREIGN KEY ({_q(fk_column)}) REFERENCES public.accounts (id) ON DELETE {on_delete}")
     return "added", label
 
 

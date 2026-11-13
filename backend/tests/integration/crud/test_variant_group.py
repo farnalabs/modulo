@@ -147,8 +147,7 @@ async def _create_test_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, test_
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, graph_nodes_json) VALUES (:id, :org_id, :name, :uid, '{}'::json, '[]'::json)",
             ),
             {"id": str(pipeline_id), "org_id": str(org_id), "name": pipeline_name, "uid": str(test_user)},
         )
@@ -323,9 +322,7 @@ async def test_coverage_gaps_detects_missing_evals(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO evals "
-                "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'model_judge', '{}'::json, :uid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) VALUES (:id, :org_id, :pipeline_id, :name, 'model_judge', '{}'::json, :uid)",
             ),
             {
                 "id": str(eval_id),
@@ -369,9 +366,7 @@ async def test_no_coverage_gaps_when_all_evals_present(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO evals "
-                "(id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
-                "VALUES (:id, :org_id, :pipeline_id, :name, 'model_judge', '{}'::json, :uid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) VALUES (:id, :org_id, :pipeline_id, :name, 'model_judge', '{}'::json, :uid)",
             ),
             {
                 "id": str(eval_id),

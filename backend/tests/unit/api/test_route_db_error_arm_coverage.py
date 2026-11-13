@@ -76,19 +76,11 @@ async def test_programming_error_arms_answer_501(monkeypatch: pytest.MonkeyPatch
     session = _RaisingSession(_programming_error())
 
     await _assert_status(admin_email.admin_get_email_settings(org_id=_ORG_ID, _=_principal(), session=session), 501)
-    await _assert_status(
-        admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=session), 501
-    )
+    await _assert_status(admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=session), 501)
     await _assert_status(api_keys.list_api_keys_endpoint(session=session, principal=_tenant()), 501)
-    await _assert_status(
-        environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=session, principal=_tenant()), 501
-    )
-    await _assert_status(
-        error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 501
-    )
-    await _assert_status(
-        error_forwarder_config.restore_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 501
-    )
+    await _assert_status(environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=session, principal=_tenant()), 501)
+    await _assert_status(error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 501)
+    await _assert_status(error_forwarder_config.restore_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 501)
     await _assert_status(
         mcp_oauth.register_oauth_client(
             req=SimpleNamespace(scopes=["read"], redirect_uris=["https://x/cb"], name="c"),
@@ -100,9 +92,7 @@ async def test_programming_error_arms_answer_501(monkeypatch: pytest.MonkeyPatch
     )
     await _assert_status(mcp_oauth.list_oauth_clients_endpoint(session=session, principal=_tenant()), 501)
     await _assert_status(mcp_oauth.remove_oauth_client(client_id="c", session=session, principal=_tenant()), 501)
-    await _assert_status(
-        mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 501
-    )
+    await _assert_status(mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 501)
     await _assert_status(mcp_oauth.consent_context(state="s", session=session), 501)
     await _assert_status(webhooks.cleanup_expired(session=session, principal=_tenant()), 501)
 
@@ -112,19 +102,11 @@ async def test_transient_sqlalchemy_error_arms_answer_503(monkeypatch: pytest.Mo
     session = _RaisingSession(_transient_error())
 
     await _assert_status(admin_email.admin_get_email_settings(org_id=_ORG_ID, _=_principal(), session=session), 503)
-    await _assert_status(
-        admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=session), 503
-    )
+    await _assert_status(admin_tiers.list_tiers_endpoint(settings=_settings(), current_user=_tenant(), session=session), 503)
     await _assert_status(api_keys.list_api_keys_endpoint(session=session, principal=_tenant()), 503)
-    await _assert_status(
-        environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=session, principal=_tenant()), 503
-    )
-    await _assert_status(
-        error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 503
-    )
-    await _assert_status(
-        error_forwarder_config.restore_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 503
-    )
+    await _assert_status(environment_profiles.restore_profile(profile_id=uuid.uuid4(), session=session, principal=_tenant()), 503)
+    await _assert_status(error_forwarder_config.delete_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 503)
+    await _assert_status(error_forwarder_config.restore_forwarder(forwarder_type="sentry", session=session, principal=_tenant()), 503)
     await _assert_status(
         mcp_oauth.register_oauth_client(
             req=SimpleNamespace(scopes=["read"], redirect_uris=["https://x/cb"], name="c"),
@@ -136,9 +118,7 @@ async def test_transient_sqlalchemy_error_arms_answer_503(monkeypatch: pytest.Mo
     )
     await _assert_status(mcp_oauth.list_oauth_clients_endpoint(session=session, principal=_tenant()), 503)
     await _assert_status(mcp_oauth.remove_oauth_client(client_id="c", session=session, principal=_tenant()), 503)
-    await _assert_status(
-        mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 503
-    )
+    await _assert_status(mcp_oauth.approve_consent(req=SimpleNamespace(state="s"), session=session, principal=_tenant()), 503)
     await _assert_status(mcp_oauth.consent_context(state="s", session=session), 503)
     await _assert_status(webhooks.cleanup_expired(session=session, principal=_tenant()), 503)
 

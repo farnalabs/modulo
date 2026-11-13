@@ -59,10 +59,7 @@ async def _create_account(engine: AsyncEngine, label: str) -> uuid.UUID:
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(acc_id),
                 "email": f"uski-{label}-{acc_id.hex[:12]}@example.com",

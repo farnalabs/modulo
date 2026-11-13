@@ -127,9 +127,7 @@ class TestMcpBaseSurface:
         assert base["enqueue_failed_at"] is None
 
     def test_base_payload_nulls_when_unset(self) -> None:
-        base = _run_status_base(
-            _run_row(dispatcher=None, dispatched_at=None, dispatch_phase=None, claim_count=0, enqueue_failed_at=None)
-        )
+        base = _run_status_base(_run_row(dispatcher=None, dispatched_at=None, dispatch_phase=None, claim_count=0, enqueue_failed_at=None))
         assert base["dispatcher"] is None
         assert base["dispatched_at"] is None
         assert base["dispatch_phase"] is None

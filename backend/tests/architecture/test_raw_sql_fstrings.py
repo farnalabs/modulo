@@ -42,7 +42,4 @@ def test_no_raw_sql_fstrings():
         for i, line in enumerate(content.splitlines(), 1):
             if RAWSQL_CALLS.search(line):
                 violations.append(f"  {path.relative_to(SRC)}:{i}  {line.strip()[:100]}")
-    assert not violations, (
-        f"Found {len(violations)} raw f-string SQL text() calls (SQL injection risk).\n"
-        "Use parameterized queries: text('... :param ...').bindparams(param=value)\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} raw f-string SQL text() calls (SQL injection risk).\nUse parameterized queries: text('... :param ...').bindparams(param=value)\n" + "\n".join(violations)

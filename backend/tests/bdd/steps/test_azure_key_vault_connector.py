@@ -53,14 +53,9 @@ def akv_health_check(ctx: dict) -> None:
 
     connector = ctx["connector"]
     assert isinstance(connector, AzureKeyVaultConnector)
-    if ctx["credentials_valid"]:
-        response = httpx.Response(200, json={"value": []})
-    else:
-        response = httpx.Response(401, text="Unauthorized")
+    response = httpx.Response(200, json={"value": []}) if ctx["credentials_valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
-        respx.get(f"{VAULT_URL}/secrets", params={"api-version": _API_VERSION, "maxresults": 1}).mock(
-            return_value=response
-        )
+        respx.get(f"{VAULT_URL}/secrets", params={"api-version": _API_VERSION, "maxresults": 1}).mock(return_value=response)
         result = asyncio.run(connector.health_check())
     ctx["health_result"] = result
 
@@ -81,9 +76,7 @@ def akv_query_secrets(ctx: dict) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"value": [{"id": f"{VAULT_URL}/secrets/secret1", "attributes": {"enabled": True}}]}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/secrets", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/secrets", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="secrets")))
     ctx["records"] = result.records
     assert ctx["records"], "no secret records returned"
@@ -98,9 +91,7 @@ def akv_query_secret(ctx: dict, name: str) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"value": "my-secret-value", "id": f"{VAULT_URL}/secrets/{name}"}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="secret", filters={"name": name})))
     ctx["records"] = result.records
     assert ctx["records"], f"no record returned for secret {name!r}"
@@ -115,9 +106,7 @@ def akv_query_keys(ctx: dict) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"value": [{"kid": f"{VAULT_URL}/keys/key1", "attributes": {"enabled": True}}]}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/keys", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/keys", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="keys")))
     ctx["records"] = result.records
     assert ctx["records"], "no key records returned"
@@ -132,9 +121,7 @@ def akv_query_key(ctx: dict, name: str) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"key": {"kid": f"{VAULT_URL}/keys/{name}", "kty": "RSA"}}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/keys/{name}", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/keys/{name}", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="key", filters={"name": name})))
     ctx["records"] = result.records
     assert ctx["records"], f"no record returned for key {name!r}"
@@ -149,9 +136,7 @@ def akv_query_certificates(ctx: dict) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"value": [{"id": f"{VAULT_URL}/certificates/cert1"}]}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/certificates", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/certificates", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="certificates")))
     ctx["records"] = result.records
     assert ctx["records"], "no certificate records returned"
@@ -166,9 +151,7 @@ def akv_query_certificate(ctx: dict, name: str) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"id": f"{VAULT_URL}/certificates/{name}", "policy": {"x509_props": {"subject": "CN=test"}}}
     with respx.mock:
-        respx.get(f"{VAULT_URL}/certificates/{name}", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{VAULT_URL}/certificates/{name}", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.query(ConnectorQuery(resource="certificate", filters={"name": name})))
     ctx["records"] = result.records
     assert ctx["records"], f"no record returned for certificate {name!r}"
@@ -183,9 +166,7 @@ def akv_create_secret(ctx: dict, name: str, value: str) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"id": f"{VAULT_URL}/secrets/{name}", "value": value, "attributes": {"enabled": True}}
     with respx.mock:
-        respx.put(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.put(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.write(ConnectorPayload(resource="secret", data={"name": name, "value": value})))
     ctx["write_result"] = result
     assert result["value"] == value, result
@@ -200,9 +181,7 @@ def akv_delete_secret(ctx: dict, name: str) -> None:
     assert isinstance(connector, AzureKeyVaultConnector)
     body = {"id": f"{VAULT_URL}/secrets/{name}", "recoveryId": f"{VAULT_URL}/deletedsecrets/{name}"}
     with respx.mock:
-        respx.delete(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.delete(f"{VAULT_URL}/secrets/{name}", params={"api-version": _API_VERSION}).mock(return_value=httpx.Response(200, json=body))
         result = asyncio.run(connector.write(ConnectorPayload(resource="secret_delete", data={"name": name})))
     ctx["write_result"] = result
     assert "recoveryId" in result, result

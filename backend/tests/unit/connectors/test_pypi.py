@@ -63,9 +63,7 @@ async def test_query_package_version(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="package_version", filters={"package": "requests", "version": "2.31.0"})
-    )
+    result = await connector.query(ConnectorQuery(resource="package_version", filters={"package": "requests", "version": "2.31.0"}))
     assert len(result.records) == 1
     assert result.records[0]["info"]["version"] == "2.31.0"
 
@@ -169,9 +167,7 @@ async def test_query_package_files(connector):
             },
         ),
     )
-    result = await connector.query(
-        ConnectorQuery(resource="package_files", filters={"package": "requests", "version": "2.31.0"})
-    )
+    result = await connector.query(ConnectorQuery(resource="package_files", filters={"package": "requests", "version": "2.31.0"}))
     assert len(result.records) == 2
     assert result.total == 2
     assert result.records[0]["filename"] == "requests-2.31.0.tar.gz"

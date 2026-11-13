@@ -357,9 +357,7 @@ def check_filtered_by_user(request, user_id: str) -> None:
     data = request.node._resp.json()
     items = data.get("items", data)
     for e in items:
-        assert e["actor_user_id"] == user_id.strip('"'), (
-            f"Expected actor_user_id '{user_id}', got '{e['actor_user_id']}'"
-        )
+        assert e["actor_user_id"] == user_id.strip('"'), f"Expected actor_user_id '{user_id}', got '{e['actor_user_id']}'"
 
 
 @then(parsers.parse("the response contains full details for {count:d} events"))

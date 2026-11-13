@@ -168,9 +168,7 @@ class TestOldFormatKeyStillBehavesExactlyAsBefore:
 
 
 class TestSignedStartsAtClaim:
-    def test_chosen_start_round_trips_and_computes_the_expiry_from_it(
-        self, kp: dict[str, str], frozen_now: datetime
-    ) -> None:
+    def test_chosen_start_round_trips_and_computes_the_expiry_from_it(self, kp: dict[str, str], frozen_now: datetime) -> None:
         start = frozen_now + timedelta(days=60)
 
         key = generate_team_license(
@@ -189,9 +187,7 @@ class TestSignedStartsAtClaim:
         # express when the window opens.
         assert data.issued_at == frozen_now.isoformat()
 
-    def test_a_naive_starts_at_claim_is_rejected_not_read_as_local(
-        self, kp: dict[str, str], frozen_now: datetime
-    ) -> None:
+    def test_a_naive_starts_at_claim_is_rejected_not_read_as_local(self, kp: dict[str, str], frozen_now: datetime) -> None:
         key = _sign(
             {
                 "tier": "team",
@@ -293,9 +289,7 @@ class TestMalformedStartsAtClaims:
         assert validation.license_data is not None
         assert validation.license_data.starts_at == "2027-01-01T00:00:00+00:00"
 
-    def test_an_unparseable_expiry_is_reported_by_the_expiry_check_not_the_window_check(
-        self, kp: dict[str, str]
-    ) -> None:
+    def test_an_unparseable_expiry_is_reported_by_the_expiry_check_not_the_window_check(self, kp: dict[str, str]) -> None:
         validation = self._validation(kp, starts_at="2027-01-01T00:00:00+00:00", expires_at="not-a-date")
 
         assert validation.valid is False
@@ -430,9 +424,7 @@ class TestLadderHonoursStartsAt:
     window begins — and must apply it automatically once the start arrives.
     """
 
-    def test_a_configured_future_key_is_not_applied_before_its_start(
-        self, kp: dict[str, str], frozen_now: datetime, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_configured_future_key_is_not_applied_before_its_start(self, kp: dict[str, str], frozen_now: datetime, monkeypatch: pytest.MonkeyPatch) -> None:
         from farna.core.feature_flags import resolve_effective_license
 
         start = frozen_now + timedelta(days=30)
@@ -452,9 +444,7 @@ class TestLadderHonoursStartsAt:
         assert resolved is not None
         assert resolved.starts_at == start.isoformat()
 
-    def test_an_active_in_memory_licence_survives_a_future_configured_key(
-        self, kp: dict[str, str], frozen_now: datetime
-    ) -> None:
+    def test_an_active_in_memory_licence_survives_a_future_configured_key(self, kp: dict[str, str], frozen_now: datetime) -> None:
         from farna.core.feature_flags import resolve_effective_license
 
         active = _licence(expires_at="2999-01-01T00:00:00+00:00")

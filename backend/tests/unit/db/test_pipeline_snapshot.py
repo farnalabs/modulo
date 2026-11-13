@@ -589,9 +589,7 @@ async def test_snapshot_lock_retry_succeeds_when_lock_frees_within_budget() -> N
     assert session.execute.await_count == 6
     # Render with the Postgres dialect: the generic ``str()`` compiler downgrades
     # ``FOR NO KEY UPDATE`` to ``FOR UPDATE`` and would hide the lock mode.
-    session_lock_sql = [
-        str(call.args[0].compile(dialect=postgresql.dialect())) for call in session.execute.call_args_list
-    ]
+    session_lock_sql = [str(call.args[0].compile(dialect=postgresql.dialect())) for call in session.execute.call_args_list]
     assert any("FOR NO KEY UPDATE" in sql for sql in session_lock_sql)
     assert not any("pg_try_advisory_lock" in sql for sql in session_lock_sql)
     assert not any("pg_advisory_xact_lock" in sql for sql in session_lock_sql)
@@ -838,9 +836,7 @@ async def test_dedicated_lock_engine_is_null_pool_and_cached_per_url() -> None:
 
             assert lock_engine is not source
             assert isinstance(lock_engine.pool, NullPool)
-            assert lock_engine.url.render_as_string(hide_password=False) == source.url.render_as_string(
-                hide_password=False
-            )
+            assert lock_engine.url.render_as_string(hide_password=False) == source.url.render_as_string(hide_password=False)
             # Cached per URL — a second resolution returns the same engine.
             assert _dedicated_lock_engine(source) is lock_engine
             # A different database gets its own lock engine (its own locks).
@@ -1469,9 +1465,7 @@ def _write_model_class_registry(tmp_path: Any, payload: dict[str, Any]) -> str:
     return str(path)
 
 
-async def test_mint_bakes_model_class_resolution_for_run_snapshots(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_mint_bakes_model_class_resolution_for_run_snapshots(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolution is provably AT MINT: the run snapshot's node metadata carries
     the baked `_resolved_model` + `_model_origin`, so every later render (and
     replay) reads the SNAPSHOT — not the live registry."""

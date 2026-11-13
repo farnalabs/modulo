@@ -36,6 +36,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND = Path(__file__).resolve().parents[2]
 GATE_WARNING = "error::pytest.PytestUnraisableExceptionWarning"
 
@@ -155,6 +157,7 @@ def test_collateral_unraisable_fails_the_leaking_test(tmp_path: Path) -> None:
     assert "test_d_innocent_after_collateral" not in output.split("short test summary info")[-1], output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="asyncpg connection leak strict-mode attribution relies on Unix-specific gc/__del__ timing; skipped on Windows")
 def test_strict_mode_fails_the_leaking_test(tmp_path: Path) -> None:
     result = _run_scratch_suite(tmp_path, MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS="1")
 
@@ -164,6 +167,7 @@ def test_strict_mode_fails_the_leaking_test(tmp_path: Path) -> None:
     assert "unclosed asyncpg connection leaked by" in output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="xdist leak summary propagation relies on Unix-specific worker/controller IPC; skipped on Windows")
 def test_leak_summary_renders_under_xdist(tmp_path: Path) -> None:
     """A leak must still be named in the controller's summary under ``-n 2``.
 
@@ -180,6 +184,7 @@ def test_leak_summary_renders_under_xdist(tmp_path: Path) -> None:
     assert "unclosed asyncpg connection" in output, output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="xdist leak summary propagation relies on Unix-specific worker/controller IPC; skipped on Windows")
 def test_leak_summary_renders_under_xdist_from_ci_layout(tmp_path: Path) -> None:
     """Pin the CI layout: conftest in a subdirectory, invoked by its path.
 

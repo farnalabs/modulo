@@ -55,11 +55,7 @@ async def _seed_run(
     try:
         async with eng.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                    "run_context_defaults, visibility, max_concurrent_runs, retry_policy, deleted_at) "
-                    "VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5, '{}'::jsonb, NULL)"
-                ),
+                text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, run_context_defaults, visibility, max_concurrent_runs, retry_policy, deleted_at) VALUES (:id, :oid, :uid, :pname, '[]'::json, '{}'::json, 'org', 5, '{}'::jsonb, NULL)"),
                 {"id": str(pipeline_id), "oid": str(org_id), "uid": str(account_id), "pname": pipeline_name},
             )
             await conn.execute(
@@ -106,11 +102,7 @@ async def _read_count(db_engine: AsyncEngine, run_id: uuid.UUID) -> int:
     eng = create_async_engine(db_engine.url.render_as_string(hide_password=False), poolclass=NullPool)
     try:
         async with eng.connect() as conn:
-            value = (
-                await conn.execute(
-                    text("SELECT execution_attempt_count FROM runs WHERE id = :rid"), {"rid": str(run_id)}
-                )
-            ).scalar_one()
+            value = (await conn.execute(text("SELECT execution_attempt_count FROM runs WHERE id = :rid"), {"rid": str(run_id)})).scalar_one()
         return int(value)
     finally:
         await eng.dispose()
@@ -125,9 +117,7 @@ async def _executor(db_engine: AsyncEngine) -> tuple[PipelineExecutor, AsyncEngi
     return executor, eng
 
 
-async def test_read_retry_attempt_state_reads_the_durable_execution_counter(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_read_retry_attempt_state_reads_the_durable_execution_counter(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """The three counters disagree on purpose: the reader must return the
     execution count (4), not claim_count (9) or node_attempt_count (2)."""
     run_id = await _seed_run(
@@ -148,9 +138,7 @@ async def test_read_retry_attempt_state_reads_the_durable_execution_counter(
     assert token == "tok-current"
 
 
-async def test_load_transient_state_reads_the_durable_execution_counter(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_load_transient_state_reads_the_durable_execution_counter(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """Same assertion for the transient path's reader."""
     run_id = await _seed_run(
         db_engine,
@@ -170,9 +158,7 @@ async def test_load_transient_state_reads_the_durable_execution_counter(
     assert token == "tok-current"
 
 
-async def test_bump_increments_a_running_row_once(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_bump_increments_a_running_row_once(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     run_id = await _seed_run(db_engine, test_org, test_user, execution_attempt_count=0, claim_token="tok-current")
     executor, eng = await _executor(db_engine)
     try:
@@ -185,9 +171,7 @@ async def test_bump_increments_a_running_row_once(
     assert await _read_count(db_engine, run_id) == 1
 
 
-async def test_bump_rejects_a_superseded_claim_token(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_bump_rejects_a_superseded_claim_token(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """A superseded executor must not spend the successor's budget."""
     run_id = await _seed_run(db_engine, test_org, test_user, execution_attempt_count=2, claim_token="tok-successor")
     executor, eng = await _executor(db_engine)
@@ -201,9 +185,7 @@ async def test_bump_rejects_a_superseded_claim_token(
     assert await _read_count(db_engine, run_id) == 2
 
 
-async def test_bump_never_charges_a_capacity_demoted_row(
-    db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_bump_never_charges_a_capacity_demoted_row(db_engine: AsyncEngine, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """A demoted claim never began an execution: status is ``pending``, so the
     fence rejects the bump and the counter stays 0."""
     run_id = await _seed_run(

@@ -75,9 +75,7 @@ class TestFetchManifest:
         assert await client.fetch_manifest() is None
 
     @respx.mock
-    async def test_reuses_single_response_for_parsed_manifest(
-        self, keys: tuple[str, str], client: LibraryClient
-    ) -> None:
+    async def test_reuses_single_response_for_parsed_manifest(self, keys: tuple[str, str], client: LibraryClient) -> None:
         """One round-trip serves the whole parse+verify chain — no refetch.
 
         The response returned by ``_get_validated`` is reused for the JSON
@@ -101,9 +99,7 @@ class TestFetchManifest:
 
 class TestSsrfRejection:
     @respx.mock
-    async def test_fetch_manifest_and_blob_return_none_and_skip_http(
-        self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_fetch_manifest_and_blob_return_none_and_skip_http(self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch) -> None:
         async def _reject(_url: str, **_kwargs: object) -> httpx.AsyncClient:
             raise ValueError("blocked internal address")
 
@@ -111,9 +107,7 @@ class TestSsrfRejection:
 
         manifest_route = respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json={}))
         sha256 = hashlib.sha256(b"payload").hexdigest()
-        blob_route = respx.get(f"{ENDPOINT}/v1/blobs/{sha256}").mock(
-            return_value=httpx.Response(200, content=b"payload")
-        )
+        blob_route = respx.get(f"{ENDPOINT}/v1/blobs/{sha256}").mock(return_value=httpx.Response(200, content=b"payload"))
 
         assert await client.fetch_manifest() is None
         assert await client.fetch_blob(sha256) is None
@@ -123,9 +117,7 @@ class TestSsrfRejection:
 
 class TestClientLifecycle:
     @respx.mock
-    async def test_close_is_idempotent_and_client_is_rebuilt(
-        self, keys: tuple[str, str], client: LibraryClient
-    ) -> None:
+    async def test_close_is_idempotent_and_client_is_rebuilt(self, keys: tuple[str, str], client: LibraryClient) -> None:
         private_key, _ = keys
         manifest = _signed_manifest(private_key)
         respx.get(f"{ENDPOINT}/v1/manifest").mock(return_value=httpx.Response(200, json=manifest))
@@ -159,9 +151,7 @@ class TestClientLifecycle:
         assert second is first
         assert client._http_client is first
 
-    async def test_concurrent_get_client_builds_once(
-        self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_concurrent_get_client_builds_once(self, client: LibraryClient, monkeypatch: pytest.MonkeyPatch) -> None:
         """The ``asyncio.Lock`` guard: concurrent callers share a single build.
 
         Without the lock both tasks observe ``_http_client is None`` across the

@@ -121,9 +121,7 @@ class TestStampedDeadline:
         arithmetic alone would never have fired it."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257StampedPastOrg", "PipeF1257StampedPast"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257StampedPastOrg", "PipeF1257StampedPast")
         await _seed_claim(
             db_engine,
             org_id,
@@ -134,9 +132,7 @@ class TestStampedDeadline:
             terminalize_at=datetime.now(UTC) - timedelta(seconds=30),
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 1
 
         status, code = await _run_state(db_engine, org_id, run_id)
@@ -158,9 +154,7 @@ class TestStampedDeadline:
         single-arm predicate would ship."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257StampedInOrg", "PipeF1257StampedIn"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257StampedInOrg", "PipeF1257StampedIn")
         await _seed_claim(
             db_engine,
             org_id,
@@ -171,9 +165,7 @@ class TestStampedDeadline:
             terminalize_at=datetime.now(UTC) + timedelta(hours=6),
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 0
 
         status, _code = await _run_state(db_engine, org_id, run_id)
@@ -189,9 +181,7 @@ class TestStampedDeadline:
         work no matter how stale its deadline is."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257StampedClaimedOrg", "PipeF1257StampedClaimed"
-        )
+        org_id, user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257StampedClaimedOrg", "PipeF1257StampedClaimed")
         await _seed_claim(
             db_engine,
             org_id,
@@ -203,9 +193,7 @@ class TestStampedDeadline:
             account_id=user_id,
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 0
 
         status, _code = await _run_state(db_engine, org_id, run_id)
@@ -222,9 +210,7 @@ class TestStampedDeadline:
         run is left alone (the FAR-648 multi-gate rule, carried over)."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257MultiStampedOrg", "PipeF1257MultiStamped"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257MultiStampedOrg", "PipeF1257MultiStamped")
         await _seed_claim(
             db_engine,
             org_id,
@@ -244,9 +230,7 @@ class TestStampedDeadline:
             terminalize_at=datetime.now(UTC) + timedelta(hours=6),
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 0
 
         status, _code = await _run_state(db_engine, org_id, run_id)
@@ -265,9 +249,7 @@ class TestLegacyFallback:
         row that fired before the column existed)."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257LegacyPastOrg", "PipeF1257LegacyPast"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257LegacyPastOrg", "PipeF1257LegacyPast")
         await _seed_claim(
             db_engine,
             org_id,
@@ -278,9 +260,7 @@ class TestLegacyFallback:
             terminalize_at=None,
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 1
 
         status, code = await _run_state(db_engine, org_id, run_id)
@@ -297,9 +277,7 @@ class TestLegacyFallback:
         work — the grace knob keeps its shipped meaning on legacy rows."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257LegacyGraceOrg", "PipeF1257LegacyGrace"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257LegacyGraceOrg", "PipeF1257LegacyGrace")
         await _seed_claim(
             db_engine,
             org_id,
@@ -310,9 +288,7 @@ class TestLegacyFallback:
             terminalize_at=None,
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 0
 
         status, _code = await _run_state(db_engine, org_id, run_id)
@@ -329,9 +305,7 @@ class TestLegacyFallback:
         arms are alternatives, not accumulations."""
         from farna.core.cron_helpers import _terminalize_expired_hitl_reviews
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257StampedGraceOrg", "PipeF1257StampedGrace"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257StampedGraceOrg", "PipeF1257StampedGrace")
         await _seed_claim(
             db_engine,
             org_id,
@@ -363,9 +337,7 @@ class TestParkMarginOrdering:
         there first."""
         from farna.core.run_admission import _PARK_MARGIN_FLOOR_SECONDS, park_expired_hitl_runs
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257ParkOrderOrg", "PipeF1257ParkOrder"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257ParkOrderOrg", "PipeF1257ParkOrder")
         await _seed_claim(
             db_engine,
             org_id,
@@ -396,9 +368,7 @@ class TestParkMarginOrdering:
         gate row is untouched (park != decide)."""
         from farna.core.run_admission import park_expired_hitl_runs
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257ParkFireOrg", "PipeF1257ParkFire"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257ParkFireOrg", "PipeF1257ParkFire")
         await _seed_claim(
             db_engine,
             org_id,
@@ -425,9 +395,7 @@ class TestParkMarginOrdering:
         ``expires_at + park_grace`` still parks (shipped behaviour)."""
         from farna.core.run_admission import park_expired_hitl_runs
 
-        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(
-            db_engine, "F1257ParkLegacyOrg", "PipeF1257ParkLegacy"
-        )
+        org_id, _user_id, pipeline_id, run_id = await _seed_awaiting_run(db_engine, "F1257ParkLegacyOrg", "PipeF1257ParkLegacy")
         await _seed_claim(
             db_engine,
             org_id,
@@ -497,9 +465,7 @@ class TestHumanModeGateCoverage:
             terminalize_at=datetime.now(UTC) - timedelta(seconds=30),
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 1
 
         status, code = await _run_state(db_engine, org_id, run_id)
@@ -529,9 +495,7 @@ class TestHumanModeGateCoverage:
             decision="approved",
         )
 
-        count = await _terminalize_count(
-            app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS
-        )
+        count = await _terminalize_count(app_engine, org_id, _terminalize_expired_hitl_reviews, grace_seconds=_GRACE_SECONDS)
         assert count == 0
 
         status, code = await _run_state(db_engine, org_id, run_id)
@@ -541,8 +505,6 @@ class TestHumanModeGateCoverage:
 
 async def _pipeline_id_for_run(db_engine: AsyncEngine, run_id: uuid.UUID) -> uuid.UUID:
     async with db_engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT pipeline_id FROM runs WHERE id = :rid"), {"rid": str(run_id)})
-        ).fetchone()
+        row = (await conn.execute(text("SELECT pipeline_id FROM runs WHERE id = :rid"), {"rid": str(run_id)})).fetchone()
     assert row is not None
     return uuid.UUID(str(row[0]))

@@ -417,9 +417,7 @@ class TestMcpDeleteCutover:
     @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_guardrail_soft_delete_stamps_gate_too(
-        self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock
-    ) -> None:
+    async def test_guardrail_soft_delete_stamps_gate_too(self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock) -> None:
         """Criterion 19   soft-deleting a guardrail eval stamps BOTH the Eval
         row and its live PolicyGate; no hard delete occurs."""
         guardrail = _make_eval(eval_type="guardrail", name="soft-me")
@@ -454,9 +452,7 @@ class TestMcpDeleteCutover:
     @patch("farna.core.audit_logger.append_audit_event", new_callable=AsyncMock)
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_guardrail_soft_delete_without_live_gate(
-        self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock
-    ) -> None:
+    async def test_guardrail_soft_delete_without_live_gate(self, mock_session: AsyncMock, mock_auth: AsyncMock, mock_audit: AsyncMock) -> None:
         """Soft-deleting a guardrail with NO live PolicyGate still succeeds and
         never stamps a gate (chunk 3b: ``gate is None`` arm)."""
         guardrail = _make_eval(eval_type="guardrail", name="no-gate")
@@ -493,9 +489,7 @@ class TestMcpDeleteCutover:
 
     @patch("farna.api.mcp_server.validate_current_auth", return_value=True)
     @patch("farna.api.mcp_server._session")
-    async def test_guardrail_config_violation_returns_validation_failed(
-        self, mock_session: AsyncMock, mock_auth: AsyncMock
-    ) -> None:
+    async def test_guardrail_config_violation_returns_validation_failed(self, mock_session: AsyncMock, mock_auth: AsyncMock) -> None:
         """Criterion 26   config-vocabulary violations surface as the
         ``validation_failed`` error envelope with an actionable detail."""
         bad = _make_eval(eval_type="guardrail", config_json={"action": "explode", "type": "regex"})

@@ -60,9 +60,7 @@ class TestEgressMetricsRecords:
         meter, counters = _storage_meter()
         with patch.object(egress_metrics, "_get_meter", return_value=meter):
             egress_metrics.record_pinned("github", "api.github.com")
-        counters["modulo_egress_pinned_total"].add.assert_called_once_with(
-            1, attributes={"host": "api.github.com", "connector_type": "github"}
-        )
+        counters["modulo_egress_pinned_total"].add.assert_called_once_with(1, attributes={"host": "api.github.com", "connector_type": "github"})
 
     def test_record_rejected_emits_host_connector_and_reason(self) -> None:
         meter, counters = _storage_meter()

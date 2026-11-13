@@ -334,9 +334,7 @@ def _mode_of_a_0600_create(directory: Path) -> int:
     return probe.stat().st_mode & 0o777
 
 
-def test_load_existing_skips_the_mode_check_without_posix_security_bits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_existing_skips_the_mode_check_without_posix_security_bits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No security bits: the mode is never inspected or tightened."""
     path = tmp_path / "secrets.json"
     winner = load_or_create(path)
@@ -362,9 +360,7 @@ def test_load_existing_leaves_an_owner_only_file_untouched(tmp_path: Path, monke
     assert not chmod_calls
 
 
-def test_load_existing_tightens_and_warns_on_an_over_permissive_mode(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_load_existing_tightens_and_warns_on_an_over_permissive_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Security bits present and a wider mode: chmod back to the pinned mode."""
     path = tmp_path / "secrets.json"
     winner = load_or_create(path)
@@ -382,9 +378,7 @@ def test_load_existing_tightens_and_warns_on_an_over_permissive_mode(
     assert "launcher.secrets_file_mode_tightened" in caplog.text
 
 
-def test_create_marks_the_file_no_follow_and_pins_the_mode_when_security_bits_apply(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_marks_the_file_no_follow_and_pins_the_mode_when_security_bits_apply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """POSIX arm of both create-time guards: O_NOFOLLOW plus the 0600 re-pin."""
     path = tmp_path / "secrets.json"
     private_mode = _mode_of_a_0600_create(tmp_path)
@@ -411,9 +405,7 @@ def test_create_marks_the_file_no_follow_and_pins_the_mode_when_security_bits_ap
     assert chmod_calls == [private_mode]
 
 
-def test_create_skips_no_follow_and_the_mode_pin_without_security_bits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_skips_no_follow_and_the_mode_pin_without_security_bits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-POSIX arm: neither the O_NOFOLLOW bit nor the chmod pin is applied."""
     path = tmp_path / "secrets.json"
     monkeypatch.setattr(secrets_file_module, "is_windows", lambda: False)

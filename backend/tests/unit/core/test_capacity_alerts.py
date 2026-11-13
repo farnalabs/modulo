@@ -414,9 +414,7 @@ def test_queue_payload_renders_na_for_an_unbound_limit() -> None:
 
 def test_saturation_payload_renders_without_unknown_placeholder() -> None:
     report = _report(binding=_org_binding(), pending_total=3)
-    candidates = ca.build_candidates(
-        report, bound_since=_NOW - timedelta(seconds=ca.SATURATION_SUSTAIN_SECONDS), now=_NOW
-    )
+    candidates = ca.build_candidates(report, bound_since=_NOW - timedelta(seconds=ca.SATURATION_SUSTAIN_SECONDS), now=_NOW)
     saturation = candidates[ca._SUBJECT_SATURATION]
     title, body = _render(saturation.event_type or "", saturation.payload)
     assert "[unknown]" not in title
@@ -426,9 +424,7 @@ def test_saturation_payload_renders_without_unknown_placeholder() -> None:
 def test_backpressure_payload_renders_without_unknown_placeholder() -> None:
     pid = uuid.uuid4()
     report = _report(pending_by_pipeline=[_pipeline(pid, count=9)], pending_total=9)
-    payload = ca._backpressure_payload(
-        pipeline=report["pending"]["by_pipeline"][0], report=report, reason="queue_depth=9 limit=5"
-    )
+    payload = ca._backpressure_payload(pipeline=report["pending"]["by_pipeline"][0], report=report, reason="queue_depth=9 limit=5")
     title, body = _render("capacity_backpressure", payload)
     assert "[unknown]" not in title
     assert "[unknown]" not in body
@@ -512,9 +508,7 @@ async def test_read_redis_memory_cancellation_propagates() -> None:
 
 
 def test_redis_pressure_payload_renders_without_unknown_placeholder() -> None:
-    payload = ca._redis_pressure_payload(
-        {"used_memory": 900 * 1024 * 1024, "maxmemory": 1024 * 1024 * 1024, "maxmemory_policy": "volatile-lru"}
-    )
+    payload = ca._redis_pressure_payload({"used_memory": 900 * 1024 * 1024, "maxmemory": 1024 * 1024 * 1024, "maxmemory_policy": "volatile-lru"})
     title, body = _render("capacity_redis_pressure", payload)
     assert "[unknown]" not in title
     assert "[unknown]" not in body
@@ -1082,9 +1076,7 @@ async def test_sweep_backpressure_truncation_does_not_recover(
     assert [e[1] for e in notifier.events] == ["capacity_backpressure"]
 
     # Truncated read: the alerted subject is beyond the checked window.
-    async def _truncated(
-        factory: Any, report: dict[str, Any], *, org_id: uuid.UUID, candidates: dict[str, Any]
-    ) -> set[str]:
+    async def _truncated(factory: Any, report: dict[str, Any], *, org_id: uuid.UUID, candidates: dict[str, Any]) -> set[str]:
         return {subject}
 
     ca._add_backpressure_candidates.side_effect = _truncated
@@ -1343,9 +1335,7 @@ async def test_sweep_clears_a_pre_alert_marker_during_a_discovery_gap(
         notifier=notifier,
         now=_NOW,
     )
-    marker_key = ca._state_key(
-        org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=pid)}"
-    )
+    marker_key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{ca._subject_for(ca._SUBJECT_QUEUE, pipeline_id=pid)}")
     assert await ca._read_state(redis, marker_key) is not None
     assert not notifier.events
 
@@ -1642,9 +1632,7 @@ def test_org_from_unhealthy_marker_key_parses_and_rejects_invalid_keys() -> None
     key = ca._state_key(org_id, f"{ca._QUEUE_UNHEALTHY_MARKER}:{subject}")
     assert ca._org_from_unhealthy_marker_key(key) == org_id
     assert ca._org_from_unhealthy_marker_key("not-a-key") is None
-    assert (
-        ca._org_from_unhealthy_marker_key(f"{ca._STATE_KEY_PREFIX}:not-a-uuid:{ca._QUEUE_UNHEALTHY_MARKER}:x") is None
-    )
+    assert ca._org_from_unhealthy_marker_key(f"{ca._STATE_KEY_PREFIX}:not-a-uuid:{ca._QUEUE_UNHEALTHY_MARKER}:x") is None
 
 
 async def test_org_ids_with_open_alerts_does_not_duplicate_a_marker_org() -> None:

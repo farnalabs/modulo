@@ -115,9 +115,7 @@ def test_run_idempotency_ref_is_reusable_stable_identity() -> None:
     assert run_ref == "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:42"
     assert run_idempotency_ref(pipeline_id, 42) == run_ref
     # The persisted value is a valid run_ref for the derivation primitive.
-    assert stable_idempotency_key(run_ref=run_ref, node_ref="node-a") == stable_idempotency_key(
-        run_ref=run_ref, node_ref="node-a"
-    )
+    assert stable_idempotency_key(run_ref=run_ref, node_ref="node-a") == stable_idempotency_key(run_ref=run_ref, node_ref="node-a")
 
 
 def test_run_idempotency_key_persist_and_readback() -> None:
@@ -127,9 +125,7 @@ def test_run_idempotency_key_persist_and_readback() -> None:
     assert persisted == "550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7"
     # Read-back: a re-run passes the persisted key straight into the derivation.
     assert run_idempotency_key(persisted) == persisted
-    assert stable_idempotency_key(run_ref=persisted, node_ref="node-a", index=0) == stable_idempotency_key(
-        run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7", node_ref="node-a", index=0
-    )
+    assert stable_idempotency_key(run_ref=persisted, node_ref="node-a", index=0) == stable_idempotency_key(run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f:7", node_ref="node-a", index=0)
 
 
 def test_run_idempotency_key_excludes_per_replay_run_id() -> None:
@@ -192,10 +188,7 @@ def test_read_before_write_fails_open_on_missing_or_malformed_run_ref() -> None:
     """A missing/malformed persisted run key NEVER suppresses (fail-open)."""
     markers = {"attempt-0": {"_modulo_marker": True, "delivery_done": True, "idempotency_key": "abc"}}
     assert read_before_write_suppression(markers, run_ref=None, node_ref="node-a", index=0) is False
-    assert (
-        read_before_write_suppression(markers, run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f", node_ref="node-a")
-        is False
-    )
+    assert read_before_write_suppression(markers, run_ref="550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f", node_ref="node-a") is False
     assert read_before_write_suppression(markers, run_ref="", node_ref="node-a") is False
     # Non-dict markers are ignored.
     assert read_before_write_suppression(["not-a-dict"], run_ref="pipeline:9", node_ref="node-a") is False
@@ -360,9 +353,7 @@ def test_no_delivery_confirmed_resolves_after_in_flight_intent() -> None:
     persisted = run_idempotency_key(run_idempotency_ref(uuid.UUID("550e8400-1b24-4f1a-91d3-1f2b3c4d5e6f"), 9))
     derived = node_idempotency_key(persisted, "node-a", index=0)
     slot = "run:r:node:n:connector"
-    intent_markers = {
-        slot: {"_modulo_marker": True, "marker_kind": "connector_write_intent", "idempotency_key": derived}
-    }
+    intent_markers = {slot: {"_modulo_marker": True, "marker_kind": "connector_write_intent", "idempotency_key": derived}}
     assert read_before_write_ambiguous(intent_markers, run_ref=persisted, node_ref="node-a", index=0) is True
     resolved_markers = {
         slot: {

@@ -124,9 +124,7 @@ async def test_query_issue_http_error(connector):
 
 @respx.mock
 async def test_query_search_http_error(connector):
-    respx.post(f"{_BASE}/search").mock(
-        return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]})
-    )
+    respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(400, json={"errorMessages": ["Field 'xyz' does not exist"]}))
     query = ConnectorQuery(resource="search", filters={"jql": "invalid jql"})
     with pytest.raises(ValueError, match="Jira API HTTP 400"):
         await connector.query(query)
@@ -134,9 +132,7 @@ async def test_query_search_http_error(connector):
 
 @respx.mock
 async def test_write_create_issue_http_error(connector):
-    respx.post(f"{_BASE}/issue").mock(
-        return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}})
-    )
+    respx.post(f"{_BASE}/issue").mock(return_value=httpx.Response(400, json={"errors": {"summary": "Operation blocked"}}))
     payload = ConnectorPayload(
         resource="issue",
         data={"project": {"key": "PROJ"}, "summary": "Bad data", "issuetype": {"name": "Task"}},
@@ -182,9 +178,7 @@ async def test_query_issue_comments_pagination(connector):
         "maxResults": 1,
     }
     respx.get(f"{_BASE}/issue/PROJ-123/comment").mock(return_value=httpx.Response(200, json=comments_data))
-    result = await connector.query(
-        ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}, limit=1)
-    )
+    result = await connector.query(ConnectorQuery(resource="issue_comments", filters={"issue_key": "PROJ-123"}, limit=1))
     assert result.next_cursor == "1"
 
 
@@ -355,9 +349,7 @@ async def test_query_fields(connector):
 @respx.mock
 async def test_query_fields_rate_limit_metadata(connector):
     headers = {"X-RateLimit-Remaining": "7500", "X-RateLimit-Limit": "10000"}
-    respx.get(f"{_BASE}/field").mock(
-        return_value=httpx.Response(200, json=[{"id": "summary", "name": "Summary"}], headers=headers)
-    )
+    respx.get(f"{_BASE}/field").mock(return_value=httpx.Response(200, json=[{"id": "summary", "name": "Summary"}], headers=headers))
     result = await connector.query(ConnectorQuery(resource="fields"))
     assert result.metadata["rate_limit"] == headers
 
@@ -406,9 +398,7 @@ async def test_search_pagination_cursor(connector):
         "maxResults": 1,
     }
     respx.post(f"{_BASE}/search").mock(return_value=httpx.Response(200, json=search_body))
-    result = await connector.query(
-        ConnectorQuery(resource="search", filters={"jql": "project = PROJ", "max_results": 1})
-    )
+    result = await connector.query(ConnectorQuery(resource="search", filters={"jql": "project = PROJ", "max_results": 1}))
     assert len(result.records) == 1
     assert result.total == 10
     assert result.next_cursor == "1"
@@ -752,9 +742,7 @@ async def test_self_hosted_health_check_hits_custom_base_url():
         creds={"email": EMAIL, "api_token": API_TOKEN},
         base_url="https://jira.example.com/rest/api/2",
     )
-    respx.get("https://jira.example.com/rest/api/2/myself").mock(
-        return_value=httpx.Response(200, json={"displayName": "Alice"})
-    )
+    respx.get("https://jira.example.com/rest/api/2/myself").mock(return_value=httpx.Response(200, json={"displayName": "Alice"}))
     result = await c.health_check()
     assert result.ok is True
     assert result.detail == "Alice"
@@ -767,9 +755,7 @@ async def test_self_hosted_query_issue():
         creds={"token": "pat"},
         base_url="https://jira.example.com/rest/api/2",
     )
-    respx.get("https://jira.example.com/rest/api/2/issue/PROJ-1").mock(
-        return_value=httpx.Response(200, json={"id": "1", "key": "PROJ-1"})
-    )
+    respx.get("https://jira.example.com/rest/api/2/issue/PROJ-1").mock(return_value=httpx.Response(200, json={"id": "1", "key": "PROJ-1"}))
     result = await c.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-1"}))
     assert result.records[0]["key"] == "PROJ-1"
 
@@ -797,9 +783,7 @@ async def test_query_issue_attachments(connector):
 
 @respx.mock
 async def test_query_issue_attachments_empty(connector):
-    respx.get(f"{_BASE}/issue/PROJ-123").mock(
-        return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}})
-    )
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}}))
     result = await connector.query(ConnectorQuery(resource="issue_attachments", filters={"issue_key": "PROJ-123"}))
     assert not result.records
 
@@ -1114,9 +1098,7 @@ async def test_health_check_self_hosted():
 @respx.mock
 async def test_query_issue_self_hosted():
     connector = JiraConnector(instance="", creds={"token": "pat"}, base_url=_SELF_HOSTED_BASE)
-    respx.get(f"{_SELF_HOSTED_BASE}/issue/PROJ-123").mock(
-        return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123"})
-    )
+    respx.get(f"{_SELF_HOSTED_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123"}))
     result = await connector.query(ConnectorQuery(resource="issue", filters={"issue_key": "PROJ-123"}))
     assert result.records[0]["key"] == "PROJ-123"
     assert respx.calls.last.request.url.path == "/rest/api/2/issue/PROJ-123"
@@ -1147,9 +1129,7 @@ async def test_query_attachments(connector):
 
 @respx.mock
 async def test_query_attachments_empty(connector):
-    respx.get(f"{_BASE}/issue/PROJ-123").mock(
-        return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}})
-    )
+    respx.get(f"{_BASE}/issue/PROJ-123").mock(return_value=httpx.Response(200, json={"id": "10001", "key": "PROJ-123", "fields": {}}))
     result = await connector.query(ConnectorQuery(resource="attachments", filters={"issue_key": "PROJ-123"}))
     assert not result.records
     assert result.total == 0
@@ -1189,9 +1169,7 @@ async def test_query_attachment_missing_id(connector):
 
 @respx.mock
 async def test_write_attachment_content(connector):
-    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(
-        return_value=httpx.Response(201, json=[{"id": "20001", "filename": "a.txt"}])
-    )
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(201, json=[{"id": "20001", "filename": "a.txt"}]))
     result = await connector.write(
         ConnectorPayload(
             resource="attachment",
@@ -1208,9 +1186,7 @@ async def test_write_attachment_content(connector):
 
 @respx.mock
 async def test_write_attachment_bytes(connector):
-    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(
-        return_value=httpx.Response(201, json=[{"id": "20002", "filename": "b.png"}])
-    )
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(201, json=[{"id": "20002", "filename": "b.png"}]))
     result = await connector.write(
         ConnectorPayload(
             resource="attachment",
@@ -1222,9 +1198,7 @@ async def test_write_attachment_bytes(connector):
 
 @respx.mock
 async def test_write_attachment_content_bytes(connector):
-    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(
-        return_value=httpx.Response(201, json=[{"id": "20003", "filename": "c.bin"}])
-    )
+    respx.post(f"{_BASE}/issue/PROJ-123/attachments").mock(return_value=httpx.Response(201, json=[{"id": "20003", "filename": "c.bin"}]))
     result = await connector.write(
         ConnectorPayload(
             resource="attachment",

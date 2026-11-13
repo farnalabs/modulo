@@ -431,9 +431,7 @@ async def test_build_live_manifest_connector_missing_is_unknown(monkeypatch: pyt
 async def test_build_live_manifest_profile_and_agent(monkeypatch: pytest.MonkeyPatch):
     pid = uuid.uuid4()
     aid = uuid.uuid4()
-    session = _manifest_session(
-        profile=_row_profile(pid, ["sandbox.e2b", "network:github.com"]), agent=_row_agent(aid, ["git", "shell"])
-    )
+    session = _manifest_session(profile=_row_profile(pid, ["sandbox.e2b", "network:github.com"]), agent=_row_agent(aid, ["git", "shell"]))
     _patch_select(monkeypatch, session)
     registered = await build_live_manifest(
         session,
@@ -1017,9 +1015,7 @@ async def test_check_node_start_claims_load_failed_fails_closed(monkeypatch: pyt
     monkeypatch.setattr(mod, "load_node_guardrails", _boom_load)
     monkeypatch.setattr(mod, "build_live_manifest", _boom_manifest)
     factory = MagicMock()
-    factory.return_value.__aenter__ = AsyncMock(
-        side_effect=AssertionError("no session must open when claims load failed")
-    )
+    factory.return_value.__aenter__ = AsyncMock(side_effect=AssertionError("no session must open when claims load failed"))
 
     result = await check_node_start(
         factory,
@@ -1533,10 +1529,7 @@ async def test_acl_and_conformance_agree_for_legacy_qualified_allowlist(
     granted_manifest = await _manifest_for(monkeypatch, granted)
 
     assert decide_conformance(["read"], granted_manifest).state == "present"
-    assert (
-        ConnectorACL(visibility="org", allowed_operations=["github.read"], connector_type_id="github").check("read")
-        is None
-    )
+    assert ConnectorACL(visibility="org", allowed_operations=["github.read"], connector_type_id="github").check("read") is None
 
     # The DENY side agrees too: a write-only allowlist certifies no read and
     # the ACL denies the read — no half of the system can disagree.
@@ -1571,10 +1564,7 @@ async def test_acl_and_conformance_agree_for_mis_typed_legacy_allowlist(
     same_type = _row_connector(uuid.uuid4(), ["github.write"], connector_type_id="github")
     same_type_manifest = await _manifest_for(monkeypatch, same_type)
     assert decide_conformance(["write"], same_type_manifest).state == "present"
-    assert (
-        ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="github").check("write")
-        is None
-    )
+    assert ConnectorACL(visibility="org", allowed_operations=["github.write"], connector_type_id="github").check("write") is None
 
 
 async def test_type_qualified_claim_binds_to_its_surface_type(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1697,9 +1687,7 @@ def test_type_qualified_claims_classifies_legacy_spellings() -> None:
     """The FAR-1617 detection helper: qualified claims only, normalised and
     de-duplicated — the same binding spelled ``github.read`` and ``github:read``
     collapses to one claim."""
-    assert type_qualified_claims(
-        ["read", "github.read", "github:read", "github:write", "sandbox.egress", "docker"]
-    ) == [
+    assert type_qualified_claims(["read", "github.read", "github:read", "github:write", "sandbox.egress", "docker"]) == [
         "github.read",
         "github.write",
     ]

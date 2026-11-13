@@ -107,26 +107,16 @@ def test_model_backend_services_share_the_optional_ssrf_allowlist(path: Path) ->
     """Host-local model opt-in reaches every container that can use a backend."""
     services = _load(path).get("services", {})
     expected = _MODEL_BACKEND_SERVICES[path]
-    missing = [
-        service
-        for service in expected
-        if services.get(service, {}).get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES") != _SSRF_ALLOWLIST_REF
-    ]
+    missing = [service for service in expected if services.get(service, {}).get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES") != _SSRF_ALLOWLIST_REF]
 
-    assert not missing, (
-        f"{path.name} must pass {_SSRF_ALLOWLIST_REF!r} to model-backend services "
-        f"{expected}; missing or mismatched services: {missing}"
-    )
+    assert not missing, f"{path.name} must pass {_SSRF_ALLOWLIST_REF!r} to model-backend services {expected}; missing or mismatched services: {missing}"
 
 
 @pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
 def test_compose_ssrf_allowlist_does_not_disable_protection(path: Path) -> None:
     """Compose must not ship a wildcard or a broad SSRF bypass."""
     services = _load(path).get("services", {})
-    values = [
-        services[service].get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES")
-        for service in _MODEL_BACKEND_SERVICES[path]
-    ]
+    values = [services[service].get("environment", {}).get("SSRF_ALLOW_PRIVATE_RANGES") for service in _MODEL_BACKEND_SERVICES[path]]
 
     assert all(value == _SSRF_ALLOWLIST_REF for value in values)
     assert "0.0.0.0/0" not in values
@@ -139,14 +129,8 @@ def test_the_failure_message_says_how_to_generate_the_key(path: Path):
         match = _REQUIRED_REF.match(value)
         assert match is not None, f"{path.name}:{service} is not a required interpolation"
         message = match.group("message")
-        assert "openssl rand -base64 32" in message, (
-            f"{path.name}:{service} fails fast without a generation command - put "
-            "`openssl rand -base64 32` in the message so the operator has a copy-pasteable fix"
-        )
-        assert ".env" in message, (
-            f"{path.name}:{service} does not say WHERE to put the key - compose reads `.env` "
-            "from the project directory, so name it"
-        )
+        assert "openssl rand -base64 32" in message, f"{path.name}:{service} fails fast without a generation command - put `openssl rand -base64 32` in the message so the operator has a copy-pasteable fix"
+        assert ".env" in message, f"{path.name}:{service} does not say WHERE to put the key - compose reads `.env` from the project directory, so name it"
 
 
 @pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
@@ -160,10 +144,7 @@ def test_the_broken_placeholders_are_not_used_as_a_fernet_key(path: Path):
     values = _fernet_values(path)
     used = sorted(service for service, value in values.items() if any(bad in value for bad in _HISTORICAL_LITERALS))
 
-    assert not used, (
-        f"{path.name} resolves FERNET_KEY to a FAR-2181 placeholder for {used} - it passes the "
-        "Settings length check and then breaks the first credential write"
-    )
+    assert not used, f"{path.name} resolves FERNET_KEY to a FAR-2181 placeholder for {used} - it passes the Settings length check and then breaks the first credential write"
 
 
 @pytest.mark.parametrize("path", _COMPOSE_FILES, ids=lambda p: p.name)
@@ -185,9 +166,7 @@ def test_a_generated_key_boots_settings_and_is_a_real_fernet_key(path: Path, mon
         assert settings.fernet_key == generated
         # Settings' own validator checks length only; Fernet checks the shape.
         # Decoding is what cryptography does on first credential use.
-        assert len(base64.urlsafe_b64decode(settings.fernet_key)) == 32, (
-            f"{path.name}:{service} accepted a key Fernet cannot use"
-        )
+        assert len(base64.urlsafe_b64decode(settings.fernet_key)) == 32, f"{path.name}:{service} accepted a key Fernet cannot use"
 
 
 def _service_environment(path: Path, service: str) -> dict[str, str]:
@@ -211,7 +190,4 @@ def test_the_historical_placeholders_are_not_valid_fernet_keys(literal: str):
     the length check but not Fernet. If this ever passes for a placeholder, the
     contract above is no longer protecting anything.
     """
-    assert not _decodes_to_32_bytes(literal), (
-        f"{literal!r} decodes to 32 bytes, so it would be a usable Fernet key - this test's "
-        "premise (that it cannot be) is wrong and must be re-derived"
-    )
+    assert not _decodes_to_32_bytes(literal), f"{literal!r} decodes to 32 bytes, so it would be a usable Fernet key - this test's premise (that it cannot be) is wrong and must be re-derived"

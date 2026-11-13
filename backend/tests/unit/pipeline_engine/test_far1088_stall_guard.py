@@ -216,10 +216,7 @@ def test_script_mode_keeps_connection_liveness_after_first_output() -> None:
     for _ in range(5):
         clock[0] += 300.0
         script.touch("connection")  # probes keep succeeding, log stays flat
-        assert clock[0] - script.last_activity() < nr._SANDBOX_IDLE_TIMEOUT, (
-            "a quiet script node must stay alive on connection liveness, "
-            "not be hard-killed at the output-silence window"
-        )
+        assert clock[0] - script.last_activity() < nr._SANDBOX_IDLE_TIMEOUT, "a quiet script node must stay alive on connection liveness, not be hard-killed at the output-silence window"
 
     # Control: the SAME sequence on a streaming node IS stalled past the window.
     llm_clock: list[float] = [1000.0]

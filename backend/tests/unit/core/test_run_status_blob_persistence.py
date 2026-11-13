@@ -82,18 +82,11 @@ def sqlite_sessionmaker(sqlite_engine: AsyncEngine) -> async_sessionmaker[AsyncS
 async def _seed_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> None:
     async with maker() as session, session.begin():
         await session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, 'blob-persist org', :slug, '{}', '{}')"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, 'blob-persist org', :slug, '{}', '{}')"),
             {"id": str(_ORG), "slug": f"blob-persist-{_ORG.hex[:12]}"},
         )
         await session.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id, cancellation_requested) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', :thread, 0)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id, cancellation_requested) VALUES (:id, :oid, :pid, :sid, 'manual', 'running', 1, 'ih', :thread, 0)"),
             {
                 "id": run_id.hex,
                 "oid": _ORG.hex,
@@ -107,10 +100,7 @@ async def _seed_run(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) 
 async def _seed_org_only(maker: async_sessionmaker[AsyncSession]) -> None:
     async with maker() as session, session.begin():
         await session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, 'blob-persist org', :slug, '{}', '{}')"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, 'blob-persist org', :slug, '{}', '{}')"),
             {"id": str(_ORG), "slug": f"blob-persist-{_ORG.hex[:12]}"},
         )
 
@@ -129,15 +119,7 @@ async def _legacy_blobs(maker: async_sessionmaker[AsyncSession], run_id: uuid.UU
 
 async def _store_rows(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> list[Any]:
     async with maker() as session, session.begin():
-        return (
-            (
-                await session.execute(
-                    select(RunNodeOutput).where(RunNodeOutput.run_id == run_id).order_by(RunNodeOutput.node_id)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        return (await session.execute(select(RunNodeOutput).where(RunNodeOutput.run_id == run_id).order_by(RunNodeOutput.node_id))).scalars().all()
 
 
 async def _read_outputs(maker: async_sessionmaker[AsyncSession], run_id: uuid.UUID) -> Any:
@@ -172,9 +154,7 @@ async def _write_status(
 
 
 class TestStatusWriteBlobPersistence:
-    async def test_both_sides_persist_atomically_with_the_status_flip(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_both_sides_persist_atomically_with_the_status_flip(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """A blobs-carrying status write lands BOTH sides on run_node_outputs
         inside the SAME transaction as the status flip — never a torn
         half-state (the FAR-125 P1a invariant, re-expressed on the store)."""
@@ -204,9 +184,7 @@ class TestStatusWriteBlobPersistence:
         assert legacy_outputs is None
         assert legacy_telemetry is None
 
-    async def test_absent_telemetry_side_stays_absent_not_null_valued(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_absent_telemetry_side_stays_absent_not_null_valued(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """A side the caller does not pass stays ABSENT (SQL NULL on the
         per-node row), never the JSON ``null`` VALUE — the lossless-mapping
         distinction the readers reassemble from."""
@@ -227,9 +205,7 @@ class TestStatusWriteBlobPersistence:
         assert legacy_outputs is None
         assert legacy_telemetry is None
 
-    async def test_telemetry_only_write_persists_telemetry_without_outputs(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_telemetry_only_write_persists_telemetry_without_outputs(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """Telemetry alone (no outputs side) still lands on the store."""
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
@@ -244,9 +220,7 @@ class TestStatusWriteBlobPersistence:
         assert final_rows[0].outputs_json is None
         assert final_rows[0].node_telemetry_json == {"status": "completed"}
 
-    async def test_second_write_replaces_the_store_shrink(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_second_write_replaces_the_store_shrink(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """A second blobs-carrying status write REPLACES the store: the keys
         the newer payload omits are deleted (the delete-absent shrink), never
         merged — two writes re-written over the same run end in lockstep with
@@ -276,9 +250,7 @@ class TestStatusWriteBlobPersistence:
         assert survivor.outputs_json == {"v": 3}
         assert survivor.node_telemetry_json == {"t": 1}
 
-    async def test_omitted_side_is_left_untouched_not_deleted(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_omitted_side_is_left_untouched_not_deleted(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """A side the caller does not pass (None) is LEFT UNTOUCHED by the
         REPLACE write — the legacy column-write semantics (a NULL SET clause
         leaves the column alone), pinned on the store."""
@@ -300,9 +272,7 @@ class TestStatusWriteBlobPersistence:
         assert survivor.outputs_json == {"v": 2}
         assert survivor.node_telemetry_json == {"t": 1}
 
-    async def test_missing_run_writes_no_store_rows(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_missing_run_writes_no_store_rows(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """A status write for a MISSING run returns None and performs no
         store write — the original missing-run guard."""
         await _seed_org_only(sqlite_sessionmaker)
@@ -319,9 +289,7 @@ class TestStatusWriteBlobPersistence:
         assert result is None
         assert not await _store_rows(sqlite_sessionmaker, missing)
 
-    async def test_reassembled_blobs_round_trip_through_the_reader(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_reassembled_blobs_round_trip_through_the_reader(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         """The store write the status write performed is served intact by the
         repo reader (the reassembly contract the API surfaces consume)."""
         run_id = uuid.uuid4()
@@ -355,9 +323,7 @@ class TestStatusWriteJsonbSanitisation:
     is exercised directly with its real ``origin`` label, and a structural check
     pins that the fenced branch delegates to that same helper."""
 
-    async def test_orm_status_write_sanitises_nul_payload(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_orm_status_write_sanitises_nul_payload(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
         outputs = {"n\x001": {"text": "a\x00b"}}
@@ -370,9 +336,7 @@ class TestStatusWriteJsonbSanitisation:
         assert "a\x00b" not in json.dumps(stored)
         assert stored == {"n\ufffd1": {"text": "a\ufffdb"}}
 
-    async def test_fenced_store_leg_sanitises_nul_payload(
-        self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_fenced_store_leg_sanitises_nul_payload(self, sqlite_sessionmaker: async_sessionmaker[AsyncSession]) -> None:
         run_id = uuid.uuid4()
         await _seed_run(sqlite_sessionmaker, run_id)
 

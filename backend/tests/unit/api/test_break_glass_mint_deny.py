@@ -158,9 +158,7 @@ def _mentions_marker(node: ast.expr | None) -> bool:
     if isinstance(node, ast.Attribute):
         return _mentions_marker(node.value)
     if isinstance(node, ast.Call):
-        return any(_mentions_marker(arg) for arg in node.args) or any(
-            _mentions_marker(kw.value) for kw in node.keywords
-        )
+        return any(_mentions_marker(arg) for arg in node.args) or any(_mentions_marker(kw.value) for kw in node.keywords)
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return any(_mentions_marker(elt) for elt in node.elts)
     if isinstance(node, ast.keyword):
@@ -181,9 +179,7 @@ def _route_handlers(tree: ast.Module) -> dict[str, ast.AsyncFunctionDef]:
 
 def _has_mint_marker(func_node: ast.AsyncFunctionDef) -> bool:
     """True when the marker appears in a decorator or the function signature."""
-    return any(_mentions_marker(dec) for dec in func_node.decorator_list) or any(
-        _mentions_marker(default) for default in func_node.args.defaults
-    )
+    return any(_mentions_marker(dec) for dec in func_node.decorator_list) or any(_mentions_marker(default) for default in func_node.args.defaults)
 
 
 def _read_tree(filename: str) -> ast.Module:

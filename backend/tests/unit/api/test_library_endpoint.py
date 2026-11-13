@@ -286,9 +286,7 @@ def test_list_libraries_separator_only_primitive_types_narrow_to_visible_types(c
 
 
 @pytest.mark.parametrize("raw", [",", ",,", ", ,", "  ,  "])
-def test_list_libraries_separator_only_types_hide_lifecycle_maps_from_viewer(
-    viewer_client: TestClient, raw: str
-) -> None:
+def test_list_libraries_separator_only_types_hide_lifecycle_maps_from_viewer(viewer_client: TestClient, raw: str) -> None:
     """Regression: separator-only primitive_types leaked lifecycle_map primitives."""
     mock_list = _stub_list_call(client=viewer_client, primitive_types=raw)
 
@@ -519,9 +517,7 @@ def test_create_pipeline_from_invalid_type(client: TestClient) -> None:
     assert "schema" in resp.json()["detail"]
 
 
-def test_create_pipeline_from_template_strips_declared_policy_gate(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_create_pipeline_from_template_strips_declared_policy_gate(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1666: a library template declaring a policy_gate block installs with the block stripped.
 
     The create-pipeline path persists ``graph_nodes_json`` directly and the node

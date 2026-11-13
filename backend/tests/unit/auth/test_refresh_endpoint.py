@@ -304,9 +304,7 @@ def test_refresh_unknown_account_denied_and_blacklisted(client: TestClient, mock
     assert len(_blacklist_update_sqls(mock_session)) == 1
 
 
-def test_refresh_deactivated_system_admin_without_membership_denied(
-    client: TestClient, mock_session: AsyncMock
-) -> None:
+def test_refresh_deactivated_system_admin_without_membership_denied(client: TestClient, mock_session: AsyncMock) -> None:
     """System admins without memberships (empty org_id) skip the membership read
     but the account-active check still denies them when deactivated."""
     advance = AsyncMock(return_value=(2, False, False))

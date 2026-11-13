@@ -65,20 +65,14 @@ async def seeded_env(
             {"pid": str(_PIPELINE_ID)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, '{}'::json) ON CONFLICT DO NOTHING"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, '{}'::json) ON CONFLICT DO NOTHING"),
             {"id": str(_ORG_ID), "name": f"Roundtrip {str(_ORG_ID)[:8]}", "slug": f"rt-{str(_ORG_ID)[:8]}"},
         )
         from farna.auth.passwords import hash_password
 
         password = "roundtrip-password-1"
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', true) ON CONFLICT DO NOTHING"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true) ON CONFLICT DO NOTHING"),
             {
                 "id": str(_ACCOUNT_ID),
                 "email": f"rt-{str(_ACCOUNT_ID)[:10]}@example.com",
@@ -87,10 +81,7 @@ async def seeded_env(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin') "
-                "ON CONFLICT DO NOTHING"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin') ON CONFLICT DO NOTHING"),
             {"id": str(uuid.uuid4()), "aid": str(_ACCOUNT_ID), "oid": str(_ORG_ID)},
         )
         await conn.execute(
@@ -111,10 +102,7 @@ async def seeded_env(
         )
         await conn.execute(
             text(
-                "INSERT INTO connector_instances (id, organisation_id, account_id, name, connector_type_id, "
-                "credentials_ciphertext, config_json, allowed_operations, status, visibility) "
-                "VALUES (:id, :oid, :uid, :name, 'github', :cred, '{}'::json, '[]'::json, 'active', 'org') "
-                "ON CONFLICT DO NOTHING"
+                "INSERT INTO connector_instances (id, organisation_id, account_id, name, connector_type_id, credentials_ciphertext, config_json, allowed_operations, status, visibility) VALUES (:id, :oid, :uid, :name, 'github', :cred, '{}'::json, '[]'::json, 'active', 'org') ON CONFLICT DO NOTHING"
             ),
             {
                 "id": str(_CONNECTOR_INSTANCE_ID),
@@ -125,10 +113,7 @@ async def seeded_env(
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json) "
-                "VALUES (:id, :oid, :uid, :name, '[]'::json) ON CONFLICT DO NOTHING"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json) VALUES (:id, :oid, :uid, :name, '[]'::json) ON CONFLICT DO NOTHING"),
             {"id": str(_PIPELINE_ID), "oid": str(_ORG_ID), "uid": str(_ACCOUNT_ID), "name": "Roundtrip Pipeline"},
         )
 
@@ -203,9 +188,7 @@ class TestPipelineGraphContractPostgres:
             # Pipeline nodes
             # A raw AsyncConnection does not materialise ORM entities, so select
             # the JSON column directly rather than the whole entity.
-            graph_nodes = (
-                await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))
-            ).scalar_one()
+            graph_nodes = (await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))).scalar_one()
             persisted_nodes = {n["id"]: n for n in graph_nodes}
             for n_payload in payload["nodes"]:
                 _assert_node_matches_payload(
@@ -253,13 +236,7 @@ class TestPipelineGraphContractPostgres:
 
             # Snapshot
             # Explicit columns for the same raw-connection reason as above.
-            snaps = (
-                await conn.execute(
-                    select(PipelineSnapshot.version_kind, PipelineSnapshot.graph_json)
-                    .where(PipelineSnapshot.pipeline_id == pipeline_id)
-                    .order_by(PipelineSnapshot.snapshot_version)
-                )
-            ).all()
+            snaps = (await conn.execute(select(PipelineSnapshot.version_kind, PipelineSnapshot.graph_json).where(PipelineSnapshot.pipeline_id == pipeline_id).order_by(PipelineSnapshot.snapshot_version))).all()
             assert snaps, "edit snapshot not created"
             latest = snaps[-1]
             assert latest.version_kind == "edit"
@@ -348,9 +325,7 @@ class TestPipelineGraphContractPostgres:
         async with db_engine.begin() as conn:
             # A raw AsyncConnection does not materialise ORM entities, so read
             # the JSON column directly.
-            graph_nodes = (
-                await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))
-            ).scalar_one()
+            graph_nodes = (await conn.execute(select(Pipeline.graph_nodes_json).where(Pipeline.id == pipeline_id))).scalar_one()
             sb = next(n for n in graph_nodes if n["id"] == str(_SANDBOX_ID))
             assert sb["env_vars"]["OPENAI_API_KEY"] == "plain-placeholder-not-a-real-secret"
 

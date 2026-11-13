@@ -97,9 +97,7 @@ def _iter_frontend_files() -> list[Path]:
 
 def _extract_api_literals(content: str) -> list[tuple[int, str]]:
     """Return ``(line_number, raw_literal)`` for every ``/api/`` literal in ``content``."""
-    return [
-        (content.count("\n", 0, match.start()) + 1, match.group("path")) for match in _API_LITERAL_RE.finditer(content)
-    ]
+    return [(content.count("\n", 0, match.start()) + 1, match.group("path")) for match in _API_LITERAL_RE.finditer(content)]
 
 
 def _normalise(raw: str) -> str | None:
@@ -235,19 +233,13 @@ def test_openapi_schema_paths_parse():
     """The generated schema parses and yields a non-trivial path inventory."""
     schema_paths = _load_schema_paths()
     assert schema_paths, f"parsed no paths out of {SCHEMA_REL}"
-    assert "/api/v1/pipelines" in schema_paths, (
-        f"{SCHEMA_REL} no longer contains /api/v1/pipelines — the paths-interface scanner is broken"
-    )
+    assert "/api/v1/pipelines" in schema_paths, f"{SCHEMA_REL} no longer contains /api/v1/pipelines — the paths-interface scanner is broken"
 
 
 def test_frontend_api_paths_resolve_against_openapi_schema():
     """Every ``/api/`` literal in frontend product code resolves against the schema."""
     _, offenders, _ = _scan()
-    assert not offenders, (
-        f"{len(offenders)} frontend /api/ path literal(s) do not resolve against the OpenAPI "
-        f"schema in {SCHEMA_REL} and are not in ALLOWLIST:\n" + "\n".join(offenders) + "\n"
-        "Fix the dangling call, or add the *normalised* path to ALLOWLIST with a reason."
-    )
+    assert not offenders, f"{len(offenders)} frontend /api/ path literal(s) do not resolve against the OpenAPI schema in {SCHEMA_REL} and are not in ALLOWLIST:\n" + "\n".join(offenders) + "\nFix the dangling call, or add the *normalised* path to ALLOWLIST with a reason."
 
 
 def test_allowlist_entries_are_live_and_reasoned():
@@ -256,10 +248,7 @@ def test_allowlist_entries_are_live_and_reasoned():
     assert not unreasoned, f"ALLOWLIST entries missing a reason string: {unreasoned}"
     observed, _, _ = _scan()
     dead = sorted(set(ALLOWLIST) - observed)
-    assert not dead, (
-        "Stale ALLOWLIST entries — these paths now resolve (or no longer exist) and the entry "
-        f"should be deleted: {dead}"
-    )
+    assert not dead, f"Stale ALLOWLIST entries — these paths now resolve (or no longer exist) and the entry should be deleted: {dead}"
 
 
 def test_extractor_skips_are_reported():
@@ -271,6 +260,4 @@ def test_extractor_skips_are_reported():
     and the author must either fix the literal or consciously widen the guard.
     """
     _, _, skipped = _scan()
-    assert not skipped, (
-        f"{len(skipped)} /api/ literal(s) could not be statically normalised and were skipped:\n" + "\n".join(skipped)
-    )
+    assert not skipped, f"{len(skipped)} /api/ literal(s) could not be statically normalised and were skipped:\n" + "\n".join(skipped)

@@ -650,9 +650,7 @@ class TestMalformedMetadataFailOpen:
     run — treated as ABSENT on read paths (the write side keeps validating
     strictly)."""
 
-    async def test_corrupt_meta_row_reads_node_rows_without_raising(
-        self, session: AsyncSession, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_corrupt_meta_row_reads_node_rows_without_raising(self, session: AsyncSession, caplog: pytest.LogCaptureFixture) -> None:
         run = await _seed_run(session)
         # The metadata row only exists when a side is '{}' (explicit empty):
         # outputs={} + populated telemetry is the mixed case.
@@ -913,9 +911,7 @@ class TestJsonbSanitisation:
         assert row.artifacts_json == [{"stream": "stdout", "rel_path": "a\ufffdb", "meta": {"k\ufffd": ["x\ufffdy"]}}]
         assert "\x00" not in json.dumps(row.artifacts_json)
 
-    async def test_persist_schema_enforcement_record_sanitises_nul_nested_and_in_keys(
-        self, session: AsyncSession
-    ) -> None:
+    async def test_persist_schema_enforcement_record_sanitises_nul_nested_and_in_keys(self, session: AsyncSession) -> None:
         """FAR-1654: the targeted ``schema_enforcement_json`` upsert bypasses
         ``upsert_rows`` — its payload is sanitised directly."""
         run = await _seed_run(session)
@@ -996,11 +992,7 @@ async def _read_stamp(session: AsyncSession, run: Run, *, attempt_key: str) -> d
 
 async def _age_row(session: AsyncSession, run: Run, *, attempt_key: str) -> None:
     async with session.begin():
-        await session.execute(
-            update(RunNodeOutput)
-            .where(RunNodeOutput.run_id == run.id, RunNodeOutput.attempt_key == attempt_key)
-            .values(updated_at=_AGED_STAMP)
-        )
+        await session.execute(update(RunNodeOutput).where(RunNodeOutput.run_id == run.id, RunNodeOutput.attempt_key == attempt_key).values(updated_at=_AGED_STAMP))
 
 
 class TestMarkerUpdatedAtProvenance:

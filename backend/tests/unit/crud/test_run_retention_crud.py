@@ -110,26 +110,20 @@ def _expected_components() -> int:
 
 class TestRetentionConditions:
     def test_org_scope_added_when_org_id_given(self) -> None:
-        conds = rr._retention_conditions(
-            org_id=_ORG, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=None
-        )
+        conds = rr._retention_conditions(org_id=_ORG, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=None)
         # The caller's org must be the BOUND VALUE, not merely a column name:
         # `"organisation_id" in str(c)` passes on an equality against any org.
         assert f"runs.organisation_id = '{_ORG.hex}'" in _compile_with_literal_binds(conds)
         assert _condition_columns(conds) == frozenset({"organisation_id"})
 
     def test_no_org_scope_for_cross_org(self) -> None:
-        conds = rr._retention_conditions(
-            org_id=None, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=None
-        )
+        conds = rr._retention_conditions(org_id=None, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=None)
         assert len(conds) == 0
 
     def test_date_range_conditions(self) -> None:
         start = datetime(2026, 1, 1, tzinfo=UTC)
         end = datetime(2026, 2, 1, tzinfo=UTC)
-        conds = rr._retention_conditions(
-            org_id=None, date_from=start, date_to=end, pipeline_id=None, status=None, statuses=None
-        )
+        conds = rr._retention_conditions(org_id=None, date_from=start, date_to=end, pipeline_id=None, status=None, statuses=None)
         sql = _compile_with_literal_binds(conds)
         # Both bounds must target created_at with the caller's values in the
         # right direction — bare ">="/"<=" substring checks pass on a single
@@ -140,23 +134,17 @@ class TestRetentionConditions:
         assert _condition_columns(conds) == frozenset({"created_at"})
 
     def test_pipeline_scope_added_when_pipeline_id_given(self) -> None:
-        conds = rr._retention_conditions(
-            org_id=None, date_from=None, date_to=None, pipeline_id=_ORG, status=None, statuses=None
-        )
+        conds = rr._retention_conditions(org_id=None, date_from=None, date_to=None, pipeline_id=_ORG, status=None, statuses=None)
         assert f"runs.pipeline_id = '{_ORG.hex}'" in _compile_with_literal_binds(conds)
         assert _condition_columns(conds) == frozenset({"pipeline_id"})
 
     def test_status_exact_match_used_when_no_whitelist_is_given(self) -> None:
-        conds = rr._retention_conditions(
-            org_id=None, date_from=None, date_to=None, pipeline_id=None, status="failed", statuses=None
-        )
+        conds = rr._retention_conditions(org_id=None, date_from=None, date_to=None, pipeline_id=None, status="failed", statuses=None)
         assert "runs.status = 'failed'" in _compile_with_literal_binds(conds)
         assert _condition_columns(conds) == frozenset({"status"})
 
     def test_terminal_status_whitelist_limits_status_expression(self) -> None:
-        conds = rr._retention_conditions(
-            org_id=None, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=TERMINAL_STATUSES
-        )
+        conds = rr._retention_conditions(org_id=None, date_from=None, date_to=None, pipeline_id=None, status=None, statuses=TERMINAL_STATUSES)
         sql = _compile_with_literal_binds(conds)
         # The whitelist is exactly the terminal set — never a live status.
         for ts in TERMINAL_STATUSES:
@@ -221,9 +209,7 @@ def _candidate_mocks(
         est: AsyncMock | None = None
         if estimate is not None:
             est = stack.enter_context(patch.object(rr, "_estimate_bytes_by_status", new=estimate))
-        blobs = stack.enter_context(
-            patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value=node_blobs or {}))
-        )
+        blobs = stack.enter_context(patch.object(rr, "read_node_output_blob_bytes", new=AsyncMock(return_value=node_blobs or {})))
         yield _CandidateMocks(page=page, checkpoint=ckpt, estimate=est, read_blobs=blobs)
 
 
@@ -377,9 +363,7 @@ class TestListRetentionCandidates:
         # _candidate_mocks) — the REAL estimator must run to produce the
         # degraded signal.
         with _candidate_mocks([]):
-            result = await rr.list_retention_candidates(
-                session, org_id=_ORG, status=None, deadline=time.monotonic() - 1
-            )
+            result = await rr.list_retention_candidates(session, org_id=_ORG, status=None, deadline=time.monotonic() - 1)
 
         assert result["estimate_degraded"] is True
         assert result["total_count"] == 3

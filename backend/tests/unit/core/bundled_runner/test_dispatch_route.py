@@ -187,9 +187,9 @@ async def test_runner_docker_without_endpoint_env_is_dispatch_unbound(monkeypatc
     """Registration matrix (ADR 029): with NO MODULO_RUNNER_* and no Docker
     endpoint env, `runner_docker` is not registered — the typed config error
     carries remediation copy instead of a silent fallback."""
-    for var in ("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "FARNA_CONTROL_MODULO_DOCKER_HOST", "DOCKER_HOST"):
+    for var in ("FARNA_CONTROL_MODULO_RUNNER_MACHINE_ID", "MODULO_DOCKER_HOST", "DOCKER_HOST", "FARNA_CONTROL_MODULO_DOCKER_HOST"):
         monkeypatch.delenv(var, raising=False)
-    with pytest.raises(SandboxDispatchUnboundError, match="FARNA_CONTROL_MODULO_DOCKER_HOST"):
+    with pytest.raises(SandboxDispatchUnboundError, match="MODULO_DOCKER_HOST"):
         await resolve_sandbox_dispatch_route(_session_factory_returning(_profile("runner_docker")), _ORG, _PROFILE_ID)
 
 

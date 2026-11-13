@@ -29,9 +29,7 @@ from farna.support.redaction import Redactor
 
 # The two real message shapes, with a plausible hashed build-artefact token.
 VITE_CSS_URL = "Unable to preload CSS for https://staging.modulo.run/assets/index-aB3dE5fG7hI9jK1lM3nO5pQ.css"
-VITE_JS_URL = (
-    "Failed to fetch dynamically imported module: https://staging.modulo.run/assets/index-Xq7Lp2Rt9Vw4Bn6Mc8Kd3Fg.js"
-)
+VITE_JS_URL = "Failed to fetch dynamically imported module: https://staging.modulo.run/assets/index-Xq7Lp2Rt9Vw4Bn6Mc8Kd3Fg.js"
 UNCLASSIFIED_SECRET = "aB3dE5fG7hI9jK1lM3nO5pQ7"
 # A real Slack incoming-webhook SHAPE, assembled so the test file does not
 # itself contain a literal webhook URL (push protection scans for that shape).

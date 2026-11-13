@@ -86,9 +86,7 @@ def lifecycle_map_exists_with_modulo_stage(name: str, stage_id: str, ctx: dict[s
 
 
 @given(parsers.parse('a lifecycle map named "{name}" exists with version {version:d} and a manual stage "{stage_id}"'))
-def lifecycle_map_exists_with_version_and_manual_stage(
-    name: str, version: int, stage_id: str, ctx: dict[str, Any], request: Any
-) -> None:
+def lifecycle_map_exists_with_version_and_manual_stage(name: str, version: int, stage_id: str, ctx: dict[str, Any], request: Any) -> None:
     content_json = {"stages": [{"id": stage_id, "name": stage_id.replace("-", " ").title(), "type": "manual"}]}
     lm = _make_lifecycle_map(name=name, version=version, content_json=content_json)
     ctx["lifecycle_map"] = lm
@@ -439,9 +437,7 @@ def put_update_lifecycle_map_description(description: str, ctx: dict[str, Any], 
         patch("farna.api.routes.lifecycle_maps.update_lifecycle_map", new=AsyncMock()) as mock_update,
     ):
         mock_get.return_value = current
-        updated = _make_lifecycle_map(
-            name=current.name, version=current.version, description=description, content_json=current.content_json
-        )
+        updated = _make_lifecycle_map(name=current.name, version=current.version, description=description, content_json=current.content_json)
         mock_update.return_value = updated
         resp = client.put(f"/api/v1/lifecycle-maps/{current.id}", json={"description": description})
     _store_response(request, ctx, resp)
@@ -515,9 +511,7 @@ def save_version_with_circular_transition(ctx: dict[str, Any], request: Any, cli
         {"id": "edge-1", "source": "stage-1", "target": "stage-0"},
     ]
     with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
-        mock_save.side_effect = LifecycleMapContentError(
-            "lifecycle-map content: stage transitions form a cycle: stage-0 -> stage-1 -> stage-0"
-        )
+        mock_save.side_effect = LifecycleMapContentError("lifecycle-map content: stage transitions form a cycle: stage-0 -> stage-1 -> stage-0")
         resp = client.post(
             f"/api/v1/lifecycle-maps/{current.id}/versions",
             json={"stages": stages, "edges": edges, "notes": ""},
@@ -533,9 +527,7 @@ def save_version_with_dangling_edge(ctx: dict[str, Any], request: Any, client: A
     stages = [{"id": "stage-0", "name": "Stage 0", "type": "modulo"}]
     edges = [{"id": "edge-0", "source": "stage-0", "target": "stage-ghost"}]
     with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
-        mock_save.side_effect = LifecycleMapContentError(
-            "lifecycle-map edge/transition #0 (id 'edge-0'): target stage 'stage-ghost' is not defined in stages"
-        )
+        mock_save.side_effect = LifecycleMapContentError("lifecycle-map edge/transition #0 (id 'edge-0'): target stage 'stage-ghost' is not defined in stages")
         resp = client.post(
             f"/api/v1/lifecycle-maps/{current.id}/versions",
             json={"stages": stages, "edges": edges, "notes": ""},
@@ -553,9 +545,7 @@ def save_version_with_duplicate_stage_ids(ctx: dict[str, Any], request: Any, cli
         {"id": "stage-0", "name": "Stage 0 again", "type": "manual"},
     ]
     with patch("farna.api.routes.lifecycle_maps.save_map_version", new=AsyncMock()) as mock_save:
-        mock_save.side_effect = LifecycleMapContentError(
-            "lifecycle-map stage #1: duplicate stage id 'stage-0' (already used by stage #0)"
-        )
+        mock_save.side_effect = LifecycleMapContentError("lifecycle-map stage #1: duplicate stage id 'stage-0' (already used by stage #0)")
         resp = client.post(
             f"/api/v1/lifecycle-maps/{current.id}/versions",
             json={"stages": stages, "edges": [], "notes": ""},
@@ -711,9 +701,7 @@ def lifecycle_map_exists_with_external_stage(stage_id: str, ctx: dict[str, Any],
 
 
 @when(parsers.parse('I self-report "{kind}" "{ref}" with stage_id "{stage_id}"'))
-def self_report_with_stage_id(
-    kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any, client: Any, mock_session: Any
-) -> None:
+def self_report_with_stage_id(kind: str, ref: str, stage_id: str, ctx: dict[str, Any], request: Any, client: Any, mock_session: Any) -> None:
     """POST .../journeys/self-report naming the completed stage.
 
     The route resolves ``stage_id`` against the map's current
@@ -1031,11 +1019,7 @@ def journey_list_filtered_by_ref(ref: str, ctx: dict[str, Any]) -> None:
     assert stub.await_args.kwargs.get("ref") == ref, stub.await_args.kwargs
 
 
-@then(
-    parsers.parse(
-        'the self-report counts "{accepted:d}" accepted and "{unmatched:d}" unmatched and "{rejected:d}" rejected'
-    )
-)
+@then(parsers.parse('the self-report counts "{accepted:d}" accepted and "{unmatched:d}" unmatched and "{rejected:d}" rejected'))
 def self_report_counts(accepted: int, unmatched: int, rejected: int, request: Any) -> None:
     data = request.node._resp.json()
     assert data.get("accepted") == accepted, data

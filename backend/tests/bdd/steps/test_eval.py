@@ -145,17 +145,13 @@ def eval_run_starts_with_status(status: str, ctx):
 def eval_run_with_cases(ctx):
     ctx["num_cases"] = 3
     ctx["eval_run_id"] = uuid.uuid4()
-    ctx["cases"] = [
-        {"id": str(uuid.uuid4()), "input": f"test input {i}", "expected": f"expected {i}"} for i in range(3)
-    ]
+    ctx["cases"] = [{"id": str(uuid.uuid4()), "input": f"test input {i}", "expected": f"expected {i}"} for i in range(3)]
     ctx["scores"] = []
     ctx["aggregate_score"] = None
 
     # Mock the eval engine
     mock_engine = AsyncMock()
-    mock_engine.process_case = AsyncMock(
-        side_effect=lambda case: {"case_id": case["id"], "score": 0.85 + len(ctx["scores"]) * 0.05}
-    )
+    mock_engine.process_case = AsyncMock(side_effect=lambda case: {"case_id": case["id"], "score": 0.85 + len(ctx["scores"]) * 0.05})
     ctx["_mock_eval_engine"] = mock_engine
 
 
@@ -423,9 +419,7 @@ def see_per_case_scores_and_aggregate(request, ctx):
     stats = suite_pass_rate(ctx["rows"], 0)
     assert stats["total"] == len(ctx["rows"]), f"Expected total {len(ctx['rows'])}, got {stats['total']}"
     assert stats["passed"] == expected_passes, f"Expected {expected_passes} passed cases, got {stats['passed']}"
-    assert stats["pass_rate"] == round(expected_passes / len(ctx["rows"]), 4), (
-        f"Expected pass rate {round(expected_passes / len(ctx['rows']), 4)}, got {stats['pass_rate']}"
-    )
+    assert stats["pass_rate"] == round(expected_passes / len(ctx["rows"]), 4), f"Expected pass rate {round(expected_passes / len(ctx['rows']), 4)}, got {stats['pass_rate']}"
 
 
 # ============================================================================
@@ -1043,9 +1037,7 @@ def step_feedback_spawn_correction(ctx, request):
 @then("a FeedbackRecord is created with type human")
 def step_feedback_record_created_human(ctx):
     assert ctx.get("feedback_record_id") is not None, "No feedback record created"
-    assert ctx.get("feedback_handler_type") == "human", (
-        f"Expected human handler, got {ctx.get('feedback_handler_type')}"
-    )
+    assert ctx.get("feedback_handler_type") == "human", f"Expected human handler, got {ctx.get('feedback_handler_type')}"
 
 
 @then(parsers.parse('the feedback status is "{expected}"'))

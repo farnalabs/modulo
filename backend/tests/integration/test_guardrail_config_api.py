@@ -98,9 +98,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
             account_id = uuid.uuid4()
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, password_hash, "
-                    "auth_provider, active) "
-                    "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                    "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
                 ),
                 {"id": str(account_id), "email": email, "name": email},
             )
@@ -111,8 +109,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str, role
         if membership.first() is None:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, :role)",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)",
                 ),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id), "role": role},
             )
@@ -143,10 +140,7 @@ async def _seed_pipeline(db_engine: AsyncEngine, org_id: uuid.UUID, user_id: uui
 async def _count_guardrail_rows(db_engine: AsyncEngine, org_id: uuid.UUID) -> int:
     async with db_engine.connect() as conn:
         row = await conn.execute(
-            text(
-                "SELECT count(*) FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL"
-            ),
+            text("SELECT count(*) FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL"),
             {"oid": str(org_id)},
         )
         return int(row.scalar_one())
@@ -156,9 +150,7 @@ async def _guardrail_row_names(db_engine: AsyncEngine, org_id: uuid.UUID) -> lis
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT name FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL "
-                "ORDER BY name",
+                "SELECT name FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND deleted_at IS NULL ORDER BY name",
             ),
             {"oid": str(org_id)},
         )
@@ -306,8 +298,7 @@ async def test_propose_then_apply_creates_guardrail_rows(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT pipeline_id, eval_type, config_json FROM evals "
-                "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+                "SELECT pipeline_id, eval_type, config_json FROM evals WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
         )
@@ -453,9 +444,7 @@ async def test_drift_reported_after_row_mutation(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, "
-                "'{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) "
-                "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, '{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
         )
@@ -484,9 +473,7 @@ async def test_drift_poll_preserves_pending_proposal(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, "
-                "'{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) "
-                "WHERE organisation_id = :oid AND name = 'no-aws-keys'",
+                "UPDATE evals SET config_json = jsonb_set(config_json::jsonb, '{pattern}', '\"SK-[0-9A-Za-z]{32}\"'::jsonb) WHERE organisation_id = :oid AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
         )
@@ -536,17 +523,13 @@ async def test_apply_preserves_node_bound_guardrails(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
-                "ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) ON CONFLICT (id) DO NOTHING",
             ),
             {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
         )
         await conn.execute(
             text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'graph-node-guard', 'guardrail', CAST(:cfg AS jsonb), :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, :nid, 'graph-node-guard', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -572,8 +555,7 @@ async def test_apply_preserves_node_bound_guardrails(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT name, node_id FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
+                "SELECT name, node_id FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
             ),
             {"oid": str(org_a)},
         )
@@ -620,17 +602,13 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
-                "ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) ON CONFLICT (id) DO NOTHING",
             ),
             {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
         )
         await conn.execute(
             text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -662,8 +640,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT node_id, config_json FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
+                "SELECT node_id, config_json FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
         )
@@ -681,8 +658,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         org_rows = await conn.execute(
             text(
-                "SELECT count(*) FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
+                "SELECT count(*) FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
             ),
             {"oid": str(org_a)},
         )
@@ -707,8 +683,7 @@ async def test_apply_does_not_clobber_node_bound_row_on_name_collision(
     async with db_engine.connect() as conn:
         names = await conn.execute(
             text(
-                "SELECT name, node_id FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
+                "SELECT name, node_id FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' ORDER BY name",
             ),
             {"oid": str(org_a)},
         )
@@ -743,9 +718,7 @@ async def test_get_config_and_drift_fail_closed_on_legacy_guardrail_name(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, NULL, 'Block AWS keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, NULL, 'Block AWS keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -1047,17 +1020,13 @@ async def test_import_fails_closed_on_node_bound_collision(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) "
-                "ON CONFLICT (id) DO NOTHING",
+                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:nid, :oid, :pid, 'eval-node', :aid, 300) ON CONFLICT (id) DO NOTHING",
             ),
             {"nid": str(node_id), "oid": str(org_a), "pid": str(pipeline_a), "aid": str(admin_a)},
         )
         await conn.execute(
             text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
+                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, :nid, 'no-aws-keys', 'guardrail', CAST(:cfg AS jsonb), :aid)",
             ),
             {
                 "id": str(uuid.uuid4()),
@@ -1090,8 +1059,7 @@ async def test_import_fails_closed_on_node_bound_collision(
     async with db_engine.connect() as conn:
         rows = await conn.execute(
             text(
-                "SELECT node_id, config_json FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
+                "SELECT node_id, config_json FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND name = 'no-aws-keys'",
             ),
             {"oid": str(org_a)},
         )
@@ -1103,8 +1071,7 @@ async def test_import_fails_closed_on_node_bound_collision(
     async with db_engine.connect() as conn:
         org_rows = await conn.execute(
             text(
-                "SELECT count(*) FROM evals "
-                "WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
+                "SELECT count(*) FROM evals WHERE organisation_id = :oid AND eval_type = 'guardrail' AND node_id IS NULL",
             ),
             {"oid": str(org_a)},
         )

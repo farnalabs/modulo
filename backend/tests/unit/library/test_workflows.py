@@ -98,9 +98,7 @@ def test_connector_bindings_are_valid(name: str) -> None:
         binding = step.get("connector_binding")
         if binding is None:
             continue
-        assert binding["type"] in VALID_CONNECTOR_BINDING_TYPES, (
-            f"{name}.{step['id']}: invalid binding type {binding['type']!r}"
-        )
+        assert binding["type"] in VALID_CONNECTOR_BINDING_TYPES, f"{name}.{step['id']}: invalid binding type {binding['type']!r}"
         assert isinstance(binding.get("required"), bool), f"{name}.{step['id']}: required must be a bool"
 
 

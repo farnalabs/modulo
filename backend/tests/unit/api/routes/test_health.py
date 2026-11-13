@@ -1116,9 +1116,7 @@ class TestRunnerWorkspaceReconcileNotApplicable:
     async def test_configured_endpoint_error_still_degrades(self) -> None:
         """Endpoint configured + recorded error (engine-unreachable) ->
         degraded — the FAR-1201 signal is preserved for configured engines."""
-        fake = _FakeStatsRedis(
-            blob=_rwr_payload(error="sweep_failed (ReconcilerSweepError: engine unreachable)").encode()
-        )
+        fake = _FakeStatsRedis(blob=_rwr_payload(error="sweep_failed (ReconcilerSweepError: engine unreachable)").encode())
         result = await self._read(None, fake)
         assert result.status == "degraded"
         assert result.detail is not None
@@ -1167,9 +1165,7 @@ class TestSweepStatsWarmupGrace:
         """decision_record_reconcile outside its 3h window: a key that never
         appeared has had multiple missed cadences — the genuine dead-sweep
         signal is unchanged."""
-        result = await self._read_missing_key(
-            _check_decision_record_reconcile, started=datetime.now(UTC) - timedelta(hours=4)
-        )
+        result = await self._read_missing_key(_check_decision_record_reconcile, started=datetime.now(UTC) - timedelta(hours=4))
         assert result.status == "degraded"
         assert result.detail is not None
         assert "has never run" in result.detail

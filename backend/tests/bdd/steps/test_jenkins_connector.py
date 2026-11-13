@@ -49,10 +49,7 @@ def jenkins_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def jenkins_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    if ctx["valid"]:
-        response = httpx.Response(200, json={"nodeName": "master"})
-    else:
-        response = httpx.Response(401, text="Unauthorized")
+    response = httpx.Response(200, json={"nodeName": "master"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/api/json").mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
@@ -63,9 +60,7 @@ def jenkins_trigger_run(ctx: dict) -> None:
     from farna.connectors.base import CIRunStatus
 
     with respx.mock:
-        respx.post(f"{_BASE}/job/{ctx['job']}/build").mock(
-            return_value=httpx.Response(201, headers={"Location": f"{_BASE}/job/{ctx['job']}/42/"})
-        )
+        respx.post(f"{_BASE}/job/{ctx['job']}/build").mock(return_value=httpx.Response(201, headers={"Location": f"{_BASE}/job/{ctx['job']}/42/"}))
         run = asyncio.run(ctx["connector"].trigger_run(pipeline_id=ctx["job"]))
     assert run.status == CIRunStatus.QUEUED, run
     ctx["run"] = run
@@ -76,12 +71,8 @@ def jenkins_trigger_run_with_parameters(ctx: dict) -> None:
     from farna.connectors.base import CIRunStatus
 
     with respx.mock:
-        respx.post(f"{_BASE}/job/{ctx['job']}/buildWithParameters").mock(
-            return_value=httpx.Response(201, headers={"Location": f"{_BASE}/job/{ctx['job']}/43/"})
-        )
-        run = asyncio.run(
-            ctx["connector"].trigger_run(pipeline_id=ctx["job"], variables={"BRANCH": "main", "TAG": "v1"})
-        )
+        respx.post(f"{_BASE}/job/{ctx['job']}/buildWithParameters").mock(return_value=httpx.Response(201, headers={"Location": f"{_BASE}/job/{ctx['job']}/43/"}))
+        run = asyncio.run(ctx["connector"].trigger_run(pipeline_id=ctx["job"], variables={"BRANCH": "main", "TAG": "v1"}))
     assert run.status == CIRunStatus.QUEUED, run
     ctx["run"] = run
 
@@ -167,9 +158,7 @@ def jenkins_result_contains_builds(ctx: dict) -> None:
 @when(parsers.parse('the connector fetches logs for build "{build}"'))
 def jenkins_get_run_logs(ctx: dict, build: str) -> None:
     with respx.mock:
-        respx.get(f"{_BASE}/job/{ctx['job']}/{build}/consoleText").mock(
-            return_value=httpx.Response(200, text="line1\nline2\nline3\n")
-        )
+        respx.get(f"{_BASE}/job/{ctx['job']}/{build}/consoleText").mock(return_value=httpx.Response(200, text="line1\nline2\nline3\n"))
         ctx["logs"] = asyncio.run(ctx["connector"].get_run_logs(f"{ctx['job']}/{build}"))
 
 

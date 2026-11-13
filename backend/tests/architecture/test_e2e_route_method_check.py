@@ -82,13 +82,7 @@ def test_live_api_fetch_method_is_clean() -> None:
 
 
 def test_stale_interceptor_method_is_reported() -> None:
-    source = (
-        "await page.route(`**/api/v1/pipelines/${id}/graph`, (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route(`**/api/v1/pipelines/${id}/graph`, (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -104,13 +98,7 @@ def test_stale_interceptor_method_is_reported() -> None:
 
 
 def test_live_interceptor_method_is_clean() -> None:
-    source = (
-        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
-        "  if (route.request().method() === 'DELETE') {\n"
-        "    return route.fulfill({ status: 204 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc', (route) => {\n  if (route.request().method() === 'DELETE') {\n    return route.fulfill({ status: 204 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -135,14 +123,7 @@ def test_stale_direct_fetch_method_is_reported() -> None:
 
 
 def test_multiline_generic_api_fetch_is_extracted() -> None:
-    source = (
-        "const res = await apiFetch<{ items: Array<{ id: string }> }>(\n"
-        "  apiBase,\n"
-        "  token,\n"
-        "  'GET',\n"
-        "  `/api/v1/pipelines/${pipelineId}/snapshots?page_size=50`,\n"
-        ")\n"
-    )
+    source = "const res = await apiFetch<{ items: Array<{ id: string }> }>(\n  apiBase,\n  token,\n  'GET',\n  `/api/v1/pipelines/${pipelineId}/snapshots?page_size=50`,\n)\n"
 
     calls = _calls(source)
 
@@ -170,12 +151,7 @@ def test_interceptor_url_condition_leaves_an_explicit_note() -> None:
     notes: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await page.route('**/api/v1/pipelines', (route) => {\n"
-        "  const url = route.request().url()\n"
-        "  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n",
+        "await page.route('**/api/v1/pipelines', (route) => {\n  const url = route.request().url()\n  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n    return route.fulfill({ status: 200 })\n  }\n})\n",
         FILENAME,
         notes,
     )
@@ -188,13 +164,7 @@ def test_reversed_interceptor_comparison_is_detected() -> None:
     # FAR-1847: ``'PATCH' === route.request().method()`` starts at the opening
     # quote, which is blanked in the masked source - a start-offset code check
     # rejected every reversed comparison, leaving this branch dead.
-    source = (
-        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
-        "  if ('PATCH' === route.request().method()) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc', (route) => {\n  if ('PATCH' === route.request().method()) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -207,14 +177,7 @@ def test_reversed_interceptor_comparison_is_detected() -> None:
 def test_variable_holding_request_method_is_detected() -> None:
     # FAR-1847: the real shape is ``const m = route.request().method(); if (m ===
     # 'PATCH')`` - a literal-route inline comparison never matched it.
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  const requestMethod = route.request().method()\n"
-        "  if (requestMethod === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  const requestMethod = route.request().method()\n  if (requestMethod === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -226,13 +189,7 @@ def test_variable_holding_request_method_is_detected() -> None:
 
 def test_renamed_callback_parameter_is_detected() -> None:
     # FAR-1847: the callback parameter is not always named ``route``.
-    source = (
-        "await page.route('**/api/v1/pipelines/abc', (intercepted) => {\n"
-        "  if (intercepted.request().method() === 'PATCH') {\n"
-        "    return intercepted.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc', (intercepted) => {\n  if (intercepted.request().method() === 'PATCH') {\n    return intercepted.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -339,15 +296,7 @@ def test_second_callback_parameter_method_filter_is_detected() -> None:
     # FAR-1847 round 2: ``page.route(url, async (route, request) => ...)`` is a
     # real shape in the e2e suite. The Request is the SECOND parameter, so
     # filtering only on the first silently missed it.
-    source = (
-        "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n"
-        "  if (request.method() === 'GET') {\n"
-        "    await route.fulfill({ status: 200 })\n"
-        "  } else if (request.method() === 'POST') {\n"
-        "    await route.fulfill({ status: 201 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n  if (request.method() === 'GET') {\n    await route.fulfill({ status: 200 })\n  } else if (request.method() === 'POST') {\n    await route.fulfill({ status: 201 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -362,17 +311,7 @@ def test_hoisted_request_object_method_filter_is_detected() -> None:
     # FAR-1847 round 2: ``const request = route.request(); if
     # (request.method() === 'POST')`` is the shape in
     # frontend/tests/e2e/settings-mcp-oauth.spec.ts:93,106.
-    source = (
-        "await page.route('**/api/v1/mcp/oauth/clients**', async (route) => {\n"
-        "  const request = route.request()\n"
-        "  if (request.method() === 'POST') {\n"
-        "    return route.fulfill({ status: 201 })\n"
-        "  }\n"
-        "  if (request.method() === 'DELETE') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/mcp/oauth/clients**', async (route) => {\n  const request = route.request()\n  if (request.method() === 'POST') {\n    return route.fulfill({ status: 201 })\n  }\n  if (request.method() === 'DELETE') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -384,13 +323,7 @@ def test_hoisted_request_object_method_filter_is_detected() -> None:
 
 def test_reversed_second_callback_parameter_comparison_is_detected() -> None:
     # The reversed form of the second-parameter filter must resolve too.
-    source = (
-        "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n"
-        "  if ('GET' === request.method()) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/mcp/oauth/clients**', async (route, request) => {\n  if ('GET' === request.method()) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -402,13 +335,7 @@ def test_reversed_second_callback_parameter_comparison_is_detected() -> None:
 def test_anchored_regex_route_is_normalised_and_checked() -> None:
     # FAR-1847 round 2: ``$`` was rejected by normalise_path, so an anchored
     # regex registration was silently skipped - a stale PATCH would pass.
-    source = (
-        "await page.route(/\\/api\\/v1\\/pipelines\\/abc$/, (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route(/\\/api\\/v1\\/pipelines\\/abc$/, (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -424,13 +351,7 @@ def test_anchored_regex_route_is_normalised_and_checked() -> None:
 def test_character_class_regex_route_is_normalised() -> None:
     # The anchored + character-class form collapses to the same ``{param}``
     # shape a string registration produces, and is checked like one.
-    source = (
-        "await page.route(/^\\/api\\/v1\\/pipelines\\/([^/]+)\\/graph$/, (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route(/^\\/api\\/v1\\/pipelines\\/([^/]+)\\/graph$/, (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -457,13 +378,7 @@ def test_real_feedback_inbox_regex_registration_still_contributes() -> None:
     # feedback-inbox.spec.ts registers ``/\/api\/v1\/feedback\/inbox/`` and has
     # a bare ``if (method === 'GET')`` branch; normalising the anchored plan
     # regex must not disturb that descriptor.
-    calls = [
-        call
-        for call in _checker.collect_calls()
-        if call.filename.endswith("feedback-inbox.spec.ts")
-        and call.method == "GET"
-        and call.path == "/api/v1/feedback/inbox"
-    ]
+    calls = [call for call in _checker.collect_calls() if call.filename.endswith("feedback-inbox.spec.ts") and call.method == "GET" and call.path == "/api/v1/feedback/inbox"]
 
     # Presence and shape, not an exact count: a legitimate second identical
     # call in the spec must not turn a behavioural pin into a brittle one.
@@ -477,9 +392,7 @@ def test_api_shaped_route_that_cannot_be_normalised_is_noted() -> None:
     notes: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await page.route('/api/v1/bad path', (route) => {\n"
-        "  if (route.request().method() === 'GET') { return route.fulfill({ status: 200 }) }\n"
-        "})\n",
+        "await page.route('/api/v1/bad path', (route) => {\n  if (route.request().method() === 'GET') { return route.fulfill({ status: 200 }) }\n})\n",
         FILENAME,
         notes,
     )
@@ -525,9 +438,7 @@ def test_whole_path_ternary_is_noted_not_spliced() -> None:
     # ``/api/v1/plan{param}/api/v1/runs``; alternatives must be a note.
     notes: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "await apiFetch(b, t, 'GET', cond ? '/api/v1/plan' : '/api/v1/runs')\n", FILENAME, notes
-    )
+    calls = _checker.extract_http_calls("await apiFetch(b, t, 'GET', cond ? '/api/v1/plan' : '/api/v1/runs')\n", FILENAME, notes)
 
     assert not calls
     assert len(notes) == 1
@@ -576,14 +487,7 @@ def test_interceptor_combined_with_url_condition_on_a_specific_route_is_not_gues
     # which is skipped BEFORE method filters are read - it stayed green with
     # ``_URL_CONDITION_RE`` deleted. This non-catch-all registration would be
     # reported as a stale PATCH without the URL-condition guard.
-    source = (
-        "await page.route('**/api/v1/pipelines', (route) => {\n"
-        "  const url = route.request().url()\n"
-        "  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines', (route) => {\n  const url = route.request().url()\n  if (route.request().method() === 'PATCH' && url.includes('/review')) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     assert not _calls(source)
 
@@ -615,14 +519,7 @@ def test_real_tenancy_rbac_leading_interpolation_is_resolved() -> None:
     # leading-interpolation shape against the real tree. Assert on the shape
     # (kind/method/path), never on a line number - the spec moves and a line pin
     # turns a behavioural test into a brittle one.
-    calls = [
-        call
-        for call in _checker.collect_calls()
-        if call.filename.endswith("journeys/tenancy-rbac.spec.ts")
-        and call.kind == "fetch"
-        and call.method == "POST"
-        and call.path == "/api/v1/pipelines"
-    ]
+    calls = [call for call in _checker.collect_calls() if call.filename.endswith("journeys/tenancy-rbac.spec.ts") and call.kind == "fetch" and call.method == "POST" and call.path == "/api/v1/pipelines"]
 
     # Presence and shape, not an exact count: a legitimate second identical
     # call in the spec must not turn a behavioural pin into a brittle one.
@@ -676,14 +573,7 @@ def test_ts_asserted_method_argument_is_resolved() -> None:
 def test_boolean_holding_method_comparison_is_resolved() -> None:
     # ``const isPatch = route.request().method() === 'PATCH'; if (isPatch)`` -
     # the comparison is not itself inside the ``if``, so it was dropped.
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  const isPatch = route.request().method() === 'PATCH'\n"
-        "  if (isPatch) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  const isPatch = route.request().method() === 'PATCH'\n  if (isPatch) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _calls(source)
 
@@ -696,14 +586,7 @@ def test_boolean_holding_method_comparison_is_resolved() -> None:
 def test_negated_boolean_method_comparison_guards_the_fallback_branch() -> None:
     # ``if (!isPatch)`` selects the fallback branch, like ``!==`` - it must not
     # invent a method descriptor.
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  const isPut = route.request().method() === 'PUT'\n"
-        "  if (!isPut) {\n"
-        "    return route.fallback()\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  const isPut = route.request().method() === 'PUT'\n  if (!isPut) {\n    return route.fallback()\n  }\n})\n"
 
     assert not _calls(source)
 
@@ -742,9 +625,7 @@ def test_catch_all_with_a_method_filter_is_noted() -> None:
     notes: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await page.route('**/api/v1/**', (route) => {\n"
-        "  if (route.request().method() === 'PATCH') { return route.fulfill({ status: 200 }) }\n"
-        "})\n",
+        "await page.route('**/api/v1/**', (route) => {\n  if (route.request().method() === 'PATCH') { return route.fulfill({ status: 200 }) }\n})\n",
         FILENAME,
         notes,
     )
@@ -777,11 +658,7 @@ def test_delegated_interceptor_filter_is_noted() -> None:
     # the filter lives in the helper. That registration used to be completely
     # silent - no descriptor, no note, no unanalysed.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/x', (route) => {\n"
-        "  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/x', (route) => {\n  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -795,12 +672,7 @@ def test_locally_defined_delegated_helper_is_noted() -> None:
     # The helper's own method filter is a separate unmodelled reference (noted
     # on its line); the registration must ALSO be named, not left silent.
     notes: list[str] = []
-    source = (
-        "function isMethod(route: Route) { return route.request().method() === 'PATCH' }\n"
-        "await page.route('**/api/v1/x', (route) => {\n"
-        "  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n"
-        "})\n"
-    )
+    source = "function isMethod(route: Route) { return route.request().method() === 'PATCH' }\nawait page.route('**/api/v1/x', (route) => {\n  if (isMethod(route, 'PATCH')) return route.fulfill({ status: 200 })\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -814,10 +686,7 @@ def test_constructor_call_is_not_a_delegated_method_filter() -> None:
     notes: list[str] = []
 
     calls = _checker.extract_http_calls(
-        "await page.route('**/api/v1/notifications/in-app*', (route) => {\n"
-        "  const url = new URL(route.request().url())\n"
-        "  return route.fulfill({ status: 200, json: { items: [] } })\n"
-        "})\n",
+        "await page.route('**/api/v1/notifications/in-app*', (route) => {\n  const url = new URL(route.request().url())\n  return route.fulfill({ status: 200, json: { items: [] } })\n})\n",
         FILENAME,
         notes,
     )
@@ -870,14 +739,7 @@ def test_destructured_method_filter_is_noted() -> None:
     # ``const { method } = route.request()`` selects a branch the comparison
     # passes cannot resolve; the registration must not be silent.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
-        "  const { method } = route.request()\n"
-        "  if (method === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc', (route) => {\n  const { method } = route.request()\n  if (method === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -892,13 +754,7 @@ def test_destructured_method_filter_is_noted() -> None:
 def test_includes_method_filter_is_noted() -> None:
     # An array-membership test is a valid filter the extractor does not model.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc', (route) => {\n"
-        "  if (['PATCH', 'PUT'].includes(route.request().method())) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc', (route) => {\n  if (['PATCH', 'PUT'].includes(route.request().method())) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -913,13 +769,7 @@ def test_bracket_accessed_method_filter_is_noted() -> None:
     # missed it entirely: no descriptor, no note, no unanalysed entry - a silent
     # interceptor filter. It must at least be noted.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if (route.request()['method']() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if (route.request()['method']() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -931,13 +781,7 @@ def test_optional_chain_method_filter_is_noted() -> None:
     # The same read through an optional chain: the comparison passes only model
     # the plain ``.method()`` spelling, so ``?.method?.()`` must not vanish.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if (route.request()?.method?.() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if (route.request()?.method?.() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -952,22 +796,13 @@ def test_optional_chained_bracket_method_filter_is_noted() -> None:
     # All four shapes must at least be noted.
     for source in (
         # Inline receiver.
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if (route.request()?.['method']() === 'PATCH') return route.fulfill({})\n"
-        "})\n",
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if (route.request()?.['method']() === 'PATCH') return route.fulfill({})\n})\n",
         # Reversed comparison order.
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if ('PATCH' === route.request()?.['method']()) return route.fulfill({})\n"
-        "})\n",
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if ('PATCH' === route.request()?.['method']()) return route.fulfill({})\n})\n",
         # Second callback parameter (the Request).
-        "await page.route('**/api/v1/pipelines/abc/graph', async (route, request) => {\n"
-        "  if (request?.['method']() === 'PATCH') return route.fulfill({})\n"
-        "})\n",
+        "await page.route('**/api/v1/pipelines/abc/graph', async (route, request) => {\n  if (request?.['method']() === 'PATCH') return route.fulfill({})\n})\n",
         # A captured request object.
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  const rq = route.request()\n"
-        "  if (rq?.['method']() === 'PATCH') return route.fulfill({})\n"
-        "})\n",
+        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  const rq = route.request()\n  if (rq?.['method']() === 'PATCH') return route.fulfill({})\n})\n",
     ):
         notes: list[str] = []
         unanalysed: list[str] = []
@@ -1021,9 +856,7 @@ def test_fetch_spread_after_a_literal_method_is_not_silently_resolved() -> None:
     # override it. It must be noted instead.
     notes: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "await fetch('/api/v1/pipelines', { method: 'GET', ...init })\n", FILENAME, notes
-    )
+    calls = _checker.extract_http_calls("await fetch('/api/v1/pipelines', { method: 'GET', ...init })\n", FILENAME, notes)
 
     assert not calls
     assert len(notes) == 1
@@ -1146,9 +979,7 @@ def test_api_fetch_with_variable_method_and_path_is_noted() -> None:
     # leave one explicit note, never disappear because no argument spells
     # ``/api/``.
     notes: list[str] = []
-    source = (
-        "const endpoint = '/api/v1/pipelines/x/graph'\nconst verb = 'PATCH'\nawait apiFetch(b, t, verb, endpoint)\n"
-    )
+    source = "const endpoint = '/api/v1/pipelines/x/graph'\nconst verb = 'PATCH'\nawait apiFetch(b, t, verb, endpoint)\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -1163,17 +994,7 @@ def test_api_fetch_declaration_is_not_treated_as_a_call() -> None:
     # Noting it as an unresolved request would report the definition itself on
     # every real run (realstack-api.ts:166).
     notes: list[str] = []
-    source = (
-        "export async function apiFetch<T>(\n"
-        "  apiBase: string,\n"
-        "  token: string,\n"
-        "  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n"
-        "  path: string,\n"
-        "  body?: unknown,\n"
-        "): Promise<T> {\n"
-        "  return request(apiBase, token, method, path, body)\n"
-        "}\n"
-    )
+    source = "export async function apiFetch<T>(\n  apiBase: string,\n  token: string,\n  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n  path: string,\n  body?: unknown,\n): Promise<T> {\n  return request(apiBase, token, method, path, body)\n}\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -1185,14 +1006,7 @@ def test_hoisted_route_pattern_with_method_filter_is_noted() -> None:
     # A registration whose URL is a hoisted variable cannot be matched to one
     # route, but its callback filters on the method - so it must be noted.
     notes: list[str] = []
-    source = (
-        "const pattern = '**/api/v1/pipelines/abc/graph'\n"
-        "await page.route(pattern, (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "const pattern = '**/api/v1/pipelines/abc/graph'\nawait page.route(pattern, (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -1370,16 +1184,7 @@ def test_coverage_ledger_notes_a_method_filter_even_when_the_callback_yields_a_d
     # when another comparison in the SAME callback resolved. The ledger reports
     # the unmodelled reference per line.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if (route.request().method() === 'PUT') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "  if (route.request().method() !== 'GET') {\n"
-        "    return route.fulfill({ status: 405 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if (route.request().method() === 'PUT') {\n    return route.fulfill({ status: 200 })\n  }\n  if (route.request().method() !== 'GET') {\n    return route.fulfill({ status: 405 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -1395,16 +1200,7 @@ def test_coverage_ledger_does_not_flag_the_api_fetch_declaration() -> None:
     # passed vacuously.
     notes: list[str] = []
     unanalysed: list[str] = []
-    source = (
-        "export async function apiFetch<T>(\n"
-        "  apiBase: string,\n"
-        "  token: string,\n"
-        "  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n"
-        "  path: string,\n"
-        "): Promise<T> {\n"
-        "  return request(apiBase, token, method, path)\n"
-        "}\n"
-    )
+    source = "export async function apiFetch<T>(\n  apiBase: string,\n  token: string,\n  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',\n  path: string,\n): Promise<T> {\n  return request(apiBase, token, method, path)\n}\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
@@ -1438,14 +1234,7 @@ def test_destructured_filter_is_noted_even_when_the_same_callback_yields_a_descr
     # destructured-filter note whenever another comparison in the callback
     # resolved. A descriptor for one comparison does not validate the other.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  const { method } = route.request()\n"
-        "  if (route.request().method() === 'PUT') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  const { method } = route.request()\n  if (route.request().method() === 'PUT') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -1518,16 +1307,7 @@ def test_transport_helper_declaration_is_not_a_candidate() -> None:
     # assertion that only inspected ``unanalysed`` passed vacuously.
     notes: list[str] = []
     unanalysed: list[str] = []
-    source = (
-        "async function fetchWithTransientRetry(\n"
-        "  url: string,\n"
-        "  init: RequestInit,\n"
-        "): Promise<{ status: number }> {\n"
-        "  // e2e-route-check: ignore generic transport helper\n"
-        "  const res = await fetch(url, init)\n"
-        "  return { status: res.status }\n"
-        "}\n"
-    )
+    source = "async function fetchWithTransientRetry(\n  url: string,\n  init: RequestInit,\n): Promise<{ status: number }> {\n  // e2e-route-check: ignore generic transport helper\n  const res = await fetch(url, init)\n  return { status: res.status }\n}\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes, unanalysed)
 
@@ -1603,17 +1383,13 @@ def test_realstack_webhook_transport_call_is_extracted() -> None:
 
     calls = _checker.extract_http_calls(source, "frontend/tests/e2e/setup/realstack-api.ts")
 
-    webhook_calls = [
-        call for call in calls if call.path == "/api/v1/triggers/{param}/webhook" and call.method == "POST"
-    ]
+    webhook_calls = [call for call in calls if call.path == "/api/v1/triggers/{param}/webhook" and call.method == "POST"]
 
     # Shape, not a line pin: the spec moves and a hard-coded line turns a
     # behavioural test into a brittle one (the suite's own rule - see
     # ``test_real_tenancy_rbac_leading_interpolation_is_resolved``).
     assert len(webhook_calls) == 1
-    assert {(call.kind, call.method, call.path) for call in webhook_calls} == {
-        ("fetch", "POST", "/api/v1/triggers/{param}/webhook")
-    }
+    assert {(call.kind, call.method, call.path) for call in webhook_calls} == {("fetch", "POST", "/api/v1/triggers/{param}/webhook")}
 
 
 # ---------------------------------------------------------------------------
@@ -1696,9 +1472,7 @@ def test_renamed_request_fixture_binding_is_unanalysed() -> None:
     # => api.get(...)`` - the binding, not the call, is the only visible marker.
     unanalysed: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "test('x', async ({ request: api }) => { await api.get('/api/v1/pipelines') })\n", FILENAME, [], unanalysed
-    )
+    calls = _checker.extract_http_calls("test('x', async ({ request: api }) => { await api.get('/api/v1/pipelines') })\n", FILENAME, [], unanalysed)
 
     assert not calls
     assert len(unanalysed) == 1
@@ -1727,13 +1501,7 @@ def test_api_fetch_import_and_export_are_not_candidates() -> None:
     # An imported/re-exported binding is not a call; flagging it would make
     # every spec file that imports the helper unanalysed.
     unanalysed: list[str] = []
-    source = (
-        "import { apiBaseFor, apiFetch } from './realstack-api'\n"
-        "import {\n"
-        "  apiFetch as fetchApi,\n"
-        "} from './other'\n"
-        "export { apiFetch }\n"
-    )
+    source = "import { apiBaseFor, apiFetch } from './realstack-api'\nimport {\n  apiFetch as fetchApi,\n} from './other'\nexport { apiFetch }\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
 
@@ -1748,13 +1516,11 @@ def test_import_renamed_callees_are_extracted_and_checked() -> None:
     # used to pass with no descriptor, no note and no unanalysed entry.
     for source, expected in (
         (
-            "import { apiFetch as call } from './setup/realstack-api'\n"
-            "await call(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n",
+            "import { apiFetch as call } from './setup/realstack-api'\nawait call(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n",
             ("PATCH", "/api/v1/pipelines/1/graph"),
         ),
         (
-            "import { fetchWithTransientRetry as call } from './setup/realstack-api'\n"
-            "await call('/api/v1/pipelines/1/graph', { method: 'PATCH' })\n",
+            "import { fetchWithTransientRetry as call } from './setup/realstack-api'\nawait call('/api/v1/pipelines/1/graph', { method: 'PATCH' })\n",
             ("PATCH", "/api/v1/pipelines/1/graph"),
         ),
         (
@@ -1776,10 +1542,7 @@ def test_import_renamed_callee_live_route_is_clean() -> None:
     # Extraction must not simply turn every aliased call into a violation: a
     # live method through the same import alias stays clean.
     unanalysed: list[str] = []
-    source = (
-        "import { apiFetch as call } from './setup/realstack-api'\n"
-        "await call(apiBase, token, 'PUT', '/api/v1/pipelines/1/graph')\n"
-    )
+    source = "import { apiFetch as call } from './setup/realstack-api'\nawait call(apiBase, token, 'PUT', '/api/v1/pipelines/1/graph')\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
 
@@ -1835,9 +1598,7 @@ def test_bracket_fetch_is_unanalysed() -> None:
     # the extractor sees no ``fetch`` identifier at all.
     unanalysed: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "await globalThis['fetch']('/api/v1/pipelines/1', { method: 'DELETE' })\n", FILENAME, [], unanalysed
-    )
+    calls = _checker.extract_http_calls("await globalThis['fetch']('/api/v1/pipelines/1', { method: 'DELETE' })\n", FILENAME, [], unanalysed)
 
     assert not calls
     assert len(unanalysed) == 1
@@ -2035,11 +1796,7 @@ def test_destructured_request_verbs_are_unanalysed() -> None:
     # identifiers, so the later calls carry no ``request`` marker. The binding
     # is the only visible occurrence.
     unanalysed: list[str] = []
-    source = (
-        "const { get, post: create } = page.request\n"
-        "await get('/api/v1/pipelines')\n"
-        "await create('/api/v1/pipelines', { data })\n"
-    )
+    source = "const { get, post: create } = page.request\nawait get('/api/v1/pipelines')\nawait create('/api/v1/pipelines', { data })\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
 
@@ -2087,9 +1844,7 @@ def test_external_absolute_url_with_a_method_is_not_an_api_candidate() -> None:
     notes: list[str] = []
     unanalysed: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "await fetch('https://example.test/healthz', { method: 'POST' })\n", FILENAME, notes, unanalysed
-    )
+    calls = _checker.extract_http_calls("await fetch('https://example.test/healthz', { method: 'POST' })\n", FILENAME, notes, unanalysed)
 
     assert not calls
     assert not notes
@@ -2189,13 +1944,7 @@ def test_mid_path_glob_interceptor_method_is_checked() -> None:
     # The same ``*`` registration used to be only a NOTE, so its PATCH filter
     # was never validated against the live route.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/*/graph', (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/*/graph', (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -2215,13 +1964,7 @@ def test_three_argument_route_registration_uses_the_function_handler() -> None:
     # treat ``{ times: 1 }`` as the handler, emit a false "not an inline
     # function" note and never check the interceptor.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n"
-        "  if (route.request().method() === 'PATCH') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "}, { times: 1 })\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/abc/graph', (route) => {\n  if (route.request().method() === 'PATCH') {\n    return route.fulfill({ status: 200 })\n  }\n}, { times: 1 })\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -2241,16 +1984,7 @@ def test_delegation_note_survives_a_direct_method_read_in_the_same_callback() ->
     # A resolved PUT comparison does not validate a SECOND, delegated filter in
     # the same callback - the note must still be emitted.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n"
-        "  if (route.request().method() === 'PUT') {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "  if (isPatch(route)) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n  if (route.request().method() === 'PUT') {\n    return route.fulfill({ status: 200 })\n  }\n  if (isPatch(route)) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -2262,13 +1996,7 @@ def test_member_qualified_delegate_is_noted() -> None:
     # ``helpers.isPatch(route)`` is the same delegation as the bare form; the
     # marker used to require a bare identifier, so this was silent.
     notes: list[str] = []
-    source = (
-        "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n"
-        "  if (helpers.isPatch(route)) {\n"
-        "    return route.fulfill({ status: 200 })\n"
-        "  }\n"
-        "})\n"
-    )
+    source = "await page.route('**/api/v1/pipelines/1/graph', (route) => {\n  if (helpers.isPatch(route)) {\n    return route.fulfill({ status: 200 })\n  }\n})\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, notes)
 
@@ -2296,11 +2024,7 @@ def test_retry_fetch_import_and_export_bindings_are_not_candidates() -> None:
     # unanalysed. An open-paren-only shape would pin nothing - a specifier can
     # never satisfy ``_find_open_paren``.
     unanalysed: list[str] = []
-    source = (
-        "import { fetchWithTransientRetry } from './realstack-api'\n"
-        "import { fetchWithTransientRetry as retryFetch } from './other'\n"
-        "export { fetchWithTransientRetry }\n"
-    )
+    source = "import { fetchWithTransientRetry } from './realstack-api'\nimport { fetchWithTransientRetry as retryFetch } from './other'\nexport { fetchWithTransientRetry }\n"
 
     calls = _checker.extract_http_calls(source, FILENAME, [], unanalysed)
 
@@ -2338,9 +2062,7 @@ def test_destructuring_declaration_request_binding_is_unanalysed() -> None:
     # ``request`` marker, so the binding is the only visible occurrence.
     unanalysed: list[str] = []
 
-    calls = _checker.extract_http_calls(
-        "const { request: api } = ctx\nawait api.get('/api/v1/pipelines')\n", FILENAME, [], unanalysed
-    )
+    calls = _checker.extract_http_calls("const { request: api } = ctx\nawait api.get('/api/v1/pipelines')\n", FILENAME, [], unanalysed)
 
     assert not calls
     assert len(unanalysed) == 1
@@ -2475,11 +2197,7 @@ def test_documented_limitation_wrapped_division_swallows_the_rest_of_the_file() 
     # the CURRENT behaviour so it cannot drift silently; if a future change
     # handles wrapped division, this test fails and the docstring must change
     # with it.
-    source = (
-        "const ratio = total\n"
-        "  / 2 // don't scale\n"
-        "await apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
-    )
+    source = "const ratio = total\n  / 2 // don't scale\nawait apiFetch(apiBase, token, 'PATCH', '/api/v1/pipelines/1/graph')\n"
     notes: list[str] = []
     unanalysed: list[str] = []
 

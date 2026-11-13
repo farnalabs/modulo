@@ -129,7 +129,7 @@ def collect_secrets(manifest_dir: str) -> list[str]:
     print("Collecting secrets...")
     files: list[str] = []
     secrets_path = str(Path(manifest_dir) / "secrets.env")
-    keys = ["FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "MODULO_PUBLIC_URL", "REDIS_URL"]
+    keys = ["FERNET_KEY", "SECRET_KEY", "DATABASE_URL", "FARNA_CONTROL_PUBLIC_URL", "REDIS_URL"]
     with Path(secrets_path).open("w") as f:
         for key in keys:
             val = os.environ.get(key, "")

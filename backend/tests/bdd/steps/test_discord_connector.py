@@ -48,11 +48,7 @@ def discord_connector_invalid(ctx: dict) -> None:
 
 @when("the connector checks health")
 def discord_health_check(ctx: dict) -> None:
-    response = (
-        httpx.Response(200, json={"id": "123", "username": "ModuloBot"})
-        if ctx["valid"]
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"id": "123", "username": "ModuloBot"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/users/@me").mock(return_value=response)
         ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
@@ -81,9 +77,7 @@ def discord_query_channels(guild_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/guilds/{guild_id}/channels").mock(return_value=httpx.Response(200, json=channels))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="channels", filters={"guild_id": guild_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="channels", filters={"guild_id": guild_id})))
 
 
 @when(parsers.parse('the connector queries messages in channel "{channel_id}"'))
@@ -96,9 +90,7 @@ def discord_query_messages(channel_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/channels/{channel_id}/messages").mock(return_value=httpx.Response(200, json=messages))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="messages", filters={"channel_id": channel_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="messages", filters={"channel_id": channel_id})))
 
 
 @when(parsers.parse('the connector queries members of guild "{guild_id}"'))
@@ -111,9 +103,7 @@ def discord_query_members(guild_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/guilds/{guild_id}/members").mock(return_value=httpx.Response(200, json=members))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="guild_members", filters={"guild_id": guild_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="guild_members", filters={"guild_id": guild_id})))
 
 
 @when(parsers.parse('the connector queries roles for guild "{guild_id}"'))
@@ -126,9 +116,7 @@ def discord_query_roles(guild_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/guilds/{guild_id}/roles").mock(return_value=httpx.Response(200, json=roles))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="roles", filters={"guild_id": guild_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="roles", filters={"guild_id": guild_id})))
 
 
 @when(parsers.parse('the connector queries guild with guild_id "{guild_id}"'))
@@ -138,9 +126,7 @@ def discord_query_guild(guild_id: str, ctx: dict) -> None:
     guild = {"id": guild_id, "name": "Modulo Dev", "member_count": 42}
     with respx.mock:
         respx.get(f"{_BASE}/guilds/{guild_id}").mock(return_value=httpx.Response(200, json=guild))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="guild", filters={"guild_id": guild_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="guild", filters={"guild_id": guild_id})))
 
 
 @when(parsers.parse('the connector sends a message "{content}" to channel "{channel_id}"'))
@@ -148,14 +134,8 @@ def discord_write_message(content: str, channel_id: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(
-            return_value=httpx.Response(201, json={"id": "msg-001", "channel_id": channel_id, "content": content})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(
-                ConnectorPayload(resource="message", data={"channel_id": channel_id, "content": content})
-            )
-        )
+        respx.post(f"{_BASE}/channels/{channel_id}/messages").mock(return_value=httpx.Response(201, json={"id": "msg-001", "channel_id": channel_id, "content": content}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="message", data={"channel_id": channel_id, "content": content})))
 
 
 @when(parsers.parse('the connector adds a reaction "{emoji}" to message "{message_id}" in channel "{channel_id}"'))
@@ -163,9 +143,7 @@ def discord_write_reaction(emoji: str, message_id: str, channel_id: str, ctx: di
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.put(f"{_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me").mock(
-            return_value=httpx.Response(204)
-        )
+        respx.put(f"{_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{emoji}/@me").mock(return_value=httpx.Response(204))
         ctx["write_result"] = asyncio.run(
             ctx["connector"].write(
                 ConnectorPayload(
@@ -181,12 +159,8 @@ def discord_write_channel(name: str, guild_id: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/guilds/{guild_id}/channels").mock(
-            return_value=httpx.Response(201, json={"id": "ch-new", "name": name, "type": 0, "guild_id": guild_id})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="channel", data={"guild_id": guild_id, "name": name}))
-        )
+        respx.post(f"{_BASE}/guilds/{guild_id}/channels").mock(return_value=httpx.Response(201, json={"id": "ch-new", "name": name, "type": 0, "guild_id": guild_id}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="channel", data={"guild_id": guild_id, "name": name})))
 
 
 @then(parsers.parse('the health check returns "{status}"'))

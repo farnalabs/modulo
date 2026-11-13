@@ -186,9 +186,7 @@ def _get(client: TestClient, *, membership: bool) -> int:
 
 
 class TestCrossTeamPipelineVisibility:
-    def test_non_member_cannot_get_team_private_pipeline(
-        self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]
-    ) -> None:
+    def test_non_member_cannot_get_team_private_pipeline(self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]) -> None:
         """Post-migration, a non-member gets 404, not 403.
 
         After migration ``0124_fix_team_rls_policies`` drops the org-only
@@ -212,21 +210,15 @@ class TestCrossTeamPipelineVisibility:
         )
         assert _get(client, membership=False) == 404
 
-    def test_member_can_get_team_private_pipeline(
-        self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]
-    ) -> None:
+    def test_member_can_get_team_private_pipeline(self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]) -> None:
         client, _ = make_client(org_role="operator", owner_team_id=_TEAM_A, visibility="team")
         assert _get(client, membership=True) == 200
 
-    def test_org_admin_can_get_team_private_pipeline(
-        self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]
-    ) -> None:
+    def test_org_admin_can_get_team_private_pipeline(self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]) -> None:
         client, _ = make_client(org_role="admin", owner_team_id=_TEAM_A, visibility="team")
         assert _get(client, membership=False) == 200
 
-    def test_org_visible_pipeline_not_team_gated(
-        self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]
-    ) -> None:
+    def test_org_visible_pipeline_not_team_gated(self, make_client: Callable[..., tuple[TestClient, _ResolverRow]]) -> None:
         client, _ = make_client(org_role="operator", owner_team_id=None, visibility="org")
         with patch(
             "farna.api.routes.pipelines.get_pipeline",
@@ -472,9 +464,7 @@ class TestOwnershipTransferRunsConnectorTeamGate:
         assert kwargs["pipeline_owner_team_id"] == _TEAM_A
         assert kwargs["connector_bindings"] == [{"node_id": "node-1", "connector_instance_id": str(conn_id)}]
 
-    def test_owner_team_change_with_an_unbound_graph_skips_the_gate(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_owner_team_change_with_an_unbound_graph_skips_the_gate(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """No stored bindings -> nothing to gate -> the transfer still succeeds.
 
         Pins that the gate is scoped to the stored bindings (no spurious 409
@@ -494,9 +484,7 @@ class TestOwnershipTransferRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_mismatches.assert_not_awaited()
 
-    def test_a_patch_that_keeps_the_team_boundary_does_not_gate(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_a_patch_that_keeps_the_team_boundary_does_not_gate(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """Only owner_team_id/visibility CHANGES trigger the gate — a rename
         (or a same-value owner assignment) must not issue the lookup."""
         current = _pipeline_row_with_binding(owner_team_id=_TEAM_A, visibility="team", instance_id=uuid.uuid4())
@@ -523,9 +511,7 @@ class TestConfirmImportRunsConnectorTeamGate:
     transaction, so the named 409 rolls the whole import back.
     """
 
-    def test_import_of_a_team_pipeline_pinning_a_mismatching_connector_is_409(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_import_of_a_team_pipeline_pinning_a_mismatching_connector_is_409(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """FAILS without the fix: no gate call -> the import completes 200.
 
         The predicate double reports a cross-team binding (a team-private
@@ -571,9 +557,7 @@ class TestConfirmImportRunsConnectorTeamGate:
         assert kwargs["pipeline_owner_team_id"] == _TEAM_A
         assert kwargs["connector_bindings"] == [{"node_id": "node-1", "connector_instance_id": str(conn_id)}]
 
-    def test_import_without_resolvable_bindings_still_completes(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_import_without_resolvable_bindings_still_completes(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """An import whose graph carries no connector bindings is not gated."""
         materialized = {
             "pipeline_id": str(_PIPELINE_ID),
@@ -599,9 +583,7 @@ class TestConfirmImportRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_mismatches.assert_not_awaited()
 
-    def test_import_with_a_resolvable_binding_that_does_not_mismatch_completes(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_import_with_a_resolvable_binding_that_does_not_mismatch_completes(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """The gate's clean path (bindings present, no mismatch) must not block."""
         conn_id = uuid.uuid4()
         materialized = {
@@ -631,9 +613,7 @@ class TestConfirmImportRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_mismatches.assert_awaited_once()
 
-    def test_import_with_an_unresolvable_binding_is_409(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_import_with_an_unresolvable_binding_is_409(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """FAR-1515 CRITICAL 1: an unresolvable binding is the same named 409."""
         from farna.core.team_visibility import ConnectorBindingMissingError
 
@@ -718,9 +698,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
     organisation — so that direction now passes (FAR-1618).
     """
 
-    def test_flipping_a_bound_connector_to_org_is_allowed(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_flipping_a_bound_connector_to_org_is_allowed(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """FAR-1618: widening to org cannot strand any bound pipeline.
 
         Reverses the FAR-1515 reverse direction: the gate still LOOKS UP the
@@ -743,9 +721,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
         assert "connector_team_mismatch" not in resp.text
         find_bound.assert_awaited_once()
 
-    def test_narrowing_a_bound_connector_to_another_team_is_409(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_narrowing_a_bound_connector_to_another_team_is_409(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """The team-PRIVATE direction still refuses — a bound pipeline outside
         the new owner team would be stranded, so the re-scope is the named 409.
 
@@ -771,9 +747,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
         assert "shared-ci" in detail
         assert "is team-private" in detail
 
-    def test_a_re_scope_with_no_actual_change_does_not_query(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_a_re_scope_with_no_actual_change_does_not_query(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """PATCHing the SAME visibility back is a no-op: no bound-pipeline lookup."""
         existing = _connector_instance_row(visibility="org", owner_team_id=None)
         updated = _connector_instance_row(visibility="org", owner_team_id=None)
@@ -788,9 +762,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_bound.assert_not_awaited()
 
-    def test_a_re_scope_with_no_bound_pipeline_succeeds(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_a_re_scope_with_no_bound_pipeline_succeeds(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """Nothing binds it -> the re-scope is allowed (predicate never fires)."""
         existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
         updated = _connector_instance_row(visibility="org", owner_team_id=_TEAM_A)
@@ -805,9 +777,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
         assert resp.status_code == 200, resp.text
         find_bound.assert_awaited_once()
 
-    def test_a_prefilter_false_positive_does_not_block(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_a_prefilter_false_positive_does_not_block(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """A candidate whose graph mentions the id in text but binds a DIFFERENT
         connector is not a real binding, so the re-scope proceeds."""
         existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)
@@ -823,9 +793,7 @@ class TestConnectorReScopeRunsConnectorTeamGate:
 
         assert resp.status_code == 200, resp.text
 
-    def test_a_bound_pipeline_without_a_mismatch_does_not_block(
-        self, make_client: Callable[..., tuple[TestClient, Any]]
-    ) -> None:
+    def test_a_bound_pipeline_without_a_mismatch_does_not_block(self, make_client: Callable[..., tuple[TestClient, Any]]) -> None:
         """A pipeline binding the connector from a scope the rule allows (an org
         pipeline binding a connector about to become org-wide) is not a mismatch."""
         existing = _connector_instance_row(visibility="team", owner_team_id=_TEAM_A)

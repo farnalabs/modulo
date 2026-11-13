@@ -213,10 +213,7 @@ def evaluate_discovery_case(input_payload: Any, expected_output: Any) -> Discove
         )
     actual = normalise_discovery_output(discover_draft(sources))
     differences = _diff(expected, actual)
-    if differences:
-        detail = f"discovery graph mismatch ({len(differences)} difference(s)): {differences[0]['path']}"
-    else:
-        detail = "discovery graph matched the expected output"
+    detail = f"discovery graph mismatch ({len(differences)} difference(s)): {differences[0]['path']}" if differences else "discovery graph matched the expected output"
     return DiscoveryEvaluation(
         passed=not differences,
         score=1.0 if not differences else 0.0,

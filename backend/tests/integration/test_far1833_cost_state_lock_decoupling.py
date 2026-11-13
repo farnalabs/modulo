@@ -68,10 +68,7 @@ async def _seed(
     settings_json = json.dumps({"cost_controls": {"circuit_breaker_enabled": True}}) if auto_stop else json.dumps({})
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, CAST(:settings AS json), '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, CAST(:settings AS json), '{}'::json)"),
             {
                 "id": str(org_id),
                 "name": "FAR-1833 cost-state org",
@@ -81,24 +78,16 @@ async def _seed(
         )
         await conn.execute(
             text(
-                "INSERT INTO organisation_cost_state "
-                "(org_id, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:id, :ceiling, :cumulative)",
+                "INSERT INTO organisation_cost_state (org_id, spend_ceiling_cents, org_cumulative_spend_cents) VALUES (:id, :ceiling, :cumulative)",
             ),
             {"id": str(org_id), "ceiling": spend_ceiling_cents, "cumulative": cumulative_cents},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_id), "email": f"far1833-{account_id.hex[:8]}@example.com", "name": "FAR-1833"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                "run_context_defaults, visibility, max_concurrent_runs) "
-                "VALUES (:id, :oid, :aid, :name, '[]'::json, '{}'::json, 'org', 50)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, run_context_defaults, visibility, max_concurrent_runs) VALUES (:id, :oid, :aid, :name, '[]'::json, '{}'::json, 'org', 50)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -117,11 +106,7 @@ async def _seed(
             {"id": str(snapshot_id), "oid": str(org_id), "pid": str(pipeline_id), "aid": str(account_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, "
-                "trigger_type, status, input_hash, langgraph_thread_id, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :aid, 'manual', 'complete', 'hash', :thread, 1)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:id, :oid, :pid, :sid, :aid, 'manual', 'complete', 'hash', :thread, 1)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -157,11 +142,7 @@ async def _finalize(
             # Mirror production: the finalising transaction inserts FK-referencing
             # rows (taking FOR KEY SHARE on the org tuple) before the gate runs.
             await session.execute(
-                text(
-                    "INSERT INTO audit_events "
-                    "(id, organisation_id, event_type, payload_json, created_at, updated_at) "
-                    "VALUES (:id, :oid, 'far1833.finalize_probe', '{}'::jsonb, now(), now())"
-                ),
+                text("INSERT INTO audit_events (id, organisation_id, event_type, payload_json, created_at, updated_at) VALUES (:id, :oid, 'far1833.finalize_probe', '{}'::jsonb, now(), now())"),
                 {"id": str(uuid.uuid4()), "oid": str(org_id)},
             )
         await _ledger_block(
@@ -256,9 +237,7 @@ async def test_contended_cost_state_lock_degrades_to_bounded_55p03_not_40p01(
         await holder.close()
         await _cleanup(db_engine, seed)
 
-    assert sqlstate_of(excinfo.value) == "55P03", (
-        f"expected a bounded 55P03 lock_timeout, got {sqlstate_of(excinfo.value)!r}"
-    )
+    assert sqlstate_of(excinfo.value) == "55P03", f"expected a bounded 55P03 lock_timeout, got {sqlstate_of(excinfo.value)!r}"
     # Bounded: the wait was capped by the (short) lock_timeout, not unbounded.
     assert elapsed < _BOUNDED_WAIT_TIMEOUT_SECONDS, f"lock wait not bounded (elapsed {elapsed:.2f}s)"
 

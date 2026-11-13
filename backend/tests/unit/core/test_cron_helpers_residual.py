@@ -678,9 +678,7 @@ async def test_fire_report_trigger_generator_cancellation_reraises():
         patch.object(ch, "_set_rls_org", new_callable=AsyncMock),
         patch.object(ch, "get_settings", return_value=_settings()),
         patch.object(ch, "AsyncRedis", redis_cls),
-        patch(
-            "farna.core.reports.scheduler.get_generator", return_value=AsyncMock(side_effect=asyncio.CancelledError())
-        ),
+        patch("farna.core.reports.scheduler.get_generator", return_value=AsyncMock(side_effect=asyncio.CancelledError())),
         pytest.raises(asyncio.CancelledError),
     ):
         await ch.fire_report_trigger(report_id=REPORT_ID, org_id=ORG)
@@ -939,9 +937,7 @@ def test_resolve_suite_run_config_missing_ids():
 
 
 def test_resolve_suite_run_config_invalid_ids():
-    dataset_id, model_backend_id, skip = ch._resolve_suite_run_config(
-        {"dataset_id": "bad", "model_backend_id": "also-bad"}
-    )
+    dataset_id, model_backend_id, skip = ch._resolve_suite_run_config({"dataset_id": "bad", "model_backend_id": "also-bad"})
     assert dataset_id is None
     assert model_backend_id is None
     assert skip == {"status": "skipped", "reason": "invalid_suite_run_config"}
@@ -1123,9 +1119,7 @@ async def test_fire_missed_cron_epochs_read_failure_returns(caplog):
     session.execute = AsyncMock(side_effect=RuntimeError("db down"))
     summary: dict[str, Any] = {"cron_catchup_enqueued": 0}
     with caplog.at_level(logging.ERROR, logger="farna.core.cron_helpers"):
-        await ch._fire_missed_cron_epochs(
-            session, _redis(), MagicMock(), ORG, datetime.now(UTC), summary=summary, advanced_this_tick=set()
-        )
+        await ch._fire_missed_cron_epochs(session, _redis(), MagicMock(), ORG, datetime.now(UTC), summary=summary, advanced_this_tick=set())
     assert summary["cron_catchup_enqueued"] == 0
     assert any("catch-up read failed" in m for m in caplog.messages)
 
@@ -1134,9 +1128,7 @@ async def test_fire_missed_cron_epochs_read_reraises_cancellation():
     session = _MockSession()
     session.execute = AsyncMock(side_effect=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
-        await ch._fire_missed_cron_epochs(
-            session, _redis(), MagicMock(), ORG, datetime.now(UTC), summary={}, advanced_this_tick=set()
-        )
+        await ch._fire_missed_cron_epochs(session, _redis(), MagicMock(), ORG, datetime.now(UTC), summary={}, advanced_this_tick=set())
 
 
 async def test_fire_missed_cron_epochs_skips_epoch_when_unresolvable():
@@ -1152,9 +1144,7 @@ async def test_fire_missed_cron_epochs_skips_epoch_when_unresolvable():
         patch.object(ch, "_claim_catchup_marker", new_callable=AsyncMock) as claim,
         patch.object(ch, "_enqueue_catchup_fire", enqueue),
     ):
-        await ch._fire_missed_cron_epochs(
-            session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set()
-        )
+        await ch._fire_missed_cron_epochs(session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set())
     claim.assert_not_awaited()
     enqueue.assert_not_awaited()
 
@@ -1186,9 +1176,7 @@ async def test_fire_missed_cron_epochs_skips_uncomputable_epoch():
         patch.object(ch, "_claim_catchup_marker", new_callable=AsyncMock, return_value=True),
         patch.object(ch, "_enqueue_catchup_fire", enqueue),
     ):
-        await ch._fire_missed_cron_epochs(
-            session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set()
-        )
+        await ch._fire_missed_cron_epochs(session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set())
     enqueue.assert_not_awaited()
 
 
@@ -1203,9 +1191,7 @@ async def test_fire_missed_cron_epochs_skips_unelected_epoch():
         patch.object(ch, "_advance_catchup_epoch", advance),
         patch.object(ch, "_enqueue_catchup_fire", AsyncMock()),
     ):
-        await ch._fire_missed_cron_epochs(
-            session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set()
-        )
+        await ch._fire_missed_cron_epochs(session, _redis(), MagicMock(), ORG, now, summary=summary, advanced_this_tick=set())
     assert summary["cron_catchup_enqueued"] == 0
 
 
@@ -1336,9 +1322,7 @@ async def test_enqueue_cron_fire_marker_write_failure_is_isolated():
     q = MagicMock()
     q.name = "runs"
     now = datetime.now(UTC)
-    row = SimpleNamespace(
-        id=TRIGGER_A, cron_expression=_DAILY_CRON, next_fire_at=now, pipeline_id=PIPELINE, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, cron_expression=_DAILY_CRON, next_fire_at=now, pipeline_id=PIPELINE, run_kind="run")
     summary: dict[str, Any] = {"cron_enqueued": 0, "enqueue_failures": 0}
     with (
         patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1"),
@@ -1353,9 +1337,7 @@ async def test_enqueue_cron_fire_marker_write_reraises_cancellation():
     q = MagicMock()
     q.name = "runs"
     now = datetime.now(UTC)
-    row = SimpleNamespace(
-        id=TRIGGER_A, cron_expression=_DAILY_CRON, next_fire_at=now, pipeline_id=PIPELINE, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, cron_expression=_DAILY_CRON, next_fire_at=now, pipeline_id=PIPELINE, run_kind="run")
     with (
         patch.object(ch, "_enqueue_fire_job_async", new_callable=AsyncMock, return_value="job-1"),
         patch.object(ch, "_mark_catchup_fired", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
@@ -1495,9 +1477,7 @@ async def test_process_one_due_polling_row_missing_connector_advances():
 
 async def test_process_one_due_polling_row_invalid_connector_id_degrades_to_missing():
     now = datetime.now(UTC)
-    row = SimpleNamespace(
-        id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": "junk"}, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": "junk"}, run_kind="run")
     q = MagicMock()
     q.name = "runs"
     summary: dict[str, Any] = {"polling_due": 0}
@@ -1509,9 +1489,7 @@ async def test_process_one_due_polling_row_invalid_connector_id_degrades_to_miss
 
 async def test_process_one_due_polling_row_advance_failure_variants():
     now = datetime.now(UTC)
-    row = SimpleNamespace(
-        id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": str(uuid.uuid4())}, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": str(uuid.uuid4())}, run_kind="run")
     q = MagicMock()
     q.name = "runs"
     with (
@@ -1527,9 +1505,7 @@ async def test_process_one_due_polling_row_advance_failure_variants():
 
 async def test_process_one_due_polling_row_not_advanced_and_enqueue_failure():
     now = datetime.now(UTC)
-    row = SimpleNamespace(
-        id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": str(uuid.uuid4())}, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"connector_instance_id": str(uuid.uuid4())}, run_kind="run")
     q = MagicMock()
     q.name = "runs"
     summary: dict[str, Any] = {"polling_due": 0, "polling_enqueued": 0}
@@ -1652,9 +1628,7 @@ async def test_process_one_ongoing_row_variants():
     now = datetime.now(UTC)
     q = MagicMock()
     q.name = "runs"
-    row = SimpleNamespace(
-        id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"scan_interval_seconds": 120}, run_kind="run"
-    )
+    row = SimpleNamespace(id=TRIGGER_A, pipeline_id=PIPELINE, config_json={"scan_interval_seconds": 120}, run_kind="run")
     with (
         patch.object(ch, "_advance_ongoing_next_fire", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
@@ -1969,9 +1943,7 @@ async def test_run_reconcile_sweeps_swallows_each_failure(caplog):
         patch.object(ch, "_open_system_factory", return_value=make_session_factory()),
         patch.object(ch, "run_classification_reconcile", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
         patch.object(ch, "enforce_no_delivery_streaks", new_callable=AsyncMock, side_effect=RuntimeError("redis down")),
-        patch(
-            "farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, side_effect=RuntimeError("db down")
-        ),
+        patch("farna.auth.api_key.revoke_run_api_key_sweep", new_callable=AsyncMock, side_effect=RuntimeError("db down")),
         patch(
             "farna.core.rollback_thresholds.evaluate_rollback_thresholds",
             new_callable=AsyncMock,
@@ -2132,9 +2104,7 @@ async def test_reconcile_enqueue_failed_cap_hit_defers():
     now = datetime.now(UTC)
     row = SimpleNamespace(id=uuid.uuid4(), enqueue_failed_at=now - timedelta(seconds=30))
     summary: dict[str, Any] = {"enqueue_failed_capped": 0}
-    got = await ch._reconcile_enqueue_failed(
-        _redis(), _MockSession(), ORG, row, True, ch.ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK, summary, []
-    )
+    got = await ch._reconcile_enqueue_failed(_redis(), _MockSession(), ORG, row, True, ch.ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK, summary, [])
     assert got == ch.ENQUEUE_FAILED_REDISPATCH_MAX_PER_TICK
     assert summary["enqueue_failed_capped"] == 1
 
@@ -2144,9 +2114,7 @@ async def test_read_reconcile_job_reraises_cancellation():
     q.name = "runs"
     q.job = AsyncMock(side_effect=asyncio.CancelledError())
     with pytest.raises(asyncio.CancelledError):
-        await ch._read_reconcile_job(
-            _MockSession(), q, ORG, SimpleNamespace(id=uuid.uuid4()), "run:x", "read", {"redis_errors": 0}
-        )
+        await ch._read_reconcile_job(_MockSession(), q, ORG, SimpleNamespace(id=uuid.uuid4()), "run:x", "read", {"redis_errors": 0})
 
 
 async def test_read_reconcile_job_failure_ingests_and_fails_safe():
@@ -2156,9 +2124,7 @@ async def test_read_reconcile_job_failure_ingests_and_fails_safe():
     summary: dict[str, Any] = {"redis_errors": 0}
     ingest = AsyncMock()
     with patch.object(ch, "_ingest_saq_error", ingest):
-        job, ok = await ch._read_reconcile_job(
-            _MockSession(), q, ORG, SimpleNamespace(id=uuid.uuid4()), "run:x", "read", summary
-        )
+        job, ok = await ch._read_reconcile_job(_MockSession(), q, ORG, SimpleNamespace(id=uuid.uuid4()), "run:x", "read", summary)
     assert job is None
     assert ok is False
     assert summary["redis_errors"] == 1
@@ -2180,9 +2146,7 @@ async def test_re_dispatch_reconciled_run_variants():
         patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, side_effect=asyncio.CancelledError()),
         pytest.raises(asyncio.CancelledError),
     ):
-        await ch._re_dispatch_reconciled_run(
-            session, MagicMock(), ORG, row, "execute_run", "abc", None, False, 0, summary
-        )
+        await ch._re_dispatch_reconciled_run(session, MagicMock(), ORG, row, "execute_run", "abc", None, False, 0, summary)
     summary2: dict[str, Any] = {
         "redis_errors": 0,
         "repaired": 0,
@@ -2196,9 +2160,7 @@ async def test_re_dispatch_reconciled_run_variants():
         patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, side_effect=RuntimeError("queue down")),
         patch.object(ch, "_ingest_saq_error", ingest),
     ):
-        got = await ch._re_dispatch_reconciled_run(
-            session, MagicMock(), ORG, row, "execute_run", "abc", None, False, 3, summary2
-        )
+        got = await ch._re_dispatch_reconciled_run(session, MagicMock(), ORG, row, "execute_run", "abc", None, False, 3, summary2)
     assert got == 3
     ingest.assert_awaited_once()
     summary3: dict[str, Any] = {
@@ -2210,9 +2172,7 @@ async def test_re_dispatch_reconciled_run_variants():
         "enqueue_failed_redispatched": 0,
     }
     with patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueue_failed", None)):
-        got = await ch._re_dispatch_reconciled_run(
-            session, MagicMock(), ORG, row, "execute_run", "abc", None, True, 0, summary3
-        )
+        got = await ch._re_dispatch_reconciled_run(session, MagicMock(), ORG, row, "execute_run", "abc", None, True, 0, summary3)
     assert got == 0
     assert summary3["skipped"] == 1
 
@@ -2229,9 +2189,7 @@ async def test_re_dispatch_reconciled_run_enqueued_increments_counter():
         "enqueue_failed_redispatched": 0,
     }
     with patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=("enqueued", "job-9")):
-        got = await ch._re_dispatch_reconciled_run(
-            session, MagicMock(), ORG, row, "execute_run", "abc", None, True, 0, summary
-        )
+        got = await ch._re_dispatch_reconciled_run(session, MagicMock(), ORG, row, "execute_run", "abc", None, True, 0, summary)
     assert got == 1
     assert summary["enqueue_failed_redispatched"] == 1
 
@@ -2381,9 +2339,7 @@ async def test_awaiting_human_guard_corrupted_payload_skips():
 async def test_committed_decision_resume_data_corrupted_payload_recovers_action():
     """A corrupted payload degrades to ``{"action": <decision>}`` stamped with
     the decision row's own gate id — never None for a committed decision."""
-    with patch.object(
-        ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("approved", "not-json{", "gate-1")
-    ):
+    with patch.object(ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("approved", "not-json{", "gate-1")):
         resume = await ch._committed_decision_resume_data(_MockSession(), ORG, uuid.uuid4())
     assert resume == {"action": "approved", "review_id": "gate-1"}
 
@@ -2396,9 +2352,7 @@ async def test_committed_decision_resume_data_no_decision_returns_none():
 
 async def test_committed_decision_resume_data_unstamped_payload_gets_row_gate():
     payload = json.dumps({"action": "rejected"})
-    with patch.object(
-        ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("rejected", payload, "gate-2")
-    ):
+    with patch.object(ch, "_latest_committed_decision_row", new_callable=AsyncMock, return_value=("rejected", payload, "gate-2")):
         resume = await ch._committed_decision_resume_data(_MockSession(), ORG, uuid.uuid4())
     assert resume == {"action": "rejected", "review_id": "gate-2"}
 
@@ -2466,10 +2420,7 @@ async def test_run_reconcile_sweeps_reraises_cancellation(sweep_patch: tuple[str
         "dispatch_failed_terminalized": 0,
     }
     cancelled = AsyncMock(side_effect=asyncio.CancelledError())
-    if target.startswith("ch."):
-        patcher = patch.object(ch, target.split(".", 1)[1], cancelled)
-    else:
-        patcher = patch(target, new=cancelled)
+    patcher = patch.object(ch, target.split(".", 1)[1], cancelled) if target.startswith("ch.") else patch(target, new=cancelled)
     with ExitStack() as stack:
         stack.enter_context(patcher)
         if needs_factories:
@@ -2715,9 +2666,7 @@ async def test_redispatch_marker_refresh_only_for_running_rows():
 
     summary: dict[str, Any] = {"repaired": 0, "redis_errors": 0, "skipped": 0, "deduped": 0, "capacity_deferred": 0}
     with patch.object(ch, "_re_enqueue_run", side_effect=_re_enqueue):
-        await ch._re_dispatch_reconciled_run(
-            session, MagicMock(), ORG, row, "execute_run", "suffix-1", None, False, 0, summary
-        )
+        await ch._re_dispatch_reconciled_run(session, MagicMock(), ORG, row, "execute_run", "suffix-1", None, False, 0, summary)
     assert not session.executed, "a pending re-dispatch must not mint a marker-clear UPDATE"
 
     running_row = SimpleNamespace(id=uuid.uuid4(), status="running", sandbox_dispatch_state='{"state": "dispatching"}')
@@ -2735,9 +2684,7 @@ async def test_redispatch_marker_refresh_only_for_running_rows():
         patch.object(ch, "_re_enqueue_run", side_effect=_re_enqueue2),
         patch.object(ch, "_clear_previous_attempt_marker", new_callable=AsyncMock) as clear_mock,
     ):
-        await ch._re_dispatch_reconciled_run(
-            session2, MagicMock(), ORG, running_row, "execute_run", "suffix-2", None, False, 0, summary
-        )
+        await ch._re_dispatch_reconciled_run(session2, MagicMock(), ORG, running_row, "execute_run", "suffix-2", None, False, 0, summary)
     clear_mock.assert_awaited_once()
 
 

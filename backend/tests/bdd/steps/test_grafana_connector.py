@@ -64,9 +64,7 @@ def grafana_query_dashboards(ctx: dict) -> None:
         {"uid": "d2", "title": "API Monitoring", "type": "dash-db"},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(
-            return_value=httpx.Response(200, json=dashboards)
-        )
+        respx.get(f"{_BASE}/api/search", params={"type": "dash-db"}).mock(return_value=httpx.Response(200, json=dashboards))
         ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="dashboards")))
 
 
@@ -77,9 +75,7 @@ def grafana_query_dashboard_by_uid(uid: str, ctx: dict) -> None:
     dashboard = {"dashboard": {"uid": uid, "title": "My Dashboard"}, "meta": {"slug": "my-dashboard"}}
     with respx.mock:
         respx.get(f"{_BASE}/api/dashboards/uid/{uid}").mock(return_value=httpx.Response(200, json=dashboard))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="dashboard", filters={"uid": uid}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="dashboard", filters={"uid": uid})))
 
 
 @when("the connector queries alert rules")
@@ -108,9 +104,7 @@ def grafana_write_annotation(text: str, ctx: dict) -> None:
 
     with respx.mock:
         respx.post(f"{_BASE}/api/annotations").mock(return_value=httpx.Response(200, json={"id": 42, "text": text}))
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="annotation", data={"text": text}))
-        )
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="annotation", data={"text": text})))
 
 
 @then(parsers.parse('the health check returns "{status}"'))

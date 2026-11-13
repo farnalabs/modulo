@@ -89,7 +89,7 @@ def test_promote_rebuilds_compose_bundle_from_ga_tag_and_replaces_release_assets
 
     pull_script = job["steps"][pull_idx]["run"]
     assert 'docker pull "$IMAGE"' in pull_script
-    assert 'IMAGE="ghcr.io/${{ github.repository }}:v${VERSION}"' in pull_script
+    assert 'IMAGE="ghcr.io/farnalabs/farna-control:v${VERSION}"' in pull_script
     # The pull must be anonymous: a credential would let a private image look
     # publishable and the bundle would fail on the evaluator's clean host.
     assert 'export DOCKER_CONFIG="$EMPTY_DOCKER_CONFIG"' in pull_script
@@ -326,11 +326,11 @@ def test_release_attests_bundle_tarball_and_sbom_subjects() -> None:
     }
 
     expected_images = {
-        "Attest all-in-one image": ("ghcr.io/${{ github.repository }}", "all_in_one_digest"),
-        "Attest backend image": ("ghcr.io/${{ github.repository }}/backend", "backend_digest"),
-        "Attest frontend image": ("ghcr.io/${{ github.repository }}/frontend", "frontend_digest"),
+        "Attest all-in-one image": ("ghcr.io/farnalabs/farna-control", "all_in_one_digest"),
+        "Attest backend image": ("ghcr.io/farnalabs/farna-control/backend", "backend_digest"),
+        "Attest frontend image": ("ghcr.io/farnalabs/farna-control/frontend", "frontend_digest"),
         "Attest runner-opencode image": (
-            "ghcr.io/${{ github.repository }}/runner-opencode",
+            "ghcr.io/farnalabs/farna-control/runner-opencode",
             "runner_opencode_digest",
         ),
     }
@@ -1057,7 +1057,7 @@ def test_release_pr_driving_steps_use_the_trusted_bot_token() -> None:
         assert "GITHUB_TOKEN" not in env, f"{label} must keep the branch push on the checkout github.token credential"
         script = cast(str, step["run"])
         assert "github.token" not in script
-        assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in script, f"{label} must fail closed with an ::error:: naming MODULO_RELEASE_PR_TOKEN"
+        assert "MODULO_RELEASE_PR_TOKEN" in script, f"{label} must fail closed with an ::error:: naming MODULO_RELEASE_PR_TOKEN"
         assert '[ -z "${GH_TOKEN:-}" ]' in script, f"{label} must reject an empty GH_TOKEN"
         guard_index = script.index('[ -z "${GH_TOKEN:-}" ]')
         first_gh = min(script.index(command) for command in _RELEASE_PR_DRIVING_COMMANDS if command in script)

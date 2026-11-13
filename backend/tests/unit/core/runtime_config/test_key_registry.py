@@ -45,11 +45,7 @@ class TestKeyClassification:
         """Each key is either hot-with-consumers or boot-only-with-reason."""
         classified = set(KEY_CONSUMERS) | set(BOOT_ONLY_REASONS)
         unclassified = set(KNOWN_KEYS) - classified
-        assert not unclassified, (
-            "Unclassified runtime-config key(s): "
-            f"{sorted(unclassified)} — add consumers= (hot-reloadable) or "
-            "boot_reason= to _KEY_CONFIG in store.py"
-        )
+        assert not unclassified, f"Unclassified runtime-config key(s): {sorted(unclassified)} — add consumers= (hot-reloadable) or boot_reason= to _KEY_CONFIG in store.py"
 
     def test_classification_is_a_partition(self) -> None:
         """No key is both hot-reloadable-with-consumers and boot-only."""
@@ -59,11 +55,7 @@ class TestKeyClassification:
     def test_hot_keys_have_consumers(self) -> None:
         """hot_reloadable=True requires a non-empty consumer list."""
         hot_without_consumers = {k for k in HOT_RELOADABLE_KEYS if not KEY_CONSUMERS.get(k)}
-        assert not hot_without_consumers, (
-            f"hot_reloadable key(s) with no registered store-reading consumer: "
-            f"{sorted(hot_without_consumers)} — an override for these would "
-            "silently do nothing (the FAR-1135 defect)"
-        )
+        assert not hot_without_consumers, f"hot_reloadable key(s) with no registered store-reading consumer: {sorted(hot_without_consumers)} — an override for these would silently do nothing (the FAR-1135 defect)"
 
     def test_consumers_imply_hot_flag(self) -> None:
         """A key with consumers must be flagged hot_reloadable (consistency)."""

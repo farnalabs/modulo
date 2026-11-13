@@ -67,26 +67,15 @@ class TestComputeRunWorkIntact:
 
     def test_terminal_failed_full_dag_is_true(self, executor: PipelineExecutor) -> None:
         # A harness/sandbox failure with intact work → the false-failure banner.
-        assert (
-            executor._compute_run_work_intact("failed", "harness.db.connection_lost", {"a": _completed_output()}, {"a"})
-            is True
-        )
+        assert executor._compute_run_work_intact("failed", "harness.db.connection_lost", {"a": _completed_output()}, {"a"}) is True
 
     def test_truncated_run_not_intact(self, executor: PipelineExecutor) -> None:
         # A run truncated at node 1 of 2 is NOT work-intact (§2.3.2).
-        assert (
-            executor._compute_run_work_intact(
-                "failed", "harness.db.connection_lost", {"a": _completed_output()}, {"a", "b"}
-            )
-            is False
-        )
+        assert executor._compute_run_work_intact("failed", "harness.db.connection_lost", {"a": _completed_output()}, {"a", "b"}) is False
 
     def test_agent_failed_elevation_is_false(self, executor: PipelineExecutor) -> None:
         # A1 elevation (§15.4): the run is NOT complete — honest verdict False.
-        assert (
-            executor._compute_run_work_intact("failed", "agent.failed", {"a": _declared_success_output()}, {"a"})
-            is False
-        )
+        assert executor._compute_run_work_intact("failed", "agent.failed", {"a": _declared_success_output()}, {"a"}) is False
 
     def test_invalid_artifact_not_intact(self, executor: PipelineExecutor) -> None:
         assert executor._compute_run_work_intact("failed", "harness.db.connection_lost", {"a": {}}, {"a"}) is False
@@ -222,9 +211,7 @@ class TestMigrationRunEvidenceFinalState:
 async def sqlite_factory():
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as conn:
-        await conn.run_sync(
-            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[RunEvidence.__table__, Run.__table__])
-        )
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[RunEvidence.__table__, Run.__table__]))
     factory = async_sessionmaker(engine, expire_on_commit=False, autobegin=False)
     yield factory, engine
     await engine.dispose()

@@ -33,9 +33,7 @@ def _run(coro: Any) -> Any:
 def _state(request: Any) -> dict:
     state = getattr(request.node, "_file_io_state", None)
     if state is None:
-        raise RuntimeError(
-            "file_io BDD state not initialised — the Background 'a local runtime workspace' step must run first"
-        )
+        raise RuntimeError("file_io BDD state not initialised — the Background 'a local runtime workspace' step must run first")
     return state
 
 

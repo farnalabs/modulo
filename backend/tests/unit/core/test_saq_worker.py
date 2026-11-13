@@ -30,7 +30,7 @@ def test_system_registration_includes_demo_daily_refresh() -> None:
 
 def _settings(system_url: str = "") -> SimpleNamespace:
     return SimpleNamespace(
-        farna_control_system_database_url=system_url,
+        modulo_system_database_url=system_url,
         modulo_db="postgres",
         saq_worker_db_pool_size=7,
         saq_worker_concurrency=2,
@@ -104,7 +104,7 @@ def test_fails_closed_when_unset(reset_system_engine, monkeypatch: pytest.Monkey
     errors: list[tuple[object, object]] = []
     monkeypatch.setattr(sw._log, "error", lambda msg, extra=None: errors.append((msg, extra)))
 
-    with pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"):
+    with pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"):
         sw._get_system_async_engine()
 
     assert len(errors) == 1

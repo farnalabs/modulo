@@ -1104,9 +1104,7 @@ def test_edge_level_correction_target_combined_with_on_reject() -> None:
         "both_unset",
     ],
 )
-def test_node_level_correction_target_transitions(
-    old_cfg: dict | None, new_cfg: dict | None, expected: list[str]
-) -> None:
+def test_node_level_correction_target_transitions(old_cfg: dict | None, new_cfg: dict | None, expected: list[str]) -> None:
     diff = apply_gated_edge_diff(
         _SESSION,
         [],

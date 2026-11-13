@@ -222,9 +222,7 @@ def run_routes_back_to(target: str, ctx):
 
 @then("the eval triggers the HITL review")
 def eval_triggers_hitl_review(ctx):
-    assert ctx.get("eval_triggers_interrupt"), (
-        f"Expected eval to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
-    )
+    assert ctx.get("eval_triggers_interrupt"), f"Expected eval to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
 
 
 @then('the run transitions to "awaiting_human"')
@@ -243,16 +241,12 @@ def both_branches_execute(a: str, b: str, ctx):
 @then("the run completes only after both branches finish")
 def run_completes_after_both_branches(ctx):
     branches = ctx.get("executed_branches", [])
-    assert len(branches) == len(ctx.get("parallel_targets", [])), (
-        f"Expected {len(ctx.get('parallel_targets', []))} branches, got {len(branches)}"
-    )
+    assert len(branches) == len(ctx.get("parallel_targets", [])), f"Expected {len(ctx.get('parallel_targets', []))} branches, got {len(branches)}"
 
 
 @then("the eval does not trigger the HITL review")
 def eval_does_not_trigger_hitl_review(ctx):
-    assert not ctx.get("eval_triggers_interrupt"), (
-        f"Expected eval NOT to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
-    )
+    assert not ctx.get("eval_triggers_interrupt"), f"Expected eval NOT to trigger interrupt (score={ctx.get('eval_score')}, threshold={ctx.get('eval_threshold')})"
 
 
 @then("execution continues without interrupting")

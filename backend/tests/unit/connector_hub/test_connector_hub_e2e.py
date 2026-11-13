@@ -69,9 +69,7 @@ async def test_e2e_full_lifecycle_spans_and_credential_cleanup(tmp_path, otel_sp
             health = await connector.health_check()
             assert health.ok is True
 
-            write_result = await connector.write(
-                ConnectorPayload(resource="file", data={"path": "e2e.txt", "content": "e2e secret"})
-            )
+            write_result = await connector.write(ConnectorPayload(resource="file", data={"path": "e2e.txt", "content": "e2e secret"}))
             assert write_result["bytes_written"] == len("e2e secret")
 
             read_result = await connector.query(ConnectorQuery(resource="file", filters={"path": "e2e.txt"}))

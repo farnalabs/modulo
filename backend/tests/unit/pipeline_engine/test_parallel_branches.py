@@ -139,10 +139,7 @@ class TestFanOutExecution:
             # running when branch-b starts (and vice versa).
             if a_start < b_end and b_start < a_end:
                 return  # proven concurrent on this attempt
-            last_err = (
-                f"branches did not run in parallel: branch-a=[{a_start:.3f},{a_end:.3f}] "
-                f"branch-b=[{b_start:.3f},{b_end:.3f}]"
-            )
+            last_err = f"branches did not run in parallel: branch-a=[{a_start:.3f},{a_end:.3f}] branch-b=[{b_start:.3f},{b_end:.3f}]"
         raise AssertionError(last_err)
 
 
@@ -226,9 +223,7 @@ class TestParallelContextSetterValidatorWarning:
     def test_parallel_context_setter_fanout_warns(self) -> None:
         """Fan-out to two context-setters emits a save-time warning."""
         result = ValidationResult()
-        GraphValidator._check_parallel_run_context_writes(
-            self._graph({"branch-a": "context_setter", "branch-b": "context_setter"}), result
-        )
+        GraphValidator._check_parallel_run_context_writes(self._graph({"branch-a": "context_setter", "branch-b": "context_setter"}), result)
         codes = [i.code for i in result.issues]
         assert "PARALLEL_RUN_CONTEXT_WRITE" in codes
         assert all(i.severity == "warning" for i in result.issues)
@@ -236,16 +231,12 @@ class TestParallelContextSetterValidatorWarning:
     def test_parallel_single_context_setter_no_warning(self) -> None:
         """A fan-out with only ONE context-setter branch is safe."""
         result = ValidationResult()
-        GraphValidator._check_parallel_run_context_writes(
-            self._graph({"branch-a": "context_setter", "branch-b": "agent"}), result
-        )
+        GraphValidator._check_parallel_run_context_writes(self._graph({"branch-a": "context_setter", "branch-b": "agent"}), result)
         assert not result.issues
 
     def test_parallel_non_setters_no_warning(self) -> None:
         result = ValidationResult()
-        GraphValidator._check_parallel_run_context_writes(
-            self._graph({"branch-a": "agent", "branch-b": "agent"}), result
-        )
+        GraphValidator._check_parallel_run_context_writes(self._graph({"branch-a": "agent", "branch-b": "agent"}), result)
         assert not result.issues
 
     def test_disjoint_declared_keys_no_warning(self) -> None:
@@ -280,9 +271,7 @@ class TestParallelContextSetterValidatorWarning:
     def test_warning_is_advisory_and_does_not_block(self) -> None:
         """PARALLEL_RUN_CONTEXT_WRITE is a warning — it never blocks a save."""
         result = ValidationResult()
-        GraphValidator._check_parallel_run_context_writes(
-            self._graph({"branch-a": "context_setter", "branch-b": "context_setter"}), result
-        )
+        GraphValidator._check_parallel_run_context_writes(self._graph({"branch-a": "context_setter", "branch-b": "context_setter"}), result)
         assert result.is_valid
         assert any(i.code == "PARALLEL_RUN_CONTEXT_WRITE" for i in result.issues)
 
@@ -775,9 +764,7 @@ class TestCostUnderConcurrency:
             "branch-a": {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300},
             "branch-b": {"input_tokens": 50, "output_tokens": 50, "total_tokens": 100},
         }
-        total_tokens, total_cost, per_node = PipelineExecutor._compute_token_costs(
-            usage, Decimal("0.001"), Decimal("0.002")
-        )
+        total_tokens, total_cost, per_node = PipelineExecutor._compute_token_costs(usage, Decimal("0.001"), Decimal("0.002"))
         assert total_tokens == 400
         assert float(total_cost) == pytest.approx(0.001 * 150 + 0.002 * 250)
         assert set(per_node.keys()) == {"branch-a", "branch-b"}

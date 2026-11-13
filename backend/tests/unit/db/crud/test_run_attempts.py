@@ -61,9 +61,7 @@ async def maker(tmp_path: Any) -> AsyncIterator[async_sessionmaker[AsyncSession]
 
     async with engine.begin() as conn:
         await conn.exec_driver_sql("CREATE TABLE organisations (id VARCHAR(32) PRIMARY KEY)")
-        await conn.exec_driver_sql(
-            "CREATE TABLE runs (id VARCHAR(32) PRIMARY KEY, organisation_id VARCHAR(32) NOT NULL)"
-        )
+        await conn.exec_driver_sql("CREATE TABLE runs (id VARCHAR(32) PRIMARY KEY, organisation_id VARCHAR(32) NOT NULL)")
         await conn.run_sync(RunAttempt.__table__.create)
         await conn.exec_driver_sql(
             "INSERT INTO organisations (id) VALUES (:org), (:other_org)",
@@ -130,9 +128,7 @@ class TestAttemptIndexContract:
 
 
 class TestStartAttempt:
-    async def test_persists_an_open_row_with_the_run_organisation(
-        self, maker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_persists_an_open_row_with_the_run_organisation(self, maker: async_sessionmaker[AsyncSession]) -> None:
         await _start(maker, model_used="deepseek-v4.1-flash")
         [attempt] = await _attempts(maker)
 
@@ -144,9 +140,7 @@ class TestStartAttempt:
         assert attempt.model_used == "deepseek-v4.1-flash"
         assert attempt.started_at is not None
 
-    async def test_organisation_is_derived_from_the_run_not_the_caller(
-        self, maker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_organisation_is_derived_from_the_run_not_the_caller(self, maker: async_sessionmaker[AsyncSession]) -> None:
         # _OTHER_RUN belongs to _OTHER_ORG; the row must carry _OTHER_ORG.
         await _start(maker, _OTHER_RUN)
         async with maker() as session:
@@ -211,9 +205,7 @@ class TestCloseAttempt:
         [attempt] = await _attempts(maker)
         assert attempt.ended_at.replace(tzinfo=UTC) == ended
 
-    async def test_unknown_terminal_reason_is_rejected_before_the_write(
-        self, maker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_unknown_terminal_reason_is_rejected_before_the_write(self, maker: async_sessionmaker[AsyncSession]) -> None:
         await _start(maker)
         with pytest.raises(ValueError, match="unknown attempt terminal_reason"):
             await _close(maker, terminal_reason="exploded")
@@ -223,9 +215,7 @@ class TestCloseAttempt:
         assert attempt.terminal_reason is None
 
     @pytest.mark.parametrize("reason", sorted(ATTEMPT_TERMINAL_REASON_VALUES))
-    async def test_every_vocabulary_value_is_accepted(
-        self, maker: async_sessionmaker[AsyncSession], reason: str
-    ) -> None:
+    async def test_every_vocabulary_value_is_accepted(self, maker: async_sessionmaker[AsyncSession], reason: str) -> None:
         await _start(maker)
         assert await _close(maker, terminal_reason=reason) == 0
         [attempt] = await _attempts(maker)
@@ -266,24 +256,15 @@ class TestDatabaseConstraints:
         async with maker() as session:
             with pytest.raises(IntegrityError):
                 await session.execute(
-                    text(
-                        "INSERT INTO run_attempts (id, organisation_id, run_id, attempt_index, started_at) "
-                        "VALUES (:id, :org, :run, -1, CURRENT_TIMESTAMP)"
-                    ),
+                    text("INSERT INTO run_attempts (id, organisation_id, run_id, attempt_index, started_at) VALUES (:id, :org, :run, -1, CURRENT_TIMESTAMP)"),
                     {"id": uuid.uuid4().hex, "org": _ORG.hex, "run": _RUN.hex},
                 )
 
-    async def test_unknown_terminal_reason_is_rejected_by_the_check(
-        self, maker: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_unknown_terminal_reason_is_rejected_by_the_check(self, maker: async_sessionmaker[AsyncSession]) -> None:
         async with maker() as session:
             with pytest.raises(IntegrityError):
                 await session.execute(
-                    text(
-                        "INSERT INTO run_attempts "
-                        "(id, organisation_id, run_id, attempt_index, started_at, terminal_reason) "
-                        "VALUES (:id, :org, :run, 0, CURRENT_TIMESTAMP, 'exploded')"
-                    ),
+                    text("INSERT INTO run_attempts (id, organisation_id, run_id, attempt_index, started_at, terminal_reason) VALUES (:id, :org, :run, 0, CURRENT_TIMESTAMP, 'exploded')"),
                     {"id": uuid.uuid4().hex, "org": _ORG.hex, "run": _RUN.hex},
                 )
 
@@ -294,11 +275,7 @@ class TestDatabaseConstraints:
         ended = started - timedelta(seconds=1)
         async with maker() as session, session.begin():
             await session.execute(
-                text(
-                    "INSERT INTO run_attempts "
-                    "(id, organisation_id, run_id, attempt_index, started_at, ended_at) "
-                    "VALUES (:id, :org, :run, 0, :started, :ended)"
-                ),
+                text("INSERT INTO run_attempts (id, organisation_id, run_id, attempt_index, started_at, ended_at) VALUES (:id, :org, :run, 0, :started, :ended)"),
                 {
                     "id": uuid.uuid4().hex,
                     "org": _ORG.hex,

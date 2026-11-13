@@ -415,11 +415,7 @@ def community_primitive_exists(request: pytest.FixtureRequest) -> None:
 # ===================================================================
 
 
-@when(
-    parsers.parse(
-        'I POST /api/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'
-    )
-)
+@when(parsers.parse('I POST /api/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'))
 def crud_post_composite(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url("/api/composite-templates")
     _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
@@ -537,9 +533,7 @@ def crud_get_composite(client, template_id: str, request: pytest.FixtureRequest,
 
 
 @when(parsers.parse('I PATCH /api/composite-templates/{template_id} with new name "{new_name}"'))
-def crud_patch_composite(
-    client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def crud_patch_composite(client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     actual_url = _map_url(f"/api/composite-templates/{template_id}")
     _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
 
@@ -644,9 +638,7 @@ def when_graph_validator_checks(request: pytest.FixtureRequest) -> None:
         if template is not None and getattr(template, "parameter_ports_json", None):
             for port in template.parameter_ports_json:
                 if port.get("required") and port.get("name") not in parameter_values:
-                    errors.append(
-                        f"Node '{composite_node.get('id')}': required parameter '{port.get('name')}' has no value"
-                    )
+                    errors.append(f"Node '{composite_node.get('id')}': required parameter '{port.get('name')}' has no value")
 
     request.node._validation_errors = errors
 
@@ -773,9 +765,7 @@ def when_browse_composites(client, primitive_type: str, request: pytest.FixtureR
     _patch_set_rls(patches, "farna.api.routes.library.set_rls_user_context")
 
     mock_primitives = getattr(request.node, "_mock_primitives", [])
-    page_result = PageResult(
-        items=mock_primitives, total=len(mock_primitives), page=1, page_size=20, next_cursor=None, has_more=False
-    )
+    page_result = PageResult(items=mock_primitives, total=len(mock_primitives), page=1, page_size=20, next_cursor=None, has_more=False)
     patcher = patch(
         "farna.api.routes.library.list_primitives",
         new_callable=AsyncMock,
@@ -815,9 +805,7 @@ def when_adapt_composite(
     _store_response(request, resp)
 
 
-@when(
-    parsers.parse('the user creates a library primitive with primitive_type "{primitive_type}" and empty content_json')
-)
+@when(parsers.parse('the user creates a library primitive with primitive_type "{primitive_type}" and empty content_json'))
 def when_create_primitive_empty(
     client,
     primitive_type: str,
@@ -870,11 +858,7 @@ def when_update_composite_empty_content_json(
     _store_response(request, resp)
 
 
-@when(
-    parsers.parse(
-        'the user saves the pipeline as composite with name "{composite_name}" and selected node "{node_label}"'
-    )
-)
+@when(parsers.parse('the user saves the pipeline as composite with name "{composite_name}" and selected node "{node_label}"'))
 def when_save_pipeline_as_composite(
     client,
     composite_name: str,
@@ -1201,9 +1185,7 @@ def crud_get_composite_v1(client, template_id: str, request: pytest.FixtureReque
 
 
 @when(parsers.parse('I PATCH /api/v1/composite-templates/{template_id} with new name "{new_name}"'))
-def crud_patch_composite_v1(
-    client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+def crud_patch_composite_v1(client, template_id: str, new_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_template = getattr(request.node, "_mock_template", _make_template(id=uuid.UUID(template_id), name=new_name))
     patcher = patch(
@@ -1245,14 +1227,8 @@ def other_org_get_composite_v1(org: str, template_id: str, request: pytest.Fixtu
     _store_response(request, resp)
 
 
-@when(
-    parsers.parse(
-        'I POST /api/v1/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'
-    )
-)
-def crud_post_composite_v1(
-    client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]
-) -> None:
+@when(parsers.parse('I POST /api/v1/composite-templates with name "{name}" and a sub-pipeline containing agent "{agent_name}"'))
+def crud_post_composite_v1(client, name: str, agent_name: str, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
     mock_template = _make_template(name=name, version="0.1.0")
     patcher = patch(
@@ -1291,9 +1267,7 @@ def crud_post_composite_v1(
 @when("I POST /api/v1/composite-templates with an empty name")
 def crud_post_composite_empty_name_v1(client, request: pytest.FixtureRequest, patches: list[Any]) -> None:
     _patch_set_rls(patches, "farna.api.routes.composite_templates.set_rls_org")
-    resp = client.post(
-        "/api/v1/composite-templates", json={"name": "", "sub_pipeline_graph_json": {"nodes": [], "edges": []}}
-    )
+    resp = client.post("/api/v1/composite-templates", json={"name": "", "sub_pipeline_graph_json": {"nodes": [], "edges": []}})
     _store_response(request, resp)
 
 

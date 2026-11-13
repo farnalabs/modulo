@@ -631,14 +631,7 @@ async def _stamp_terminal(
     operator deactivated.
     """
     terminal = update(ScheduledReport).where(ScheduledReport.id == report_id)
-    if schedule_type == "one_time":
-        terminal = terminal.where(ScheduledReport.active.is_(True)).values(
-            last_sent_at=delivered_at,
-            next_send_at=None,
-            active=False,
-        )
-    else:
-        terminal = terminal.values(last_sent_at=delivered_at)
+    terminal = terminal.where(ScheduledReport.active.is_(True)).values(last_sent_at=delivered_at, next_send_at=None, active=False) if schedule_type == "one_time" else terminal.values(last_sent_at=delivered_at)
     try:
         async with factory() as session, session.begin():
             await rls(session, org_id)

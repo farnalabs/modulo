@@ -207,9 +207,7 @@ async def test_approve_sets_delivered_at():
 
     with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
         mgr = HITLManager()
-        result = await mgr.approve(
-            session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER
-        )
+        result = await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER)
 
     assert result.delivered_at is not None
     assert isinstance(result.delivered_at, datetime)
@@ -225,9 +223,7 @@ async def test_delivered_at_is_recent():
     with patch("farna.core.hitl_manager.append_audit_event", new_callable=AsyncMock):
         mgr = HITLManager()
         before = datetime.now(UTC)
-        result = await mgr.approve(
-            session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER
-        )
+        result = await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="tok", actor_id=_USER)
         after = datetime.now(UTC)
 
     assert before <= result.delivered_at <= after
@@ -315,9 +311,7 @@ async def test_delivery_failure_propagates():
     ):
         mgr = HITLManager()
         with pytest.raises(RuntimeError, match="audit db down"):
-            await mgr.approve(
-                session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER
-            )
+            await mgr.approve(session, run_id=_RUN, review_id=_GATE, org_id=_ORG, claim_token="good-token", actor_id=_USER)
 
         # Only the primary event is attempted — no fallback dispatch
         assert mock_audit.await_count == 1

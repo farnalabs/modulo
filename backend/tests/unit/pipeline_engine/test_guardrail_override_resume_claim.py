@@ -64,16 +64,8 @@ _ACTOR = uuid.UUID("00000000-0000-0000-0000-0000000000d4")
 # the override's existence probe and the claim touch. ``run_number_counters``
 # is migration-only DDL (no ORM model) that ``create_run``'s Postgres
 # allocation path writes to.
-_CHECKPOINT_DDL = text(
-    "CREATE TABLE IF NOT EXISTS checkpoints ("
-    "organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, "
-    "checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, "
-    "PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))"
-)
-_RUN_NUMBER_COUNTER_DDL = text(
-    "CREATE TABLE IF NOT EXISTS run_number_counters ("
-    "organisation_id UUID PRIMARY KEY, next_run_number INTEGER NOT NULL DEFAULT 1)"
-)
+_CHECKPOINT_DDL = text("CREATE TABLE IF NOT EXISTS checkpoints (organisation_id UUID NOT NULL, thread_id TEXT NOT NULL, checkpoint_ns TEXT NOT NULL DEFAULT '', checkpoint_id TEXT NOT NULL, PRIMARY KEY (organisation_id, thread_id, checkpoint_ns, checkpoint_id))")
+_RUN_NUMBER_COUNTER_DDL = text("CREATE TABLE IF NOT EXISTS run_number_counters (organisation_id UUID PRIMARY KEY, next_run_number INTEGER NOT NULL DEFAULT 1)")
 
 
 # ---------------------------------------------------------------------------
@@ -133,10 +125,7 @@ async def test_langgraph_resume_without_a_checkpoint_reexecutes_every_node() -> 
     # PT024: the message goes in ``pytest.fail`` — an assertion message is
     # for comparison diagnostics, not fixed explanations.
     if executed != ["a", "b"]:
-        pytest.fail(
-            "a no-checkpoint resume must re-execute the whole graph (the FAR-1649 sin); "
-            f"executed nodes were {executed!r}"
-        )
+        pytest.fail(f"a no-checkpoint resume must re-execute the whole graph (the FAR-1649 sin); executed nodes were {executed!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -282,10 +271,7 @@ async def _seed_root_checkpoint(session: AsyncSession, run_id: uuid.UUID) -> Non
     """Insert the root-namespace checkpoint a completed superstep leaves."""
     thread = (await session.execute(sa.select(Run.langgraph_thread_id).where(Run.id == run_id))).scalar_one()
     await session.execute(
-        text(
-            "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id) "
-            "VALUES (:oid, :tid, '', :cid)"
-        ),
+        text("INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id) VALUES (:oid, :tid, '', :cid)"),
         {"oid": str(_ORG), "tid": thread, "cid": uuid.uuid4().hex},
     )
 
@@ -335,9 +321,7 @@ class TestRealPostgresResumeClaim:
             assert claimed.guardrail_override_resume_pending is False
             assert claimed.heartbeat_at is not None
 
-    async def test_node_started_run_without_checkpoint_is_refused_and_stays_terminal(
-        self, seeded_engine: AsyncEngine
-    ) -> None:
+    async def test_node_started_run_without_checkpoint_is_refused_and_stays_terminal(self, seeded_engine: AsyncEngine) -> None:
         """M1 (real seam): no root checkpoint -> fail closed with
         ``GuardrailOverrideNoCheckpointError``; the run is left the terminal
         ``eval_failed``/``eval_blocked`` block it was — re-calling the override

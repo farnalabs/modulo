@@ -40,9 +40,7 @@ _EXTRA_BUILD_FIXTURES: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
     ("ticket-tracker", {"provider": "github"}, {"token": "tt_token"}),
     ("linear", {}, {"token": "linear_token"}),
 ]
-_BUILD_FIXTURES: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {
-    row[0]: (row[1], row[2]) for row in [*BUILD_CASES, *_EXTRA_BUILD_FIXTURES]
-}
+_BUILD_FIXTURES: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {row[0]: (row[1], row[2]) for row in [*BUILD_CASES, *_EXTRA_BUILD_FIXTURES]}
 
 
 def _match_arm_ids() -> set[str]:

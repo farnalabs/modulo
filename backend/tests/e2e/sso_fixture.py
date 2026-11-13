@@ -126,9 +126,7 @@ async def _authorize_url_for_route(
     verifier = "fixture-code-verifier"
     signed_state = sso_auth.sign_state(f"{provider_id}:{raw_state}", settings.secret_key)
     idp_base = os.environ.get("E2E_IDP_BASE_URL", "http://127.0.0.1:8000")
-    auth_url = f"{idp_base}/test-idp/authorize?" + urlencode(
-        {"client_id": provider_id, "redirect_uri": redirect_uri, "state": signed_state, "mode": "success"}
-    )
+    auth_url = f"{idp_base}/test-idp/authorize?" + urlencode({"client_id": provider_id, "redirect_uri": redirect_uri, "state": signed_state, "mode": "success"})
     return auth_url, raw_state, nonce, verifier
 
 

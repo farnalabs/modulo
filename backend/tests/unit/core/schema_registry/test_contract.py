@@ -216,9 +216,7 @@ class TestAtomicityAndRollback:
     def test_rollback_when_active_fails(self, tmp_path: Path) -> None:
         """When active.json write fails, canonical.json is rolled back."""
         call_count = 0
-        original_atomic = __import__(
-            "farna.core.schema_registry.contract", fromlist=["_atomic_write_json"]
-        )._atomic_write_json
+        original_atomic = __import__("farna.core.schema_registry.contract", fromlist=["_atomic_write_json"])._atomic_write_json
 
         def mock_atomic(path: Path, data: dict[str, Any]) -> None:
             nonlocal call_count
@@ -244,9 +242,7 @@ class TestAtomicityAndRollback:
 
     def test_rollback_failure_is_logged(self, tmp_path: Path) -> None:
         """When the rollback unlink itself fails, the failure is swallowed."""
-        original_atomic = __import__(
-            "farna.core.schema_registry.contract", fromlist=["_atomic_write_json"]
-        )._atomic_write_json
+        original_atomic = __import__("farna.core.schema_registry.contract", fromlist=["_atomic_write_json"])._atomic_write_json
         call_count = 0
 
         def mock_atomic(path: Path, data: dict[str, Any]) -> None:
@@ -682,13 +678,9 @@ class TestArchitectureAssertion:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert "jsonschema" not in alias.name, (
-                        "contract.py must NOT import jsonschema — schema validation is Modulo's responsibility"
-                    )
+                    assert "jsonschema" not in alias.name, "contract.py must NOT import jsonschema — schema validation is Modulo's responsibility"
             elif isinstance(node, ast.ImportFrom) and node.module and "jsonschema" in node.module:
-                pytest.fail(
-                    "contract.py must NOT import from jsonschema — schema validation is Modulo's responsibility"
-                )
+                pytest.fail("contract.py must NOT import from jsonschema — schema validation is Modulo's responsibility")
 
     def test_contract_module_has_no_validate_call(self) -> None:
         import ast

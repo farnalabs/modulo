@@ -349,9 +349,7 @@ class TestOptimizePrompt:
 
     def test_optimize_uses_current_template_when_version_current(self, client: TestClient) -> None:
         agent = _make_agent()
-        agent.prompt_version_history = [
-            {"version": "v1", "template": "Old v1 template", "created_at": _NOW.isoformat()}
-        ]
+        agent.prompt_version_history = [{"version": "v1", "template": "Old v1 template", "created_at": _NOW.isoformat()}]
         mock_optimizer = MagicMock()
         mock_optimizer.optimize = AsyncMock(
             return_value=MagicMock(

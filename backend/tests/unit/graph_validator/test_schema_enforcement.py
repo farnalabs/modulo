@@ -481,9 +481,7 @@ async def test_pre_existing_pipeline_input_mismatch_blocked_with_truthful_messag
     )
 
     rows = [
-        _schema_version_row(
-            entry_id, {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
-        ),
+        _schema_version_row(entry_id, {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}),
     ]
     session = _schema_version_session(rows)
 

@@ -215,9 +215,7 @@ def _eval_result_score(score: float, ctx) -> None:
 def _eval_blocked_raised(ctx) -> None:
     _run_eval(ctx)
     assert ctx["eval_error"] is not None, "Expected EvalBlockedError but none was raised"
-    assert isinstance(ctx["eval_error"], EvalBlockedError), (
-        f"Expected EvalBlockedError, got {type(ctx['eval_error']).__name__}"
-    )
+    assert isinstance(ctx["eval_error"], EvalBlockedError), f"Expected EvalBlockedError, got {type(ctx['eval_error']).__name__}"
 
 
 @then(parsers.parse('the run transitions to status "{status}"'))
@@ -229,9 +227,7 @@ def _run_transitions_to_status(status: str, ctx) -> None:
 @then("a warning is logged")
 def _warning_is_logged(ctx, caplog) -> None:
     _run_eval(ctx)
-    assert any(
-        record.levelname == "WARNING" and ctx["eval_name"] in record.getMessage() for record in caplog.records
-    ), "Expected a WARNING log about the failed warn-behaviour eval"
+    assert any(record.levelname == "WARNING" and ctx["eval_name"] in record.getMessage() for record in caplog.records), "Expected a WARNING log about the failed warn-behaviour eval"
 
 
 @then("pipeline execution continues")
@@ -245,9 +241,7 @@ def _callable_receives_backend(backend_id: str, ctx) -> None:
     _run_eval(ctx)
     received = ctx["callable_captured"].get("eval_def")
     assert received is not None, "The model_judge callable was never invoked"
-    assert received.config.get("model_backend_id") == backend_id, (
-        f"Expected model_backend_id {backend_id!r}, got {received.config.get('model_backend_id')!r}"
-    )
+    assert received.config.get("model_backend_id") == backend_id, f"Expected model_backend_id {backend_id!r}, got {received.config.get('model_backend_id')!r}"
 
 
 @then("the callable does not use the agent's own model backend")

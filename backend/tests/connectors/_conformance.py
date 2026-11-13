@@ -43,9 +43,7 @@ def _assert_json_serializable(value: Any, label: str) -> None:
     except (TypeError, ValueError) as exc:
         raise AssertionError(f"{label} is not JSON-serializable: {exc}") from exc
     if restored != value:
-        raise AssertionError(
-            f"{label} does not survive a JSON round-trip unchanged: got {restored!r}, expected {value!r}"
-        )
+        raise AssertionError(f"{label} does not survive a JSON round-trip unchanged: got {restored!r}, expected {value!r}")
 
 
 def assert_result_shape(result: Any) -> None:
@@ -58,9 +56,7 @@ def assert_result_shape(result: Any) -> None:
     assert result.total is None or isinstance(result.total, int)
     if result.total is not None:
         assert result.total >= 0, f"ConnectorResult.total must be non-negative, got {result.total}"
-    assert isinstance(result.metadata, dict), (
-        f"ConnectorResult.metadata must be a dict, got {type(result.metadata).__name__}"
-    )
+    assert isinstance(result.metadata, dict), f"ConnectorResult.metadata must be a dict, got {type(result.metadata).__name__}"
     # Records feed into JMESPath evaluation, JSON API responses, and LangGraph
     # state — non-serializable values would only fail at runtime, not in tests.
     _assert_json_serializable(result.records, "ConnectorResult.records")

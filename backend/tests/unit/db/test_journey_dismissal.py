@@ -181,9 +181,7 @@ class TestHydrateDismissSuppression:
         assert journey.reason == "done"
         assert dismissed_at_before is not None
 
-    async def test_agent_probe_counts_dismissed_rows_not_as_mint(
-        self, session: AsyncSession, refs_events: list[tuple[str, dict[str, Any]]]
-    ) -> None:
+    async def test_agent_probe_counts_dismissed_rows_not_as_mint(self, session: AsyncSession, refs_events: list[tuple[str, dict[str, Any]]]) -> None:
         """Flag ON: agent entries whose canonical row is a tombstone are
         dismissal-suppressed (counted) and dropped from the mint batch."""
         import farna.db.crud.run as run_mod
@@ -241,14 +239,10 @@ class TestDismissRestoreIdempotence:
     async def test_dismiss_never_overwrites_existing_tombstone(self, session: AsyncSession) -> None:
         await _seed_org(session)
         tombstone = await _seed_journey(session)
-        assert await dismiss_journey(
-            session, _ORG, kind="github", ref="a/b#5", dismissed_by=_ACCOUNT, reason="original"
-        )
+        assert await dismiss_journey(session, _ORG, kind="github", ref="a/b#5", dismissed_by=_ACCOUNT, reason="original")
         await session.flush()
         other = uuid.uuid4()
-        assert not await dismiss_journey(
-            session, _ORG, kind="github", ref="a/b#5", dismissed_by=other, reason="over-write"
-        )
+        assert not await dismiss_journey(session, _ORG, kind="github", ref="a/b#5", dismissed_by=other, reason="over-write")
         assert tombstone.dismissed_by == _ACCOUNT
         assert tombstone.reason == "original"
 

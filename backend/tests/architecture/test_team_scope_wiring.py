@@ -203,12 +203,8 @@ class TestTeamScopeWiring:
         missing: list[str] = []
         for model, expected_key in MODEL_TO_RESOLVER_KEY.items():
             if expected_key not in TEAM_SCOPED_RESOLVERS:
-                missing.append(
-                    f"{model.__name__} (tablename={model.__tablename__!r}) — expected resolver key {expected_key!r}"
-                )
-        assert not missing, "Models with owner_team_id + visibility but no TEAM_SCOPED_RESOLVERS entry:\n" + "\n".join(
-            missing
-        )
+                missing.append(f"{model.__name__} (tablename={model.__tablename__!r}) — expected resolver key {expected_key!r}")
+        assert not missing, "Models with owner_team_id + visibility but no TEAM_SCOPED_RESOLVERS entry:\n" + "\n".join(missing)
 
     def test_resolver_keys_match_tablenames(self) -> None:
         """Every resolver key in TEAM_SCOPED_RESOLVERS matches a model's __tablename__."""
@@ -221,22 +217,14 @@ class TestTeamScopeWiring:
         for model, _reason in MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:
             mapper = sa_inspect(model)
             columns = {c.key for c in mapper.column_attrs}
-            assert "visibility" not in columns, (
-                f"{model.__name__} is on the no-visibility allowlist but HAS a visibility column — "
-                "remove it from MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY and add it to MODEL_TO_RESOLVER_KEY"
-            )
-            assert "owner_team_id" in columns, (
-                f"{model.__name__} is on the allowlist but lacks owner_team_id — inconsistent"
-            )
+            assert "visibility" not in columns, f"{model.__name__} is on the no-visibility allowlist but HAS a visibility column — remove it from MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY and add it to MODEL_TO_RESOLVER_KEY"
+            assert "owner_team_id" in columns, f"{model.__name__} is on the allowlist but lacks owner_team_id — inconsistent"
 
     def test_allowlisted_models_are_not_in_resolver(self) -> None:
         """Allowlisted models must NOT also appear in the resolver (double-gating)."""
         for model, _reason in MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:
             key = model.__tablename__
-            assert key not in TEAM_SCOPED_RESOLVERS, (
-                f"{model.__name__} (key={key!r}) is both in TEAM_SCOPED_RESOLVERS and the "
-                "no-visibility allowlist — pick one"
-            )
+            assert key not in TEAM_SCOPED_RESOLVERS, f"{model.__name__} (key={key!r}) is both in TEAM_SCOPED_RESOLVERS and the no-visibility allowlist — pick one"
 
     def test_expected_registry_matches_actual(self) -> None:
         """The TEAM_SCOPED_RESOLVERS keys exactly match the expected set on main.
@@ -265,9 +253,7 @@ class TestTeamScopeWiring:
             "system_maps",
         }
         actual = set(TEAM_SCOPED_RESOLVERS)
-        assert actual == expected, (
-            f"TEAM_SCOPED_RESOLVERS mismatch:\n  unexpected: {actual - expected}\n  missing: {expected - actual}"
-        )
+        assert actual == expected, f"TEAM_SCOPED_RESOLVERS mismatch:\n  unexpected: {actual - expected}\n  missing: {expected - actual}"
 
     def test_every_owner_team_model_is_accounted_for(self) -> None:
         """Every model with ``owner_team_id`` is team-scoped or explicitly allowlisted.
@@ -288,10 +274,7 @@ class TestTeamScopeWiring:
             columns = {c.key for c in mapper.column_attrs}
             if "owner_team_id" in columns and model.__tablename__ not in accounted_for:
                 missing.append(f"{model.__name__} (tablename={model.__tablename__!r})")
-        assert not missing, (
-            "Models with owner_team_id that are in neither TEAM_SCOPED_RESOLVERS nor "
-            "MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:\n" + "\n".join(missing)
-        )
+        assert not missing, "Models with owner_team_id that are in neither TEAM_SCOPED_RESOLVERS nor MODELS_WITH_OWNER_TEAM_ID_NO_VISIBILITY:\n" + "\n".join(missing)
 
 
 class TestRouteWiring:
@@ -327,15 +310,8 @@ class TestRouteWiring:
         """
         import farna.api.routes.lifecycle_maps as lifecycle_routes
 
-        wrongly_gated = [
-            name
-            for name in _LIFECYCLE_MAP_UNGATED_ENDPOINTS
-            if _endpoint_has_team_scope_gate(getattr(lifecycle_routes, name))
-        ]
-        assert not wrongly_gated, (
-            "lifecycle_maps endpoints without a {lifecycle_map_id} path param must NOT carry the "
-            f"team_scope gate (the resolver would 404 every call): {wrongly_gated}"
-        )
+        wrongly_gated = [name for name in _LIFECYCLE_MAP_UNGATED_ENDPOINTS if _endpoint_has_team_scope_gate(getattr(lifecycle_routes, name))]
+        assert not wrongly_gated, f"lifecycle_maps endpoints without a {{lifecycle_map_id}} path param must NOT carry the team_scope gate (the resolver would 404 every call): {wrongly_gated}"
 
     def test_db_rls_only_tables_stay_registered_not_wired(self) -> None:
         """The four core tables keep their resolvers registered, never wired.
@@ -396,19 +372,10 @@ class TestRouteWiring:
                     if table is not None:
                         violations.append(f"{module.__name__}.{name} binds a {table} team-scope resolver")
 
-        assert not undecidable, (
-            "A team_scope gate's resolver could not be extracted from the dependency "
-            "closure — the walk cannot prove these stay unwired: " + "; ".join(undecidable)
-        )
+        assert not undecidable, "A team_scope gate's resolver could not be extracted from the dependency closure — the walk cannot prove these stay unwired: " + "; ".join(undecidable)
         assert seen_gates > 0, "no team_scope gates found — the route walk is broken"
-        assert lifecycle_gates > 0, (
-            "expected the lifecycle_maps team gates to be discovered by the walk "
-            "(they are the FAR-1514 wiring); the walk is not seeing real endpoints"
-        )
-        assert not violations, (
-            "DB-RLS-only tables must NOT be route-wired (the FAR-1514 DECISION "
-            "recorded in api/team_scope): " + "; ".join(violations)
-        )
+        assert lifecycle_gates > 0, "expected the lifecycle_maps team gates to be discovered by the walk (they are the FAR-1514 wiring); the walk is not seeing real endpoints"
+        assert not violations, "DB-RLS-only tables must NOT be route-wired (the FAR-1514 DECISION recorded in api/team_scope): " + "; ".join(violations)
         # Registered, never wired — both halves of the decision.
         assert set(TEAM_SCOPED_RESOLVERS) >= _DB_RLS_ONLY_UNWIRED
 
@@ -435,12 +402,5 @@ class TestRouteWiring:
 
         versions = Path(__file__).resolve().parents[2] / "src" / "farna" / "db" / "migrations" / "versions"
         corpus = "\n".join(p.read_text(encoding="utf-8") for p in versions.glob("*.py"))
-        missing = [
-            t
-            for t in sorted(_DB_RLS_ONLY_UNWIRED)
-            if not re.search(rf"CREATE POLICY rls_team_isolation[^\n]*{t}", corpus)
-        ]
-        assert not missing, (
-            "Tables enforced by DB RLS alone have no CREATE POLICY rls_team_isolation "
-            f"anywhere in the migration tree: {missing}"
-        )
+        missing = [t for t in sorted(_DB_RLS_ONLY_UNWIRED) if not re.search(rf"CREATE POLICY rls_team_isolation[^\n]*{t}", corpus)]
+        assert not missing, f"Tables enforced by DB RLS alone have no CREATE POLICY rls_team_isolation anywhere in the migration tree: {missing}"

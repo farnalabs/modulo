@@ -148,14 +148,10 @@ def test_exhausted_budget_reports_the_last_error(monkeypatch: pytest.MonkeyPatch
         harness.start_tier1b_container(harness.ContainerSpec(image=_IMAGE, container_port=None))
 
     assert container.start_calls == harness.TIER1B_START_ATTEMPTS
-    assert sleeps == [
-        harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)
-    ]
+    assert sleeps == [harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)]
 
 
-def test_start_tier1b_container_retries_and_still_fails_loudly(
-    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
-) -> None:
+def test_start_tier1b_container_retries_and_still_fails_loudly(monkeypatch: pytest.MonkeyPatch, sleeps: list[float]) -> None:
     """End-to-end wiring: the retry runs, then the fixture failure is loud."""
     container = _FakeContainer([_api_error(503) for _ in range(harness.TIER1B_START_ATTEMPTS)])
     _install_fakes(monkeypatch, container)
@@ -165,7 +161,5 @@ def test_start_tier1b_container_retries_and_still_fails_loudly(
 
     assert _IMAGE in str(excinfo.value)
     assert container.start_calls == harness.TIER1B_START_ATTEMPTS
-    assert sleeps == [
-        harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)
-    ]
+    assert sleeps == [harness.TIER1B_START_BACKOFF_SECONDS * attempt for attempt in range(1, harness.TIER1B_START_ATTEMPTS)]
     assert container.stop_calls == harness.TIER1B_START_ATTEMPTS

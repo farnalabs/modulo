@@ -504,9 +504,7 @@ def _run_row(*, org_id: uuid.UUID, run_number: int, thread_id: str) -> dict[str,
     }
 
 
-def _final_row(
-    org_id: uuid.UUID, run_row: dict[str, Any], node_id: str, outputs: dict[str, Any] | None = None
-) -> dict[str, Any]:
+def _final_row(org_id: uuid.UUID, run_row: dict[str, Any], node_id: str, outputs: dict[str, Any] | None = None) -> dict[str, Any]:
     """One insertable ``__final__`` row for *run_row* and *node_id*.
 
     *outputs* is the row's ``outputs_json`` payload — real audit rows and the
@@ -538,9 +536,7 @@ async def final_row_db() -> AsyncGenerator[dict[str, Any], None]:
         Column("thread_id", Text),
     )
     async with engine.begin() as conn:
-        await conn.run_sync(
-            lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__, RunNodeOutput.__table__])
-        )
+        await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[Run.__table__, RunNodeOutput.__table__]))
         await conn.run_sync(lambda sync_conn: checkpoints.create(sync_conn, checkfirst=True))
     org_id = uuid.uuid4()
     runs = {
@@ -577,11 +573,7 @@ async def final_row_db() -> AsyncGenerator[dict[str, Any], None]:
 async def _outputs_absent(engine: Any, run_id: uuid.UUID) -> bool:
     """The reconcile scan's ``outputs_absent`` flag for one run, from real rows."""
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(
-                select(Run.id, ch._final_row_absent_expr().label("outputs_absent")).where(Run.id == run_id)
-            )
-        ).one()
+        row = (await conn.execute(select(Run.id, ch._final_row_absent_expr().label("outputs_absent")).where(Run.id == run_id))).one()
     return bool(row.outputs_absent)
 
 
@@ -644,9 +636,7 @@ class TestBookkeepingFinalRowIsNotProgress:
         assert run.status == "running"
         assert summary["node_deadline_reaped"] == 0
 
-    async def test_raw_zero_progress_shape_selects_only_bookkeeping_only_runs(
-        self, final_row_db: dict[str, Any]
-    ) -> None:
+    async def test_raw_zero_progress_shape_selects_only_bookkeeping_only_runs(self, final_row_db: dict[str, Any]) -> None:
         """The raw-SQL twin (nodeless router / age gate / SAQ sweep) agrees."""
         async with final_row_db["engine"].connect() as conn:
             selected = {

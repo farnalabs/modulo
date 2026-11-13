@@ -95,9 +95,7 @@ def client() -> Generator[TestClient, None, None]:
         account_id=_USER_ID,
         org_role="admin",
     )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -1497,9 +1495,7 @@ class TestGetFeedbackDBErrors:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.get(f"/api/v1/feedback/{_RECORD_ID}")
         assert resp.status_code == 500
@@ -1542,9 +1538,7 @@ class TestUpdateFeedbackStatusDBErrors:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.patch(f"/api/v1/feedback/{_RECORD_ID}/status", json={"status": "resolved"})
         assert resp.status_code == 500
@@ -1587,9 +1581,7 @@ class TestDetectEvalGapDBErrors:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.post(f"/api/v1/feedback/{_RECORD_ID}/detect-gap")
         assert resp.status_code == 500
@@ -1650,9 +1642,7 @@ class TestGetInboxItemDBErrors:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
             patch("farna.api.routes.feedback.set_rls_user_context"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.get(f"/api/v1/feedback/inbox/{_RECORD_ID}")
         assert resp.status_code == 500
@@ -1704,9 +1694,7 @@ class TestReviewFeedbackDBErrors:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.post(
                 f"/api/v1/feedback/inbox/{_RECORD_ID}/review",
@@ -1783,9 +1771,7 @@ class TestListEvalProposalsDBErrors:
     def test_returns_500_on_unexpected_error(self, client: TestClient) -> None:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_eval_proposals", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_eval_proposals", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.get("/api/v1/feedback/proposals")
         assert resp.status_code == 500
@@ -1841,9 +1827,7 @@ class TestPublishEvalProposalDBErrors:
         with (
             patch("farna.api.routes.feedback.set_rls_org"),
             patch("farna.api.routes.feedback.set_rls_user_context"),
-            patch(
-                "farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")
-            ),
+            patch("farna.api.routes.feedback.FeedbackManager.get_feedback_record", side_effect=RuntimeError("unexpected")),
         ):
             resp = client.post(
                 f"/api/v1/feedback/proposals/{_RECORD_ID}/publish",

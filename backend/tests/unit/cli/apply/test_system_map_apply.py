@@ -390,9 +390,7 @@ def test_apply_one_system_map_create_with_revision() -> None:
 def test_apply_one_system_map_update() -> None:
     executor = _MockExecutor()
     entity = _system_map_entity(name="Existing Map", description="Updated")
-    current_system_maps: dict[str, dict[str, Any]] = {
-        "Existing Map": {"id": str(_MAP_ID), "name": "Existing Map", "description": "Original"}
-    }
+    current_system_maps: dict[str, dict[str, Any]] = {"Existing Map": {"id": str(_MAP_ID), "name": "Existing Map", "description": "Original"}}
     report = _MockReport()
     report["updated"] = [{"kind": "system_map", "name": "Existing Map"}]
     map_ids: dict[str, str] = {"Existing Map": str(_MAP_ID)}
@@ -445,14 +443,10 @@ class TestSystemMapUpdateMethod:
                     "page_size": PAGE_SIZE,
                 }
             ),
-            "map_put": respx.put(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(
-                json=_map_row(name="Existing Map", description="Updated")
-            ),
+            "map_put": respx.put(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(json=_map_row(name="Existing Map", description="Updated")),
             # Registered only so a regression to PATCH is observable rather than
             # surfacing as an unmocked-request error.
-            "map_patch": respx.patch(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(
-                status_code=405, json={"detail": "Method Not Allowed"}
-            ),
+            "map_patch": respx.patch(re.compile(r"https://api\.test/api/v1/system-maps/[0-9a-f-]+")).respond(status_code=405, json={"detail": "Method Not Allowed"}),
         }
         return routes
 
@@ -549,9 +543,7 @@ def test_apply_system_maps_update() -> None:
     entity = _system_map_entity(name="Existing Map", description="Updated")
     EntitySet(system_maps=[entity])
     entities = {"system_map": [("Existing Map", entity)]}
-    current_entities = {
-        "system_map": {"Existing Map": {"id": str(_MAP_ID), "name": "Existing Map", "description": "Original"}}
-    }
+    current_entities = {"system_map": {"Existing Map": {"id": str(_MAP_ID), "name": "Existing Map", "description": "Original"}}}
     report = _MockReport()
     report["updated"] = [{"kind": "system_map", "name": "Existing Map"}]
 

@@ -83,9 +83,7 @@ async def test_published_only_list_excludes_unpublished_maps(
 ) -> None:
     """A map with no published revision never reaches the viewer list."""
     await set_rls_user_context(rls_session, test_user, "admin")
-    published_map_id, _published_rev, _draft = await _seed_map_with_draft_and_published(
-        repo, rls_session, test_org, test_user, name="Published read"
-    )
+    published_map_id, _published_rev, _draft = await _seed_map_with_draft_and_published(repo, rls_session, test_org, test_user, name="Published read")
     unpublished = await repo.create_map(
         rls_session,
         organisation_id=test_org,
@@ -108,13 +106,9 @@ async def test_published_only_history_excludes_drafts(
 ) -> None:
     """The viewer history contains published/archived revisions only."""
     await set_rls_user_context(rls_session, test_user, "admin")
-    map_id, published_rev, draft_rev = await _seed_map_with_draft_and_published(
-        repo, rls_session, test_org, test_user, name="History read"
-    )
+    map_id, published_rev, draft_rev = await _seed_map_with_draft_and_published(repo, rls_session, test_org, test_user, name="History read")
 
-    history = await repo.list_revisions_history(
-        rls_session, organisation_id=test_org, system_map_id=map_id, published_only=True
-    )
+    history = await repo.list_revisions_history(rls_session, organisation_id=test_org, system_map_id=map_id, published_only=True)
     history_ids = {row.id for row in history}
 
     assert published_rev in history_ids
@@ -129,9 +123,7 @@ async def test_published_only_by_time_never_returns_a_draft(
 ) -> None:
     """A draft has no effective window, so the viewer by-time read cannot match it."""
     await set_rls_user_context(rls_session, test_user, "admin")
-    map_id, published_rev, draft_rev = await _seed_map_with_draft_and_published(
-        repo, rls_session, test_org, test_user, name="By-time read"
-    )
+    map_id, published_rev, draft_rev = await _seed_map_with_draft_and_published(repo, rls_session, test_org, test_user, name="By-time read")
     map_obj = await repo.get_map_by_id(rls_session, organisation_id=test_org, map_id=map_id)
     assert map_obj is not None
     published = await repo.get_revision_by_id(rls_session, organisation_id=test_org, revision_id=published_rev)
@@ -159,9 +151,7 @@ async def test_published_only_read_is_organisation_scoped(
 ) -> None:
     """A query bound to another organisation sees none of this org's published maps."""
     await set_rls_user_context(rls_session, test_user, "admin")
-    map_id, _published_rev, _draft = await _seed_map_with_draft_and_published(
-        repo, rls_session, test_org, test_user, name="Scoped read"
-    )
+    map_id, _published_rev, _draft = await _seed_map_with_draft_and_published(repo, rls_session, test_org, test_user, name="Scoped read")
 
     visible = await repo.list_maps_by_org(rls_session, organisation_id=uuid.uuid4(), published_only=True)
 

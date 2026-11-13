@@ -389,9 +389,7 @@ class TestChosenStartsAt:
     """The metadata date is validated at the boundary and reaches the minted key."""
 
     @pytest.mark.parametrize("location", ["metadata", "subscription_details", "parent"])
-    def test_the_chosen_start_is_read_from_every_supported_metadata_location(
-        self, client: TestClient, location: str
-    ) -> None:
+    def test_the_chosen_start_is_read_from_every_supported_metadata_location(self, client: TestClient, location: str) -> None:
         starts_at = _future_date(60)
         body = json.dumps(_invoice_event_with_starts_at("evt_start", starts_at, location=location)).encode()
 

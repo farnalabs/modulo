@@ -218,9 +218,7 @@ async def test_save_policy_missing_org_raises(session: AsyncSession) -> None:
             await save_policy(session, missing, EvidenceRetentionPolicy())
 
 
-async def test_save_policy_emits_only_its_own_top_level_key(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_save_policy_emits_only_its_own_top_level_key(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1830: save_policy must patch ONLY ``evidence_retention``.
 
     A revert to a whole-column write would either not call the helper or pass
@@ -256,9 +254,7 @@ async def test_save_policy_emits_only_its_own_top_level_key(
 # ---------------------------------------------------------------------------
 
 
-async def test_age_purge_deletes_old_rows_and_keeps_recent(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_age_purge_deletes_old_rows_and_keeps_recent(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     org_id = await _seed_org(session)
     session.add(_evidence(org_id, "old.key", created_at=_utc_days_ago(100)))
     session.add(_evidence(org_id, "recent.key", created_at=_utc_days_ago(30)))
@@ -369,9 +365,7 @@ async def test_purge_is_org_scoped(session: AsyncSession, monkeypatch: pytest.Mo
 # ---------------------------------------------------------------------------
 
 
-async def test_row_inserted_during_batch_window_survives(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_row_inserted_during_batch_window_survives(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     org_id = await _seed_org(session)
     session.add(_evidence(org_id, "old.key", created_at=_utc_days_ago(100)))
     await session.commit()
@@ -401,9 +395,7 @@ async def test_row_inserted_during_batch_window_survives(
 # ---------------------------------------------------------------------------
 
 
-async def test_lock_timeout_exits_cleanly_without_deletions(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_lock_timeout_exits_cleanly_without_deletions(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     org_id = await _seed_org(session)
     session.add(_evidence(org_id, "old.key", created_at=_utc_days_ago(100)))
     await session.commit()
@@ -455,9 +447,7 @@ def test_lock_key_is_namespaced_per_org() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_batch_log_event_carries_policy_fields(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_batch_log_event_carries_policy_fields(session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     org_id = await _seed_org(session)
     old = _utc_days_ago(120)
     session.add_all([_evidence(org_id, f"row.{i}", created_at=old) for i in range(3)])
@@ -504,9 +494,7 @@ class _RecordingProvider:
         return _RecordingMeter(self._sink)
 
 
-async def test_deletion_counter_emitted_with_org_attribute(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deletion_counter_emitted_with_org_attribute(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     org_id = await _seed_org(session)
     session.add_all([_evidence(org_id, f"row.{i}", created_at=_utc_days_ago(120)) for i in range(2)])
     await session.commit()
@@ -625,9 +613,7 @@ class _OvercountSession:
         return await self._inner.execute(stmt, *args, **kwargs)
 
 
-async def test_count_purge_breaks_when_batch_ids_are_empty(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_count_purge_breaks_when_batch_ids_are_empty(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     """An inflated count with an empty id batch terminates the count phase
     cleanly (no deletions, no spin) and still releases the advisory lock."""
     org_id = await _seed_org(session)  # zero evidence rows

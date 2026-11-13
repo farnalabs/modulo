@@ -363,9 +363,9 @@ exit "$status"
         [],
         cwd=tmp_path,
         env={
-            "FARNA_CONTROL_MODULO_TEST_DATA_DIR": data_dir.as_posix(),
-            "FARNA_CONTROL_MODULO_TEST_PIDFILE": (tmp_path / "owned-pids").as_posix(),
-            "FARNA_CONTROL_MODULO_TEST_HOLDER": holder.as_posix(),
+            "MODULO_TEST_DATA_DIR": data_dir.as_posix(),
+            "MODULO_TEST_PIDFILE": (tmp_path / "owned-pids").as_posix(),
+            "MODULO_TEST_HOLDER": holder.as_posix(),
         },
     )
 

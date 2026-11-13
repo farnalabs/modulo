@@ -150,9 +150,7 @@ class TestCheckAndRecordSpendSteps:
         r.scalar_one_or_none.return_value = value
         return r
 
-    def _run(
-        self, approved: bool, reason: str | None, cost: str, team: bool, sums: list[object]
-    ) -> tuple[bool, str | None]:
+    def _run(self, approved: bool, reason: str | None, cost: str, team: bool, sums: list[object]) -> tuple[bool, str | None]:
         mock_org_count = MagicMock()
         mock_org_count.total_spend_usd = Decimal("50.00")
         mock_org_count.run_count = 5
@@ -191,9 +189,7 @@ class TestCheckAndRecordSpendSteps:
     def test_spend_under_org_limit_approved(self) -> None:
         """Happy path: spend under org limit is approved."""
         # org limit 100, created-at SUM (other runs) 50, +30 = 80 <= 100.
-        approved, reason = self._run(
-            True, None, "30.00", team=False, sums=[self._limit(Decimal("100.00")), self._sum(Decimal("50.00"))]
-        )
+        approved, reason = self._run(True, None, "30.00", team=False, sums=[self._limit(Decimal("100.00")), self._sum(Decimal("50.00"))])
         assert approved is True
         assert reason is None
 

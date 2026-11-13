@@ -43,10 +43,7 @@ async def _seed_org(db_engine: AsyncEngine) -> uuid.UUID:
     org_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json) "
-                "VALUES (:id, :name, :slug, CAST(:settings AS json))"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json) VALUES (:id, :name, :slug, CAST(:settings AS json))"),
             {
                 "id": str(org_id),
                 "name": "PlanBootstrapOrg",
@@ -61,17 +58,11 @@ async def _seed_viewer(db_engine: AsyncEngine, org_id: uuid.UUID) -> uuid.UUID:
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": f"viewer-{org_id.hex[:8]}@test.local", "name": "viewer"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'viewer')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'viewer')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id

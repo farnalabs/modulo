@@ -91,11 +91,11 @@ def test_no_settings_module_loaded_after_import_by_subprocess() -> None:
 
 def test_compose_config_derives_all_bundled_endpoints() -> None:
     composed = compose_config(_state(), _secrets())
-    assert composed["DATABASE_URL"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert composed["DATABASE_URL"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert composed["DATABASE_ADMIN_URL"] == composed["DATABASE_URL"]
     assert composed["REDIS_URL"] == "redis://:redis-pw@127.0.0.1:16379/0"
-    system_url = composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]
-    assert system_url.startswith("postgresql+asyncpg://farna_control_system:pg-pw@127.0.0.1:15432/farna_control")
+    system_url = composed["FARNA_CONTROL_SYSTEM_DATABASE_URL"]
+    assert system_url.startswith("postgresql+asyncpg://farna_control_system:pg-pw@127.0.0.1:15432/modulo")
 
 
 def test_compose_config_is_password_free_on_state_alone() -> None:
@@ -140,15 +140,15 @@ def test_source_redis_url_environment_wins_over_composed(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     monkeypatch.setenv("REDIS_URL", "redis://operator:secret@cache.example.com:6379/7")
     resolved = LauncherConfigSource(data_dir)()
     assert "redis_url" not in resolved  # the operator's env wins
-    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
 
 
 def test_source_system_database_url_environment_wins_over_composed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """MODULO_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
+    """FARNA_CONTROL_SYSTEM_DATABASE_URL set (without DATABASE_URL) drops the composed one."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     save_state(_state(), data_dir / "state.json", _secrets().state_hmac_key)
@@ -157,10 +157,10 @@ def test_source_system_database_url_environment_wins_over_composed(monkeypatch: 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
-    monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
+    monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", "postgresql://user:pass@host:5432/modulo")
     resolved = LauncherConfigSource(data_dir)()
-    assert "farna_control_system_database_url" not in resolved  # the operator's env wins
-    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert "modulo_system_database_url" not in resolved  # the operator's env wins
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
@@ -173,14 +173,14 @@ def test_source_derives_system_url_from_the_operators_database_url(monkeypatch: 
     import farna.launcher.secrets_file as sf
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
-    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/farna_control")
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host:5432/modulo")
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     resolved = LauncherConfigSource(data_dir)()
     assert "database_url" not in resolved
-    system = resolved.get("farna_control_system_database_url", "")
+    system = resolved.get("modulo_system_database_url", "")
     expected_prefixes = (
-        "postgresql://farna_control_system:op-pass@db.example.com:5432/farna_control",
-        "postgresql+asyncpg://farna_control_system:op-pass@db.example.com:5432/farna_control",
+        "postgresql://farna_control_system:pass@host:5432/modulo",
+        "postgresql+asyncpg://farna_control_system:pass@host:5432/modulo",
     )
     assert system.startswith(expected_prefixes)
     assert "127.0.0.1" not in system
@@ -195,7 +195,7 @@ def test_source_includes_everything_without_environment(clean_launcher_env, monk
 
     monkeypatch.setattr(sf, "load_or_create", lambda _path: _secrets())
     resolved = LauncherConfigSource(data_dir)()
-    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert resolved["database_url"] == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert resolved["redis_url"] == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
@@ -204,8 +204,8 @@ def test_source_skips_empty_composed_values(clean_launcher_env, monkeypatch: pyt
 
     De-stubbed (review finding): the composition with a NO-PASSWORD URL is
     the case that caused the regression — ``compose_config`` returns a
-    real dict whose ``MODULO_SYSTEM_DATABASE_URL`` is present-but-blank —
-    and the source must omit it, never write ``farna_control_system_database_url=''``.
+    real dict whose ``FARNA_CONTROL_SYSTEM_DATABASE_URL`` is present-but-blank —
+    and the source must omit it, never write ``modulo_system_database_url=''``.
     """
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -215,11 +215,11 @@ def test_source_skips_empty_composed_values(clean_launcher_env, monkeypatch: pyt
     password_free = LauncherSecrets(postgres_password="", redis_password="redis-pw", state_hmac_key=bytes(range(32)))
     monkeypatch.setattr(sf, "load_or_create", lambda _path: password_free)
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", raising=False)
+    monkeypatch.delenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", raising=False)
     composed = compose_config(_state(), password_free)
-    assert not composed["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
+    assert not composed["FARNA_CONTROL_SYSTEM_DATABASE_URL"]  # blank key IS present in the composition
     resolved = LauncherConfigSource(data_dir)()
-    assert "farna_control_system_database_url" not in resolved  # blank value omitted, not injected
+    assert "modulo_system_database_url" not in resolved  # blank value omitted, not injected
     assert resolved  # the non-blank composed values are still injected
     assert all(resolved.values())
 
@@ -240,7 +240,7 @@ def test_source_settings_roundtrip_honours_priority(clean_launcher_env, monkeypa
         _env_file=None,
         **resolved,  # type: ignore[arg-type]
     )
-    assert settings.database_url == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert settings.database_url == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert settings.redis_url == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
@@ -273,7 +273,7 @@ def test_write_pinned_env_file_content_and_mode(tmp_path: Path) -> None:
     path = write_pinned_env_file(data_dir, _state(), _secrets())
     assert path.name == CONFIG_ENV_FILENAME
     content = path.read_text(encoding="utf-8")
-    assert "DATABASE_URL=postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control" in content
+    assert "DATABASE_URL=postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo" in content
     assert "REDIS_URL=redis://:redis-pw@127.0.0.1:16379/0" in content
     if os.name == "posix":
         mode = path.stat().st_mode & 0o777
@@ -330,7 +330,7 @@ def test_pinned_env_file_feeds_get_settings(clean_launcher_env, monkeypatch: pyt
     monkeypatch.setenv("FERNET_KEY", FERNET_KEY)
     pin_env_file(str(path))
     settings = get_settings()
-    assert settings.database_url == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/farna_control"
+    assert settings.database_url == "postgresql+asyncpg://modulo:pg-pw@127.0.0.1:15432/modulo"
     assert settings.redis_url == "redis://:redis-pw@127.0.0.1:16379/0"
 
 
