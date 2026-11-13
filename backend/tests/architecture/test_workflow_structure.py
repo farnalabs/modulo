@@ -692,7 +692,7 @@ def test_merge_queue_configures_the_git_credential_exactly_once() -> None:
         name = step.get("name", "<unnamed>")
         step_env = step.get("env") or {}
         key0 = str(step_env.get("GIT_CONFIG_KEY_0", ""))
-        if "FARNA_CONTROL_MODULO_REVIEWBOT_TOKEN" not in key0 or "insteadOf" not in key0:
+        if "MODULO_REVIEWBOT_TOKEN" not in key0 or "insteadOf" not in key0:
             violations.append(f"  {name!r}: does not route the push through the single insteadOf rewrite carrying secrets.MODULO_REVIEWBOT_TOKEN — a branch containing .github/workflows/* needs the workflows-scoped PAT (FAR-1940)")
         arm = _failure_branch(step.get("run") or "")
         if "::error::" not in arm:
