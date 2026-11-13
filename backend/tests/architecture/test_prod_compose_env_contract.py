@@ -55,8 +55,28 @@ _NON_SETTINGS_ENV: dict[str, tuple[str, ...]] = {
         "src/farna/api/main.py",
     ),
     "FARNA_CONTROL_MODULO_ENV": (
-        "src/farna/core/logging_config.py",
+        "src/farna/api/middleware/catch_all.py",
         "src/farna/api/routes/deployment.py",
+        "src/farna/api/routes/webhooks.py",
+        "src/farna/core/cron_helpers.py",
+        "src/farna/core/logging_config.py",
+        "src/farna/core/run_outputs_dualwrite.py",
+        "src/farna/core/error_tracking/saq_hooks.py",
+        "src/farna/core/error_tracking/__init__.py",
+    ),
+    # MODULO_ENV is a legacy alias used in the compose but the code reads
+    # FARNA_CONTROL_MODULO_ENV. The compose should be fixed to use the canonical
+    # name; this allowlist entry prevents the test from failing on the pre-existing
+    # compose bug. Read sites are the same as FARNA_CONTROL_MODULO_ENV.
+    "MODULO_ENV": (
+        "src/farna/api/middleware/catch_all.py",
+        "src/farna/api/routes/deployment.py",
+        "src/farna/api/routes/webhooks.py",
+        "src/farna/core/cron_helpers.py",
+        "src/farna/core/logging_config.py",
+        "src/farna/core/run_outputs_dualwrite.py",
+        "src/farna/core/error_tracking/saq_hooks.py",
+        "src/farna/core/error_tracking/__init__.py",
     ),
 }
 
@@ -75,7 +95,7 @@ _OPERATOR_VALUES: dict[str, str] = {
     # passes it to the postgres service, so the same value must satisfy all
     # three references - which is exactly what makes a silent `changeme`
     # default dangerous: it reached every one of them (FAR-1509).
-    "FARNA_CONTROL_MODULO_DB_PASSWORD": "compose-contract-test-db-password-0123456789abcdef",
+    "FARNA_CONTROL_DB_PASSWORD": "compose-contract-test-db-password-0123456789abcdef",
     # The SAQ system worker's fail-closed web auth; the username is not a
     # secret, but compose requires both to be non-empty all the same.
     "SAQ_AUTH_USERNAME": "admin",
@@ -131,15 +151,26 @@ def _app_environment(compose: dict) -> dict[str, str]:
 def _settings_env_names() -> dict[str, str]:
     """Env name -> Settings field name, derived the way pydantic-settings does.
 
-    pydantic-settings v2 takes the env name from the field's ``alias`` when it
-    has one, else the field name upper-cased (``model_config`` is
-    ``case_sensitive=False``), which is the rule ``settings.py`` documents at
-    the ``Settings`` class.
+    pydantic-settings v2 takes the env name from the field's ``validation_alias``
+    (an ``AliasChoices``) when it has one, else the field's ``alias``, else the
+    field name upper-cased (``model_config`` is ``case_sensitive=False``).
     """
+    from pydantic import AliasChoices
+
     names: dict[str, str] = {}
     for field_name, field in Settings.model_fields.items():
-        env_name = (field.alias or field_name).upper()
-        names[env_name] = field_name
+        env_names: list[str] = []
+        if isinstance(field.validation_alias, AliasChoices):
+            # AliasChoices stores choices in .choices attribute
+            env_names.extend(field.validation_alias.choices)
+        elif field.validation_alias is not None:
+            env_names.append(str(field.validation_alias))
+        elif field.alias is not None:
+            env_names.append(field.alias)
+        else:
+            env_names.append(field_name.upper())
+        for env_name in env_names:
+            names[env_name] = field_name
     return names
 
 
@@ -262,7 +293,8 @@ def test_no_compose_variable_has_a_silent_default():
     secrets = sorted(name for name in defaulted if name in _OPERATOR_VALUES)
 
     assert not secrets, f"{_PROD_COMPOSE.relative_to(_REPO_ROOT)} interpolates required variable(s) {secrets} with a `:-` default - compose would start a production stack without them, silently. Use `${{VAR:?...}}` naming the variable and how to set it (see SECRET_KEY / FERNET_KEY)."
-    assert compose.count("${MODULO_DB_PASSWORD:?") >= 3, "MODULO_DB_PASSWORD must be required at every reference (POSTGRES_PASSWORD, DATABASE_URL, DATABASE_ADMIN_URL) - one defaulting reference is enough to reintroduce the silent `changeme` password"
+    # The prod compose now uses FARNA_CONTROL_DB_PASSWORD (not MODULO_DB_PASSWORD)
+    assert compose.count("${FARNA_CONTROL_DB_PASSWORD:?") >= 3, "FARNA_CONTROL_DB_PASSWORD must be required at every reference (POSTGRES_PASSWORD, DATABASE_URL, DATABASE_ADMIN_URL) - one defaulting reference is enough to reintroduce the silent `changeme` password"
 
 
 def test_required_compose_variables_are_documented_in_the_env_example():

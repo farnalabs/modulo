@@ -34,6 +34,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -62,6 +63,7 @@ BASH = shutil.which("bash")
 _popen = subprocess.Popen
 
 needs_bash = pytest.mark.skipif(BASH is None, reason="bash is required to exercise the release entrypoint")
+needs_unix = pytest.mark.skipif(sys.platform == "win32", reason="tests Unix-specific process group signal handling; skipped on Windows")
 
 
 @pytest.mark.parametrize("toml_path", FLY_TOMLS, ids=[p.name for p in FLY_TOMLS])
@@ -251,16 +253,25 @@ exit 0
     def cleanup(self) -> None:
         """Kill this harness's own session (never a global process kill)."""
         assert self.proc is not None
-        try:
-            os.killpg(self.proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
+        if sys.platform != "win32":
+            try:
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+        else:
+            try:
+                self.proc.kill()
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
         self._log_handle.close()
 
 
 @needs_bash
+@needs_unix
 def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Path) -> None:
     """SIGTERM must reach the SAQ workers and the entrypoint must exit cleanly.
 
@@ -288,6 +299,7 @@ def test_entrypoint_forwards_sigterm_and_completes_a_bounded_drain(tmp_path: Pat
 
 
 @needs_bash
+@needs_unix
 def test_entrypoint_drain_is_bounded_when_a_worker_ignores_sigterm(tmp_path: Path) -> None:
     """A wedged worker must not hang the stop past the drain deadline."""
     harness = _EntrypointHarness(tmp_path, deadline_s=2, ignore_term=True)
