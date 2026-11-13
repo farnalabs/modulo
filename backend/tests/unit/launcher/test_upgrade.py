@@ -296,7 +296,7 @@ def test_dump_password_is_never_in_argv(tmp_path: Path, monkeypatch: pytest.Monk
         pre_upgrade_dump(data_dir)
     joined = " ".join(str(a) for a in seen["argv"])
     assert "pw" not in joined
-    assert seen["argv"][-1] == "postgresql://user:pass@host:5432/farna_control"
+    assert seen["argv"][-1] == "postgresql://modulo@127.0.0.1:15432/farna_control"
     assert seen["env"]["PGPASSWORD"] == "pw"
 
 
@@ -679,6 +679,12 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
 
     from farna.launcher import upgrade as upgrade_module
 
+    # The restore subprocess constructs Settings from the inherited environment.
+    # Keep its SAQ timing inputs explicitly inside the documented relationship so
+    # this test exercises the boot-failure restore guidance rather than a settings
+    # validation failure.
+    monkeypatch.setenv("SAQ_SETUP_GRACE_SECONDS", "300")
+    monkeypatch.setenv("RUN_CLAIM_STALE_SECONDS", "450")
     data_dir = tmp_path / "data"
     install_root = tmp_path / "install-root"
     _upgrade_seed_data_dir(data_dir)
