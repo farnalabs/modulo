@@ -150,13 +150,13 @@ def test_poisoned_artifact_refusal_and_verbatim_restore_recovers_previous(tmp_pa
     assert str(snapshot_path) in refusal
     restore_line = _upgrade_restore_head(refusal)
     assert f"ln -sfn versions/1.1.0 {plant['install_root'] / 'current'}" in restore_line
-    assert f"modulo restore {snapshot_path} --data-dir {plant['data_dir']} --yes" in restore_line
+    assert f"farna-control restore {snapshot_path} --data-dir {plant['data_dir']} --yes" in restore_line
     # The EMITTED command executes VERBATIM end-to-end: a PATH shim stands
-    # in for the `modulo` binary (recording the argv), so the REAL `ln -sfn`
+    # in for the `farna-control` binary (recording the argv), so the REAL `ln -sfn`
     # swap-back runs — a crash-safe POSIX primitive, never a sub-GUI copy.
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
-    shim_file = shim_dir / "modulo"
+    shim_file = shim_dir / "farna-control"
     shim_file.write_text('#!/bin/sh\necho "$@"\n', encoding="utf-8")
     shim_file.chmod(0o755)
     run_env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}")
