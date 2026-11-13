@@ -73,7 +73,7 @@ def test_transform_compose_content_hardpins_tag_and_removes_watchdog():
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_PASSWORD: ${MODULO_DB_PASSWORD:?required}
+      POSTGRES_PASSWORD: ${FARNA_CONTROL_DB_PASSWORD:?required}
   redis:
     image: redis:8-alpine
   modulo:
@@ -342,7 +342,7 @@ def test_bundled_env_example_ships_no_secret_values():
     machine instead, so the required SECRETS ship empty. (`SAQ_AUTH_USERNAME`
     is a username, not a secret, and legitimately ships as `admin`.)
     """
-    secret_names = {"FARNA_CONTROL_MODULO_DB_PASSWORD", "SECRET_KEY", "FERNET_KEY", "SAQ_AUTH_PASSWORD"}
+    secret_names = {"FARNA_CONTROL_DB_PASSWORD", "SECRET_KEY", "FERNET_KEY", "SAQ_AUTH_PASSWORD"}
     declared = _assignments(_bundled_files()[".env.example"])
 
     populated = sorted(name for name in secret_names if declared.get(name))

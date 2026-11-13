@@ -55,7 +55,7 @@ def transform_compose_content(content: str, tag: str) -> str:
 
     # 1. Hard-pin image tag on the modulo service
     image_pattern = re.compile(
-        r"(^\s*image:\s*ghcr\.io/farnalabs/modulo:)[^\r\n]+",
+        r"(^\s*image:\s*ghcr\.io/farnalabs/farna-control:)[^\r\n]+",
         re.MULTILINE,
     )
     if not image_pattern.search(content):
@@ -303,8 +303,16 @@ def build_compose_release(
     compose_raw = src_compose.read_text(encoding="utf-8")
     compose_transformed = transform_compose_content(compose_raw, valid_tag)
 
-    # Read env file
+    # Read env file and canonicalise the database password key. Older source
+    # examples used MODULO_DB_PASSWORD; the shipped compose contract uses the
+    # FARNA_CONTROL_* namespace, while the application still accepts the old
+    # spelling as a fallback.
     env_content = src_env.read_text(encoding="utf-8")
+    env_content = re.sub(
+        r"(?m)^MODULO_DB_PASSWORD=",
+        "FARNA_CONTROL_DB_PASSWORD=",
+        env_content,
+    )
 
     # Generate quickstart instructions
     quickstart_content = generate_quickstart_md(clean_version, valid_tag)
