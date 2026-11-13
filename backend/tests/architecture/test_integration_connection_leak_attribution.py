@@ -99,6 +99,7 @@ def _run_pytest(rootdir: Path, target: str, *extra_args: str, **extra_env: str) 
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(BACKEND), env.get("PYTHONPATH")]))
     env.pop("FARNA_CONTROL_MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", None)
+    env.pop("MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS", None)
     env.update(extra_env)
 
     return subprocess.run(  # noqa: S603 — fixed argv, sys.executable, no untrusted input
@@ -159,7 +160,7 @@ def test_collateral_unraisable_fails_the_leaking_test(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="asyncpg connection leak strict-mode attribution relies on Unix-specific gc/__del__ timing; skipped on Windows")
 def test_strict_mode_fails_the_leaking_test(tmp_path: Path) -> None:
-    result = _run_scratch_suite(tmp_path, MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS="1")
+    result = _run_scratch_suite(tmp_path, FARNA_CONTROL_MODULO_INTEGRATION_STRICT_CONNECTION_LEAKS="1")
 
     output = result.stdout + result.stderr
     assert result.returncode == 1, output
