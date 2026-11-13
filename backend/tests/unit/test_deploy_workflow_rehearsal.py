@@ -1550,7 +1550,7 @@ def test_protected_cut_fails_closed_without_the_release_pr_token(tmp_path: Path,
         env["GH_TOKEN"] = token
     result = _run_bash(_release_job_run("Prepare exact cut commit through protected main (cut only)"), cwd=repo, env=env)
     assert result.returncode != 0
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
+    assert "MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
     assert not log.exists() or "gh " not in log.read_text(encoding="utf-8")
 
 
@@ -2231,7 +2231,7 @@ def test_release_promote_fails_closed_without_the_release_pr_token(tmp_path: Pat
         timeout=30,
     )
     assert result.returncode != 0
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
+    assert "MODULO_RELEASE_PR_TOKEN" in result.stdout + result.stderr
 
 
 def test_release_promote_uses_a_single_protected_pr_and_exact_merged_sha() -> None:
