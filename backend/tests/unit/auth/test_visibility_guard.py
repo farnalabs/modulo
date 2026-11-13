@@ -104,9 +104,7 @@ class TestAssertTeamTransitionAllowed:
         """Clearing owner_team_id while ALSO switching visibility to 'org' is valid."""
         stub = _stub_membership(monkeypatch, {_TEAM_A})
         current = _pipeline(owner_team_id=_TEAM_A, visibility="team")
-        await _assert_team_transition_allowed(
-            AsyncMock(), _tenant("operator"), current, {"visibility": "org", "owner_team_id": None}
-        )
+        await _assert_team_transition_allowed(AsyncMock(), _tenant("operator"), current, {"visibility": "org", "owner_team_id": None})
         # Only the current-team gate runs (owner_team_id is cleared, not reassigned).
         stub.assert_awaited_once()
 
@@ -146,8 +144,6 @@ class TestAssertTeamTransitionAllowed:
         """Updates that don't touch visibility/owner_team_id pass without checks."""
         stub = _stub_membership(monkeypatch, set())
         current = _pipeline(owner_team_id=_TEAM_A, visibility="team")
-        await _assert_team_transition_allowed(
-            AsyncMock(), _tenant("operator"), current, {"name": "renamed", "max_concurrent_runs": 3}
-        )
+        await _assert_team_transition_allowed(AsyncMock(), _tenant("operator"), current, {"name": "renamed", "max_concurrent_runs": 3})
         # No boundary change -> the membership check must not run at all.
         stub.assert_not_awaited()

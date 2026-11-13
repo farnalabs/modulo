@@ -48,9 +48,7 @@ def _seed_mock_session(ctx):
     session.add = MagicMock()
 
     if ctx.get("_no_table"):
-        session.execute = AsyncMock(
-            side_effect=ProgrammingError("stmt", {}, 'relation "error_forwarder_configs" does not exist')
-        )
+        session.execute = AsyncMock(side_effect=ProgrammingError("stmt", {}, 'relation "error_forwarder_configs" does not exist'))
         return session
 
     existing = ctx.get("_existing_configs", {})

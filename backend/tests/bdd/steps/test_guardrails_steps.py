@@ -155,9 +155,7 @@ def conformance_derived(ctx: dict[str, Any]) -> None:
 
 @then(parsers.parse('a GuardrailBlockedError is raised for guardrail "{name}"'))
 def blocked_raised_for(name: str, ctx: dict[str, Any]) -> None:
-    assert isinstance(ctx.get("error"), GuardrailBlockedError), (
-        f"Expected GuardrailBlockedError, got {ctx.get('error')}"
-    )
+    assert isinstance(ctx.get("error"), GuardrailBlockedError), f"Expected GuardrailBlockedError, got {ctx.get('error')}"
     assert ctx["error"].eval_name == name
 
 
@@ -192,9 +190,7 @@ def outcome_blocked_by(name: str, ctx: dict[str, Any]) -> None:
 
 @then("a GuardrailMisroutedError is raised")
 def misrouted_raised(ctx: dict[str, Any]) -> None:
-    assert isinstance(ctx.get("error"), GuardrailMisroutedError), (
-        f"Expected GuardrailMisroutedError, got {ctx.get('error')}"
-    )
+    assert isinstance(ctx.get("error"), GuardrailMisroutedError), f"Expected GuardrailMisroutedError, got {ctx.get('error')}"
 
 
 @then("a GuardrailConfigError is raised")
@@ -302,11 +298,7 @@ def bdd_bound_guardrail(name: str, pattern: str, field: str, ctx: dict[str, Any]
         session = maker()
         session.add(Organisation(id=_ORG_ID, name="test org", slug="test-org"))
         session.add(Account(id=_ACCOUNT_ID, email="admin@example.com", display_name="admin"))
-        session.add(
-            Pipeline(
-                id=_PIPELINE_ID, organisation_id=_ORG_ID, name="pipeline", account_id=_ACCOUNT_ID, visibility="org"
-            )
-        )
+        session.add(Pipeline(id=_PIPELINE_ID, organisation_id=_ORG_ID, name="pipeline", account_id=_ACCOUNT_ID, visibility="org"))
         session.add(
             PipelineSnapshot(
                 id=_SNAPSHOT_ID,

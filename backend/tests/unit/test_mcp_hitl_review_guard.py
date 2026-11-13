@@ -78,9 +78,7 @@ def _statement_entity(stmt: object) -> object | None:
     return descriptions[0].get("entity")
 
 
-def _patch_session_and_audit(
-    monkeypatch: pytest.MonkeyPatch, *, old_edge: _EdgeRow | None
-) -> tuple[AsyncMock, AsyncMock]:
+def _patch_session_and_audit(monkeypatch: pytest.MonkeyPatch, *, old_edge: _EdgeRow | None) -> tuple[AsyncMock, AsyncMock]:
     import farna.api.mcp_server as _ms
     from farna.db.models.pipeline import Pipeline
     from farna.db.models.pipeline_edge import PipelineEdge

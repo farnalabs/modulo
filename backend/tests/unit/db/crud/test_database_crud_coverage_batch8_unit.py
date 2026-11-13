@@ -46,20 +46,13 @@ def session(*results: MagicMock) -> MagicMock:
 @pytest.mark.asyncio
 async def test_pipeline_folder_crud_all_paths() -> None:
     parent_id = uuid.uuid4()
-    folder = await pipeline_folder.create_folder(
-        session(result(one=parent_id), result(one=None)), org_id=ORG, name="x", account_id=ACCOUNT, parent_id=parent_id
-    )
+    folder = await pipeline_folder.create_folder(session(result(one=parent_id), result(one=None)), org_id=ORG, name="x", account_id=ACCOUNT, parent_id=parent_id)
     assert isinstance(folder, PipelineFolder)
 
     existing = PipelineFolder(organisation_id=ORG, name="old", account_id=ACCOUNT)
     folder_db = session(result(one=existing))
     assert await pipeline_folder.get_folder(folder_db, existing.id) is existing
-    assert (
-        await pipeline_folder.update_folder(
-            session(result(one=existing)), existing.id, {"name": "new", "parent_id": None}
-        )
-        is existing
-    )
+    assert await pipeline_folder.update_folder(session(result(one=existing)), existing.id, {"name": "new", "parent_id": None}) is existing
     assert existing.name == "new"
     assert await pipeline_folder.update_folder(session(result(one=None)), uuid.uuid4(), {}) is None
 
@@ -68,9 +61,7 @@ async def test_pipeline_folder_crud_all_paths() -> None:
     assert await pipeline_folder.move_pipeline_to_folder(moved, pipeline.id, existing.id) is pipeline
     assert pipeline.folder_id == existing.id
     with pytest.raises(ValueError, match="Folder not found"):
-        await pipeline_folder.move_pipeline_to_folder(
-            session(result(one=pipeline), result(one=None)), pipeline.id, uuid.uuid4()
-        )
+        await pipeline_folder.move_pipeline_to_folder(session(result(one=pipeline), result(one=None)), pipeline.id, uuid.uuid4())
     assert await pipeline_folder.move_pipeline_to_folder(session(result(one=None)), uuid.uuid4(), None) is None
 
     listed = session(result(rows=[existing]))
@@ -84,38 +75,22 @@ async def test_pipeline_folder_crud_all_paths() -> None:
 @pytest.mark.asyncio
 async def test_schema_folder_crud_all_paths() -> None:
     parent_id = uuid.uuid4()
-    folder = await schema_folder.create_folder(
-        session(result(one=parent_id), result(one=None)), org_id=ORG, name="x", account_id=ACCOUNT, parent_id=parent_id
-    )
+    folder = await schema_folder.create_folder(session(result(one=parent_id), result(one=None)), org_id=ORG, name="x", account_id=ACCOUNT, parent_id=parent_id)
     assert isinstance(folder, SchemaFolder)
 
     existing = SchemaFolder(organisation_id=ORG, name="old", account_id=ACCOUNT)
     assert await schema_folder.get_folder(session(result(one=existing)), existing.id) is existing
-    assert (
-        await schema_folder.update_folder(
-            session(result(one=existing)), existing.id, {"name": "new", "parent_id": None}
-        )
-        is existing
-    )
+    assert await schema_folder.update_folder(session(result(one=existing)), existing.id, {"name": "new", "parent_id": None}) is existing
     assert await schema_folder.update_folder(session(result(one=None)), uuid.uuid4(), {}) is None
 
     schema = MagicMock(id=uuid.uuid4(), folder_id=None)
-    assert (
-        await schema_folder.move_schema_to_folder(
-            session(result(one=schema), result(one=existing)), schema.id, existing.id, ORG
-        )
-        is schema
-    )
+    assert await schema_folder.move_schema_to_folder(session(result(one=schema), result(one=existing)), schema.id, existing.id, ORG) is schema
     assert schema.folder_id == existing.id
     with pytest.raises(ValueError, match="Folder not found"):
-        await schema_folder.move_schema_to_folder(
-            session(result(one=schema), result(one=None)), schema.id, uuid.uuid4(), ORG
-        )
+        await schema_folder.move_schema_to_folder(session(result(one=schema), result(one=None)), schema.id, uuid.uuid4(), ORG)
     foreign_folder = SimpleNamespace(organisation_id=uuid.uuid4())
     with pytest.raises(ValueError, match="Folder not found"):
-        await schema_folder.move_schema_to_folder(
-            session(result(one=schema), result(one=foreign_folder)), schema.id, uuid.uuid4(), ORG
-        )
+        await schema_folder.move_schema_to_folder(session(result(one=schema), result(one=foreign_folder)), schema.id, uuid.uuid4(), ORG)
     assert await schema_folder.move_schema_to_folder(session(result(one=None)), uuid.uuid4(), None) is None
 
     assert await schema_folder.list_folders(session(result(rows=[existing]))) == [existing]
@@ -126,9 +101,7 @@ async def test_schema_folder_crud_all_paths() -> None:
 
 @pytest.mark.asyncio
 async def test_parameter_schema_crud_all_paths() -> None:
-    schema = await parameter_schema.create_schema(
-        session(), org_id=ORG, name="schema", description="d", parameters=[{"name": "x"}], account_id=ACCOUNT
-    )
+    schema = await parameter_schema.create_schema(session(), org_id=ORG, name="schema", description="d", parameters=[{"name": "x"}], account_id=ACCOUNT)
     assert isinstance(schema, ParameterSchema)
     assert await parameter_schema.get_schema(session(result(one=schema)), schema.id) is schema
 
@@ -172,10 +145,7 @@ async def test_parameter_schema_crud_all_paths() -> None:
     assert await parameter_schema.get_schema_references(refs_db, schema.id) == {"agents": [agent_id], "sets": [set_id]}
     assert await parameter_schema.delete_schema(session(result(scalar=1)), schema.id) is False
     assert await parameter_schema.delete_schema(session(result(scalar=0), result(scalar=1)), schema.id) is False
-    assert (
-        await parameter_schema.delete_schema(session(result(scalar=0), result(scalar=0), result(one=None)), schema.id)
-        is False
-    )
+    assert await parameter_schema.delete_schema(session(result(scalar=0), result(scalar=0), result(one=None)), schema.id) is False
     delete_db = session(result(scalar=0), result(scalar=0), result(one=schema))
     assert await parameter_schema.delete_schema(delete_db, schema.id) is True
 
@@ -183,12 +153,8 @@ async def test_parameter_schema_crud_all_paths() -> None:
 @pytest.mark.asyncio
 async def test_tier_catalog_reads_payloads_and_missing_flag() -> None:
     tier = TierCatalog(tier_id="community", label="Community", rank=0, requires_license=False, description="Free")
-    flag = FeatureFlagCatalog(
-        name="views", description="Views", tier_id="community", depends_on=["runs"], is_active=True
-    )
-    assert await tier_catalog.list_tiers(session(result(rows=[tier]))) == [
-        {"tier_id": "community", "label": "Community", "rank": 0, "requires_license": False, "description": "Free"}
-    ]
+    flag = FeatureFlagCatalog(name="views", description="Views", tier_id="community", depends_on=["runs"], is_active=True)
+    assert await tier_catalog.list_tiers(session(result(rows=[tier]))) == [{"tier_id": "community", "label": "Community", "rank": 0, "requires_license": False, "description": "Free"}]
     expected = {
         "name": "views",
         "description": "Views",

@@ -102,18 +102,14 @@ class TestChatMessage:
 
     def test_role_check_allows_valid_roles(self) -> None:
         table = Base.metadata.tables["chat_messages"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
-        )
+        check = next(c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role")
         sql = str(check.sqltext)
         for role in ("user", "assistant", "tool_use", "tool_result", "summary"):
             assert f"'{role}'" in sql
 
     def test_role_check_rejects_invalid_roles(self) -> None:
         table = Base.metadata.tables["chat_messages"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role"
-        )
+        check = next(c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_chat_messages_role")
         sql = str(check.sqltext)
         assert "IN" in sql
 
@@ -169,18 +165,14 @@ class TestAssistantSkill:
 
     def test_owner_check_rejects_both_null(self) -> None:
         table = Base.metadata.tables["assistant_skills"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_assistant_skills_owner"
-        )
+        check = next(c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_assistant_skills_owner")
         sql = str(check.sqltext)
         assert "organisation_id IS NOT NULL" in sql
         assert "account_id IS NOT NULL" in sql
 
     def test_owner_check_rejects_both_set(self) -> None:
         table = Base.metadata.tables["assistant_skills"]
-        check = next(
-            c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_assistant_skills_owner"
-        )
+        check = next(c for c in table.constraints if isinstance(c, CheckConstraint) and c.name == "ck_assistant_skills_owner")
         sql = str(check.sqltext)
         assert "OR" in sql
         assert "organisation_id IS NULL AND account_id IS NOT NULL" in sql or "account_id IS NOT NULL" in sql

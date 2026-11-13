@@ -112,9 +112,7 @@ def _lb_row(*, key: Any, label: Any = None, eval_type="regex", passed=0, total=0
 
 def _ts_row(*, bucket: Any, eval_type="regex", passed=0, total=0, run_count=0) -> SimpleNamespace:
     """Build a mock-timeseries row (the SELECT row shape from the timeseries SQL)."""
-    return SimpleNamespace(
-        bucket=bucket, eval_type=eval_type, passed_count=passed, total_count=total, run_count=run_count
-    )
+    return SimpleNamespace(bucket=bucket, eval_type=eval_type, passed_count=passed, total_count=total, run_count=run_count)
 
 
 def _pip_row(pipeline_id: uuid.UUID, name: str | None) -> SimpleNamespace:

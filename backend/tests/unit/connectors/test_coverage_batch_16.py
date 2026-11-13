@@ -112,9 +112,7 @@ def test_shared_limiter_requires_tenant(value: str | None) -> None:
 
 async def test_shared_limiter_retries_then_fails_closed(caplog: pytest.LogCaptureFixture) -> None:
     script = _FakeScript([OSError("down"), OSError("still down")])
-    limiter = PerDestinationRateLimiter(
-        rate=1, burst=1, redis_client=_FakeRedis(script), tenant_id="org", key_prefix="p:"
-    )
+    limiter = PerDestinationRateLimiter(rate=1, burst=1, redis_client=_FakeRedis(script), tenant_id="org", key_prefix="p:")
     with pytest.raises(SharedBudgetUnavailableError, match="unavailable"):
         await limiter.consume("dest")
     assert not limiter.buckets
@@ -378,9 +376,7 @@ def test_security_request_error_variants() -> None:
 @respx.mock
 async def test_github_logs_redirects_and_errors() -> None:
     runner = GitHubActionsCIRunner("gh_secret")
-    respx.get("https://api.github.com/repos/o/r/actions/runs/1/logs").mock(
-        return_value=httpx.Response(202, headers={"location": "https://logs.example.test/a"})
-    )
+    respx.get("https://api.github.com/repos/o/r/actions/runs/1/logs").mock(return_value=httpx.Response(202, headers={"location": "https://logs.example.test/a"}))
     respx.get("https://logs.example.test/a").mock(return_value=httpx.Response(200, text="a\nb"))
     logs = await runner.get_run_logs("o/r/1", cursor="2")
     assert logs.lines == ["a", "b"]
@@ -414,9 +410,7 @@ async def test_github_and_gitlab_error_paths() -> None:
 @respx.mock
 async def test_gitlab_logs_skip_bad_jobs_and_trace() -> None:
     gl = GitLabCIRunner("gl_secret")
-    respx.get("https://gitlab.com/api/v4/projects/1/pipelines/2/jobs").mock(
-        return_value=httpx.Response(200, json=[{}, {"id": 2, "name": "bad"}, {"id": 3, "name": "good"}])
-    )
+    respx.get("https://gitlab.com/api/v4/projects/1/pipelines/2/jobs").mock(return_value=httpx.Response(200, json=[{}, {"id": 2, "name": "bad"}, {"id": 3, "name": "good"}]))
     respx.get("https://gitlab.com/api/v4/projects/1/jobs/2/trace").mock(return_value=httpx.Response(404))
     respx.get("https://gitlab.com/api/v4/projects/1/jobs/3/trace").mock(return_value=httpx.Response(200, text="line"))
     logs = await gl.get_run_logs("1/2", cursor="100")

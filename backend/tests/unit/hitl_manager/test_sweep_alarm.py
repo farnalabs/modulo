@@ -88,9 +88,7 @@ class TestThreshold:
         """The 6th approve across 2 distinct pipelines within the window alarms."""
         session = _alarm_session(6, 2)
         with _sweep_patches() as (mock_audit, mock_notify, mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is True
         mock_audit.assert_awaited_once()
         assert mock_audit.await_args.kwargs["event_type"] == AUDIT_EVENT_TYPE
@@ -109,9 +107,7 @@ class TestThreshold:
         """The count must EXCEED the threshold — 5 approves do not alarm."""
         session = _alarm_session(5, 2)
         with _sweep_patches() as (mock_audit, mock_notify, mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         mock_audit.assert_not_awaited()
         mock_notify.assert_not_awaited()
@@ -121,9 +117,7 @@ class TestThreshold:
         """6 approves on ONE pipeline is unusual but not a cross-pipeline sweep."""
         session = _alarm_session(6, 1)
         with _sweep_patches() as (mock_audit, _mock_notify, mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         mock_audit.assert_not_awaited()
         mock_webhook.assert_not_called()
@@ -132,9 +126,7 @@ class TestThreshold:
         """Unattributed decisions (actor_id=None) cannot be swept — no query runs."""
         session = _alarm_session(50, 5)
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=None, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=None, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         session.execute.assert_not_awaited()
         mock_audit.assert_not_awaited()
@@ -157,9 +149,7 @@ class TestThreshold:
         the same impact an approve has)."""
         session = _alarm_session(6, 2)
         with _sweep_patches() as (mock_audit, _mock_notify, mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is True
         mock_audit.assert_awaited_once()
         mock_webhook.assert_called_once()
@@ -180,9 +170,7 @@ class TestCooldown:
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
             first = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
             later = t0 + timedelta(minutes=30)
-            second = await maybe_alarm_approve_sweep(
-                _alarm_session(22, 5), org_id=_ORG, actor_id=_USER, gate=_gate(), now=later
-            )
+            second = await maybe_alarm_approve_sweep(_alarm_session(22, 5), org_id=_ORG, actor_id=_USER, gate=_gate(), now=later)
         assert first is True
         assert second is False
         assert mock_audit.await_count == 1
@@ -208,9 +196,7 @@ class TestCooldown:
         other_actor = uuid.uuid4()
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
             await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
-            other = await maybe_alarm_approve_sweep(
-                _alarm_session(7, 2), org_id=_ORG, actor_id=other_actor, gate=_gate(), now=t0
-            )
+            other = await maybe_alarm_approve_sweep(_alarm_session(7, 2), org_id=_ORG, actor_id=other_actor, gate=_gate(), now=t0)
         assert other is True
         assert mock_audit.await_count == 2
 
@@ -219,9 +205,7 @@ class TestCooldown:
         t0 = datetime.now(UTC)
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
             await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
-            other_org = await maybe_alarm_approve_sweep(
-                _alarm_session(7, 2), org_id=_ORG_B, actor_id=_USER, gate=_gate(), now=t0
-            )
+            other_org = await maybe_alarm_approve_sweep(_alarm_session(7, 2), org_id=_ORG_B, actor_id=_USER, gate=_gate(), now=t0)
         assert other_org is True
         assert mock_audit.await_count == 2
 
@@ -231,9 +215,7 @@ class TestFailureIsolation:
         """A broken detection query never fails the (already committed) decision."""
         session = _broken_session()
         with _sweep_patches() as (mock_audit, mock_notify, mock_webhook):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         mock_audit.assert_not_awaited()
         mock_notify.assert_not_awaited()
@@ -259,16 +241,12 @@ class TestFailureIsolation:
         session = _broken_session()
         session.begin_nested = MagicMock(side_effect=_savepoint)
         with _sweep_patches():
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         assert events == ["enter", "rollback"]
         # The rolled-back detection must not arm the cooldown.
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
-            recovered = await maybe_alarm_approve_sweep(
-                _alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            recovered = await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert recovered is True
         mock_audit.assert_awaited_once()
 
@@ -280,9 +258,7 @@ class TestFailureIsolation:
             new_callable=AsyncMock,
             side_effect=RuntimeError("audit db down"),
         ):
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
 
     async def test_emission_failure_does_not_arm_cooldown(self):
@@ -295,9 +271,7 @@ class TestFailureIsolation:
         ):
             await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
         with _sweep_patches():
-            recovered = await maybe_alarm_approve_sweep(
-                _alarm_session(8, 3), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0
-            )
+            recovered = await maybe_alarm_approve_sweep(_alarm_session(8, 3), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
         assert recovered is True
 
     async def test_audit_emission_failure_rolls_back_emission_savepoint(self):
@@ -321,9 +295,7 @@ class TestFailureIsolation:
         session.begin_nested = MagicMock(side_effect=_savepoint)
         with _sweep_patches() as (mock_audit, _mock_notify, mock_webhook):
             mock_audit.side_effect = RuntimeError("audit append failed")
-            alarmed = await maybe_alarm_approve_sweep(
-                session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            alarmed = await maybe_alarm_approve_sweep(session, org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert alarmed is False
         # Two savepoints: the detection (released cleanly) and the emission
         # (rolled back by the audit failure).
@@ -331,9 +303,7 @@ class TestFailureIsolation:
         mock_webhook.assert_not_called()
         # The rolled-back emission must not arm the cooldown.
         with _sweep_patches() as (mock_audit2, _mock_notify, _mock_webhook):
-            recovered = await maybe_alarm_approve_sweep(
-                _alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC)
-            )
+            recovered = await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=datetime.now(UTC))
         assert recovered is True
         mock_audit2.assert_awaited_once()
 
@@ -342,9 +312,7 @@ class TestFailureIsolation:
         t0 = datetime.now(UTC)
         with _sweep_patches() as (mock_audit, _mock_notify, _mock_webhook):
             await maybe_alarm_approve_sweep(_broken_session(), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
-            recovered = await maybe_alarm_approve_sweep(
-                _alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0
-            )
+            recovered = await maybe_alarm_approve_sweep(_alarm_session(6, 2), org_id=_ORG, actor_id=_USER, gate=_gate(), now=t0)
         assert recovered is True
         mock_audit.assert_awaited_once()
 
@@ -479,9 +447,7 @@ class TestDetectionQuery:
         assert "audit_events" not in sql
         # The counted decisions are bound parameters, not SQL literals.
         param_values = list(compiled.params.values())
-        flat = [
-            item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
-        ]
+        flat = [item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])]
         for decision in sweep_alarm._SWEEP_COUNTED_DECISIONS:
             assert decision in flat
 
@@ -501,9 +467,7 @@ class TestDetectionQuery:
         compiled = stmt.compile()
         assert "IN" in str(compiled).upper()
         param_values = list(compiled.params.values())
-        flat = [
-            item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])
-        ]
+        flat = [item for value in param_values for item in (list(value) if isinstance(value, (list, tuple)) else [value])]
         assert "approved" in flat
         assert "deliver_manual" in flat
 

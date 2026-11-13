@@ -71,13 +71,7 @@ async def test_fresh_profiles_default_to_empty_workspace_inputs(db_engine: Async
     await db_engine.dispose()
     async with db_engine.connect() as conn:
         default = None
-        rows = await conn.execute(
-            text(
-                "SELECT column_default FROM information_schema.columns "
-                "WHERE table_name = 'environment_profiles' AND column_name = 'workspace_inputs' "
-                "AND table_schema = 'public'"
-            )
-        )
+        rows = await conn.execute(text("SELECT column_default FROM information_schema.columns WHERE table_name = 'environment_profiles' AND column_name = 'workspace_inputs' AND table_schema = 'public'"))
         row = rows.fetchone()
         if row is not None:
             default = row[0]

@@ -364,9 +364,7 @@ class TestExportChain:
                 "page": 1,
                 "page_size": 100,
             }
-            resp = client.get(
-                f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31"
-            )
+            resp = client.get(f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31")
         assert resp.status_code == 200
         _, kwargs = mock_export.call_args
         assert kwargs.get("event_type") == "pipeline.run"
@@ -481,9 +479,7 @@ class TestScanChain:
             patch("farna.api.routes.audit.stream_export_chain", side_effect=_fake),
             patch("farna.api.routes.audit._audit_session_factory", return_value=object()),
         ):
-            resp = client.get(
-                f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31"
-            )
+            resp = client.get(f"{self.URL}?event_type=pipeline.run&user_id={_USER_ID}&entity_type=pipeline&from_date=2025-01-01&to_date=2025-12-31")
         assert resp.status_code == 200
         assert captured.get("event_type") == "pipeline.run"
         assert captured.get("actor_user_id") == _USER_ID
@@ -556,10 +552,7 @@ class TestVerifyChain:
                     "first_gap_index": 1,
                     "first_tampered_id": "evt-2",
                     "chain_head_match": None,
-                    "detail": (
-                        "Audit chain break at event 1 (id evt-2): stored previous_hash (bad-hash) "
-                        "does not match the recomputed hash of the prior event (abc123)."
-                    ),
+                    "detail": ("Audit chain break at event 1 (id evt-2): stored previous_hash (bad-hash) does not match the recomputed hash of the prior event (abc123)."),
                 },
             ),
             patch("farna.api.routes.audit.set_rls_org"),

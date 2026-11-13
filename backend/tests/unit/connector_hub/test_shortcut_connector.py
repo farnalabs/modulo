@@ -79,9 +79,7 @@ async def test_query_stories(connector):
 async def test_query_stories_with_filters(connector):
     stories = [{"id": 1, "name": "Filtered Story"}]
     respx.get(f"{_BASE}/stories").mock(return_value=httpx.Response(200, json=stories))
-    result = await connector.query(
-        ConnectorQuery(resource="stories", filters={"project_id": "42", "workflow_state_id": "5", "owner_id": "99"})
-    )
+    result = await connector.query(ConnectorQuery(resource="stories", filters={"project_id": "42", "workflow_state_id": "5", "owner_id": "99"}))
     assert result.total == 1
 
 

@@ -547,9 +547,7 @@ from farna.db.models.run import TERMINAL_STATUSES, Run  # noqa: E402
 
 def test_run_model_check_constraint_allows_router_no_match():
     table_args = Run.__table_args__
-    check_sql = " ".join(
-        arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status"
-    )
+    check_sql = " ".join(arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status")
     assert "'router_no_match'" in check_sql
 
 

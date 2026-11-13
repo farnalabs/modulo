@@ -575,9 +575,7 @@ def test_build_params_rate_from_component() -> None:
 
 
 def test_build_params_wall_clock_seconds_to_hours() -> None:
-    comp = CostComponentConfig(
-        name="sandbox_infra", display_name="Sandbox", kind="calculated", formula="wall_clock_hours"
-    )
+    comp = CostComponentConfig(name="sandbox_infra", display_name="Sandbox", kind="calculated", formula="wall_clock_hours")
     params = build_params(_tel(wall_clock_elapsed_s=Decimal(5400)), comp)
     assert params["wall_clock_hours"] == Decimal("1.5")
 

@@ -173,9 +173,7 @@ def test_split_merge_pure_row_return_is_same_object() -> None:
     """Idempotence holds at the object level for the pure row."""
     pure_return = {"summary": "x"}
     stored_telemetry = {"node-a": {"status": "completed"}}
-    outputs, telemetry = _split_merge_outputs(
-        {"node-a": pure_return}, stored_telemetry, {"node-a": pure_return}, {"node-a": "sandbox_agent"}
-    )
+    outputs, telemetry = _split_merge_outputs({"node-a": pure_return}, stored_telemetry, {"node-a": pure_return}, {"node-a": "sandbox_agent"})
     assert outputs["node-a"] is pure_return
     assert telemetry["node-a"] is stored_telemetry["node-a"]
 

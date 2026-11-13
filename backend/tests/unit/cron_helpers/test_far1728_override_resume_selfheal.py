@@ -266,9 +266,7 @@ async def _run_reconcile(
         stack.enter_context(patch.object(ch, "get_settings", return_value=_settings()))
         stack.enter_context(patch.object(ch, "AsyncRedis", redis_cls))
         stack.enter_context(patch.object(ch, "RedisQueue", MagicMock(return_value=q)))
-        reenqueue = stack.enter_context(
-            patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result)
-        )
+        reenqueue = stack.enter_context(patch.object(ch, "_re_enqueue_run", new_callable=AsyncMock, return_value=dispatch_result))
         stack.enter_context(patch.object(ch, "_ingest_saq_error", new_callable=AsyncMock))
         stack.enter_context(
             patch.object(
@@ -287,9 +285,7 @@ async def _run_reconcile(
             )
         )
         stack.enter_context(patch.object(ch, "_record_fact_for_terminalized_run", new_callable=AsyncMock))
-        stack.enter_context(
-            patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0)
-        )
+        stack.enter_context(patch("farna.db.crud.run.count_active_runs_for_pipeline", new_callable=AsyncMock, return_value=0))
         summary = await ch.dispatcher_reconcile()
     return summary, reenqueue, session
 
@@ -325,9 +321,7 @@ class TestLostOverrideResumeJobIsReEnqueued:
         # resume re-executes nothing).
         assert summary["node_started_deferred"] == 0
 
-    async def test_control_node_started_row_without_the_override_marker_is_still_held_back(
-        self, monkeypatch: Any
-    ) -> None:
+    async def test_control_node_started_row_without_the_override_marker_is_still_held_back(self, monkeypatch: Any) -> None:
         """The carve-out stays class-scoped: the same shape WITHOUT the flip's
         marker (the 2026-10-10 storm class — no replay flag either) is still
         held back — no enqueue — so the storm does not come back. Since

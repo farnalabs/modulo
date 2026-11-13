@@ -112,12 +112,7 @@ def stage_bundle(
     if sys.platform == "win32":
         # Execution policy is a Windows-only concept; pwsh on POSIX has none to bypass.
         command += ["-ExecutionPolicy", "Bypass"]
-    invocation = (
-        f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' "
-        f"-PythonRoot '{python_root}' -BackendSource '{backend_source}' "
-        f"-SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' "
-        f"-LauncherPath '{launcher}'"
-    )
+    invocation = f". '{script}'; Invoke-WindowsBundleStaging -StagePath '{stage}' -PythonRoot '{python_root}' -BackendSource '{backend_source}' -SitePackagesSource '{site_packages}' -FrontendDistSource '{frontend_dist}' -LauncherPath '{launcher}'"
     if version is not None:
         invocation += f" -Version '{version}'"
     if preserve_existing:
@@ -135,16 +130,10 @@ def snapshot_tree(root: Path) -> dict[str, str]:
 
 def nested_duplicate_directories(root: Path) -> list[str]:
     """Return directories that contain a same-named child directory."""
-    return [
-        directory.relative_to(root).as_posix()
-        for directory in root.rglob("*")
-        if directory.is_dir() and (directory / directory.name).is_dir()
-    ]
+    return [directory.relative_to(root).as_posix() for directory in root.rglob("*") if directory.is_dir() and (directory / directory.name).is_dir()]
 
 
-def test_pins_are_strict_and_consistent(
-    windows_pins: dict[str, str], linux_pins: dict[str, str], workflow_source: str
-) -> None:
+def test_pins_are_strict_and_consistent(windows_pins: dict[str, str], linux_pins: dict[str, str], workflow_source: str) -> None:
     expected = {
         "VALKEY_VERSION",
         "VALKEY_PROVENANCE_POLICY",
@@ -305,9 +294,7 @@ def test_staged_bundle_writes_the_runtime_marker_the_installer_requires(tmp_path
     (frontend_dist / "index.html").write_text("ok", encoding="utf-8")
     launcher.write_bytes(b"launcher")
     stage = tmp_path / "stage"
-    result = stage_bundle(
-        script, stage, python_root, backend_source, site_packages, frontend_dist, launcher, version="1.2.3"
-    )
+    result = stage_bundle(script, stage, python_root, backend_source, site_packages, frontend_dist, launcher, version="1.2.3")
     assert result.returncode == 0, result.stderr
     marker = json.loads((stage / "modulo-runtime.json").read_text(encoding="utf-8"))
     assert marker["contract"] == "native-windows-v1"

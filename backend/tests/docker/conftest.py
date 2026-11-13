@@ -76,9 +76,7 @@ def workspace_network() -> str:
     async def _manage(action: str) -> None:
         async with aiodocker.Docker() as docker:
             if action == "create":
-                await docker.networks.create(
-                    {"Name": name, "Driver": "bridge", "Labels": {"modulo.test": "d4-docker-marked"}}
-                )
+                await docker.networks.create({"Name": name, "Driver": "bridge", "Labels": {"modulo.test": "d4-docker-marked"}})
             else:
                 with contextlib.suppress(Exception):
                     network = await docker.networks.get(name)

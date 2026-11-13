@@ -119,9 +119,7 @@ def reassign_pipeline(pipeline_name: str, team_name: str, request, ctx) -> None:
     if team is None:
         raise AssertionError(f"team '{team_name}' was not given; the real route cannot be driven")
     new_team_id = team["id"]
-    updated = make_pipeline_row(
-        {"name": pipeline_name, "owner_team_id": new_team_id, "visibility": (pdata or {}).get("visibility", "team")}
-    )
+    updated = make_pipeline_row({"name": pipeline_name, "owner_team_id": new_team_id, "visibility": (pdata or {}).get("visibility", "team")})
     with (
         session_client(_caller_role(request)) as client,
         patch("farna.api.routes.pipelines._set_rls_context", new_callable=AsyncMock),

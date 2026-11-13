@@ -521,11 +521,7 @@ class TestClassifyEntities:
         org = uuid.uuid4()
         install = _install(org_id=org, manifest={})
         eid = str(uuid.uuid4())
-        session = _session(
-            get_map={
-                (Agent, uuid.UUID(eid)): SimpleNamespace(organisation_id=org, collection_install_id=install.install_id)
-            }
-        )
+        session = _session(get_map={(Agent, uuid.UUID(eid)): SimpleNamespace(organisation_id=org, collection_install_id=install.install_id)})
         states = await _classify_entities(session, org, install, {"a": {"agent": [eid]}, "b": {"agent": [eid]}})
         assert states == {eid: "unmodified"}
 
@@ -595,9 +591,7 @@ class TestLegacyPinContext:
             return prim, "schema"
 
         with patch.object(upgrade, "_resolve_pin_primitive", side_effect=_resolve):
-            out = await _legacy_pin_context(
-                AsyncMock(), org, install, [{"slug": "s", "version": "1.0", "primitive_type": ""}]
-            )
+            out = await _legacy_pin_context(AsyncMock(), org, install, [{"slug": "s", "version": "1.0", "primitive_type": ""}])
         assert out == {}
 
     async def test_agent_without_local_mapping_and_other_type_skipped(self) -> None:
@@ -681,9 +675,7 @@ class TestContentHelpers:
 class TestReconcileSchemaEntity:
     async def test_missing_schema_warns(self) -> None:
         warnings: list[str] = []
-        ok = await _reconcile_schema_entity(
-            _session(), uuid.uuid4(), uuid.uuid4(), {"type": "object"}, None, None, warnings
-        )
+        ok = await _reconcile_schema_entity(_session(), uuid.uuid4(), uuid.uuid4(), {"type": "object"}, None, None, warnings)
         assert ok is False
         assert warnings
 
@@ -825,9 +817,7 @@ class TestReconcileAgentEntity:
         )
         session = _session(get_map={(Agent, eid): agent})
         with patch("farna.core.pipeline_engine.git_content.validate_agent_git_content_values"):
-            ok = await _reconcile_agent_entity(
-                session, org, eid, {"input_schema": "missing", "output_schema": "missing"}, {}, []
-            )
+            ok = await _reconcile_agent_entity(session, org, eid, {"input_schema": "missing", "output_schema": "missing"}, {}, [])
         assert ok is True
         assert agent.input_schema_id == "keep-in"
         assert agent.output_schema_id == "keep-out"
@@ -864,9 +854,7 @@ class TestDetectCollectionUpdate:
             get_map={
                 (CollectionInstall, install.install_id): install,
                 (LibraryPrimitive, install.collection_id): collection,
-                (Schema, uuid.UUID(schema_id)): SimpleNamespace(
-                    organisation_id=org, collection_install_id=install.install_id, description=None, abstract_name=None
-                ),
+                (Schema, uuid.UUID(schema_id)): SimpleNamespace(organisation_id=org, collection_install_id=install.install_id, description=None, abstract_name=None),
             },
             execute_rows=[newer],
             scalar_value=SimpleNamespace(collection_install_id=install.install_id),
@@ -1024,14 +1012,9 @@ class TestUpgradeCollection:
 
             return _side
 
-        new_prim_map = {
-            slug: _prim(org_id=org, version="1.1", primitive_type=_TYPE_BY_SLUG.get(slug, "schema"))
-            for slug in ("s_chg", "s_mod", "a_chg", "a_mod", "wf")
-        }
+        new_prim_map = {slug: _prim(org_id=org, version="1.1", primitive_type=_TYPE_BY_SLUG.get(slug, "schema")) for slug in ("s_chg", "s_mod", "a_chg", "a_mod", "wf")}
         # workflow content so embedded agent/schema align with old ids
-        new_prim_map["wf"].content_json = {
-            "bundle": {"agents": [{"prompt_template": "wf-a"}], "schemas": [{"definition_json": {"wf": 1}}]}
-        }
+        new_prim_map["wf"].content_json = {"bundle": {"agents": [{"prompt_template": "wf-a"}], "schemas": [{"definition_json": {"wf": 1}}]}}
 
         async def _classify(*_a, **_k):
             return {
@@ -1302,10 +1285,7 @@ class TestUpgradeCollectionBranches:
             "agents": [],
             "pipelines": [],
         }
-        resolve_map = {
-            s: (_prim(org_id=org, version="1.1"), "schema")
-            for s in ("s_ok", "s_false", "s_nofp", "s_mod", "s_notschema")
-        }
+        resolve_map = {s: (_prim(org_id=org, version="1.1"), "schema") for s in ("s_ok", "s_false", "s_nofp", "s_mod", "s_notschema")}
         resolve_map["s_noprim"] = (None, "schema")
 
         async def _fp(_s, _o, _etype, eid):
@@ -1341,9 +1321,7 @@ class TestUpgradeCollectionBranches:
             ],
             "pipelines": [],
         }
-        resolve_map = {
-            s: (_prim(org_id=org, version="1.1"), "agent") for s in ("a_ok", "a_false", "a_nofp", "a_mod", "a_notagent")
-        }
+        resolve_map = {s: (_prim(org_id=org, version="1.1"), "agent") for s in ("a_ok", "a_false", "a_nofp", "a_mod", "a_notagent")}
         resolve_map["a_noprim"] = (None, "agent")
 
         async def _fp(_s, _o, _etype, eid):
@@ -1397,12 +1375,8 @@ class TestUpgradeCollectionBranches:
             content_json={"bundle": {"agents": [{"prompt_template": "a"}], "schemas": [{"definition_json": {"s": 1}}]}},
         )
         wf_mod = _prim(org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {}})
-        wf_nofp = _prim(
-            org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {"agents": [{"a": 1}]}}
-        )
-        wf_false = _prim(
-            org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {"agents": [{"a": 1}]}}
-        )
+        wf_nofp = _prim(org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {"agents": [{"a": 1}]}})
+        wf_false = _prim(org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {"agents": [{"a": 1}]}})
         wf_mis = _prim(org_id=org, version="1.1", primitive_type="workflow", content_json={"bundle": {"schemas": []}})
         resolve_map = {
             "w_ok": (wf_ok, "workflow"),

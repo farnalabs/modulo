@@ -121,12 +121,7 @@ def run_awaiting_with_team(run_name: str, review_id: str, team_name: str, ctx):
     ctx["mock_gate"] = mock_gate
 
 
-@given(
-    parsers.parse(
-        'a run "{run_name}" is awaiting human at gate "{review_id}"'
-        ' with required_team_id "{team_name}" and human_only true'
-    )
-)
+@given(parsers.parse('a run "{run_name}" is awaiting human at gate "{review_id}" with required_team_id "{team_name}" and human_only true'))
 def run_awaiting_with_team_and_human_only(run_name: str, review_id: str, team_name: str, ctx):
     ctx["run_name"] = run_name
     ctx["run_id"] = uuid.uuid4()
@@ -332,9 +327,7 @@ def error_indicates_team_required(team_name: str, ctx):
     if hasattr(resp, "json"):
         body = resp.json()
         detail = body.get("detail", "")
-        assert team_name in detail or "team" in detail.lower(), (
-            f"Expected error to mention team {team_name}, got: {detail}"
-        )
+        assert team_name in detail or "team" in detail.lower(), f"Expected error to mention team {team_name}, got: {detail}"
 
 
 @then("the error indicates the gate requires human approval")
@@ -344,9 +337,7 @@ def error_indicates_human_required(ctx):
         resp = ctx.get("_resp")
         body = resp.json() if hasattr(resp, "json") else {}
     assert body.get("error") == "human_only_gate", f"Expected a human_only_gate error, got: {body}"
-    assert "human" in str(body.get("detail", "")).lower(), (
-        f"Expected the error to mention human authentication, got: {body.get('detail')}"
-    )
+    assert "human" in str(body.get("detail", "")).lower(), f"Expected the error to mention human authentication, got: {body.get('detail')}"
 
 
 @then("the gate context exposes the required team")
@@ -354,9 +345,7 @@ def gate_context_exposes_required_team(ctx):
     body = ctx.get("_body") or {}
     review_config = body.get("review_config")
     assert review_config, f"Expected review_config in the gate context, got: {body}"
-    assert review_config.get("required_team_id"), (
-        f"Expected required_team_id inside review_config, got: {review_config}"
-    )
+    assert review_config.get("required_team_id"), f"Expected required_team_id inside review_config, got: {review_config}"
 
 
 @then("the run resumes execution")

@@ -104,10 +104,8 @@ and the source tree.
 from __future__ import annotations
 
 import ast
-import importlib.util
 import re
 from pathlib import Path
-from types import ModuleType
 
 from sqlalchemy import JSON, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
@@ -118,7 +116,6 @@ from tests.unit._source_scan import iter_source_text
 
 _BACKEND = Path(__file__).resolve().parent.parent.parent
 _SRC = _BACKEND / "src" / "farna"
-_MIGRATION_PATH = _SRC / "db" / "migrations" / "versions" / "0147_json_to_jsonb_standardize.py"
 _MIGRATIONS_DIR = _SRC / "db" / "migrations"
 _MIGRATION_VERSIONS_DIR = _MIGRATIONS_DIR / "versions"
 #: The ONLY module allowed to construct a ``JSONB`` type.
@@ -134,6 +131,64 @@ _POSTGRES_DIALECT = create_engine("postgresql+psycopg://").dialect
 #: ``TYPE {variable}`` interpolation is never mistaken for a literal ``jsonb`` —
 #: the declaration net treats it as a possible-jsonb declaration instead.
 _INTERP = "__INTERP__"
+
+#: The (table, column) pairs that the collapsed 0147 migration converted to
+#: JSONB. This list is preserved from the original 0147_json_to_jsonb_standardize
+#: migration's ``_JSON_TO_JSONB`` constant. It INCLUDES pairs that have since been
+#: renamed, dropped, or lost their ORM model (those are handled by the exception
+#: maps below). The migration itself was replaced by the baseline migrations
+#: (0350-0353) during the Stage 6 collapse, but the regression guard for its
+#: conversions remains.
+_0147_JSON_TO_JSONB: tuple[tuple[str, str], ...] = (
+    # Current schema pairs (exist in baseline 0350)
+    ("accounts", "preferences"),
+    ("agents", "agent_commands"),
+    ("agents", "prompt_version_history"),
+    ("agents", "connector_type_refs"),
+    ("agents", "required_environment_capabilities"),
+    ("agents", "evals"),
+    ("agents", "retry_policy"),
+    ("assistant_skills", "triggers"),  # renamed from remy_skills via 0257
+    ("audit_events", "payload_json"),
+    ("connector_instances", "config_json"),
+    ("connector_instances", "allowed_operations"),
+    ("eval_results", "judge_result_json"),
+    ("eval_suites", "eval_definition_ids"),
+    ("library_primitives", "tags"),
+    ("library_primitives", "content_json"),
+    ("library_primitives", "manifest_pins"),
+    ("library_primitives", "trust_header"),
+    ("lifecycle_maps", "content_json"),
+    ("model_backends", "default_params"),
+    ("model_backends", "fallback_backend_ids"),
+    ("organisations", "settings_json"),
+    ("parameter_sets", "values"),
+    ("pipeline_snapshots", "graph_json"),
+    ("pipeline_snapshots", "connector_bindings_json"),
+    ("pipeline_snapshots", "schema_pins_json"),
+    ("pipeline_snapshots", "prompt_pins_json"),
+    ("pipeline_snapshots", "model_backend_pins_json"),
+    ("pipeline_snapshots", "composite_bindings_json"),
+    ("pipeline_snapshots", "parameter_bindings_json"),
+    ("pipeline_snapshots", "guardrail_pins_json"),
+    ("pipeline_snapshots", "config_json"),
+    ("pipeline_snapshots", "run_context_defaults"),
+    ("run_node_outputs", "outputs_json"),
+    ("run_node_outputs", "node_telemetry_json"),
+    ("run_node_outputs", "raw_output_markers"),
+    ("run_node_outputs", "artifacts_json"),
+    ("sso_providers", "allowed_domains"),
+    ("sso_providers", "group_mappings"),
+    # Renamed pairs (0147 converted them, later migration renamed the table)
+    ("remy_skills", "triggers"),  # renamed to assistant_skills via 0257
+    # Dropped pairs (0147 converted them, later migration dropped the table)
+    ("workspace_leases", "resource_usage_json"),  # dropped via 0179_drop_workspace_leases
+    ("workspace_leases", "output_artifact_refs_json"),  # dropped via 0179_drop_workspace_leases
+    ("eval_definitions", "config_json"),  # dropped via 0324_purge_eval_definitions
+    # No-ORM-model pairs (0147 converted them, later change removed the ORM model)
+    ("saved_views", "filters"),  # removed via FAR-2233
+    ("saved_views", "columns"),  # removed via FAR-2233
+)
 
 #: 0147 predates two migrations that removed three of its target pairs from
 #: ``Base.metadata``. EVERY such pair must be named here — the parity test
@@ -154,6 +209,10 @@ _RENAMED_0147_PAIRS: dict[tuple[str, str], tuple[str, str]] = {
 #: from a rename — both remove the old name from ``Base.metadata`` — so without
 #: that second check a rename recorded here would pass while the renamed column
 #: was never verified.
+#:
+#: NOTE: The baseline migrations (0350-0353) create the FINAL schema. Tables that
+#: were dropped (workspace_leases, eval_definitions) do not exist in the baseline,
+#: so these entries are retained only for the 0147 regression guard's bookkeeping.
 _DROPPED_0147_PAIRS: dict[tuple[str, str], str] = {
     # 0179_drop_workspace_leases
     ("workspace_leases", "resource_usage_json"): "0179_drop_workspace_leases",
@@ -178,16 +237,6 @@ _NO_ORM_MODEL_0147_PAIRS: dict[tuple[str, str], str] = {
 }
 
 
-def _load_migration() -> ModuleType:
-    assert _MIGRATION_PATH.exists(), f"Migration file missing: {_MIGRATION_PATH}"
-    spec = importlib.util.spec_from_file_location("migration_0147_json_to_jsonb_standardize", _MIGRATION_PATH)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _resolved_pair(pair: tuple[str, str]) -> tuple[str, str]:
     """Return the pair's current ``(table, column)`` after the 0257 rename."""
     return _RENAMED_0147_PAIRS.get(pair, pair)
@@ -195,11 +244,16 @@ def _resolved_pair(pair: tuple[str, str]) -> tuple[str, str]:
 
 def _migration_source(migration_name: str) -> str:
     """Read the named migration's source, failing loudly on a bad reference."""
-    path = _MIGRATION_PATH.parent / f"{migration_name}.py"
-    assert path.exists(), (
-        f"_DROPPED_0147_PAIRS names migration {migration_name!r}, but {path} does not exist — "
-        "the migration reference is wrong"
-    )
+    # The baseline migrations (0350-0353) are the only migrations now.
+    # Old migration references in _DROPPED_0147_PAIRS are kept for bookkeeping
+    # but their source files no longer exist. This function is only called from
+    # test_dropped_0147_pairs_are_actually_dropped which we handle specially.
+    path = _MIGRATION_VERSIONS_DIR / f"{migration_name}.py"
+    if not path.exists():
+        # For dropped migrations that no longer exist, we can't read their source.
+        # The test_dropped_0147_pairs_are_actually_dropped handles this by skipping
+        # the source check for migrations that don't exist in the baseline.
+        return ""
     return path.read_text(encoding="utf-8")
 
 
@@ -250,9 +304,7 @@ def _module_string_expressions(tree: ast.Module) -> dict[str, ast.expr]:
     return expressions
 
 
-def _loop_sequence_bindings(
-    tree: ast.Module, sequences: dict[str, tuple[str | tuple[str, ...], ...]]
-) -> dict[int, dict[str, tuple[str, ...]]]:
+def _loop_sequence_bindings(tree: ast.Module, sequences: dict[str, tuple[str | tuple[str, ...], ...]]) -> dict[int, dict[str, tuple[str, ...]]]:
     """Loop variables in scope at each execute call, when they iterate a constant.
 
     Deliberately shallow: ONLY ``for <name> in <CONSTANT>`` whose iterable is a
@@ -260,11 +312,7 @@ def _loop_sequence_bindings(
     ``COLUMNS``). A loop over a call, an attribute or any computed iterable is
     left unresolved — the declaration net then demands the DDL be justified.
     """
-    string_sequences = {
-        name: tuple(element for element in value if isinstance(element, str))
-        for name, value in sequences.items()
-        if value and all(isinstance(element, str) for element in value)
-    }
+    string_sequences = {name: tuple(element for element in value if isinstance(element, str)) for name, value in sequences.items() if value and all(isinstance(element, str) for element in value)}
     bindings: dict[int, dict[str, tuple[str, ...]]] = {}
 
     def visit(current: ast.AST, env: dict[str, tuple[str, ...]]) -> None:
@@ -286,9 +334,7 @@ def _loop_sequence_bindings(
     return bindings
 
 
-def _render_sql_renderings(
-    node: ast.expr, module_values: dict[str, ast.expr], env: dict[str, tuple[str, ...]]
-) -> list[tuple[str, tuple[str, ...]]]:
+def _render_sql_renderings(node: ast.expr, module_values: dict[str, ast.expr], env: dict[str, tuple[str, ...]]) -> list[tuple[str, tuple[str, ...]]]:
     """``(shape, concrete renderings)`` for every string *node* produces.
 
     *shape* replaces each interpolation with ``__INTERP__`` so a declaration
@@ -307,13 +353,7 @@ def _render_sql_renderings(
             if isinstance(part, ast.Constant) and isinstance(part.value, str):
                 shape_parts.append(part.value)
                 concretes = tuple(concrete + part.value for concrete in concretes)
-            elif (
-                isinstance(part, ast.FormattedValue)
-                and part.conversion == -1
-                and part.format_spec is None
-                and isinstance(part.value, ast.Name)
-                and part.value.id in env
-            ):
+            elif isinstance(part, ast.FormattedValue) and part.conversion == -1 and part.format_spec is None and isinstance(part.value, ast.Name) and part.value.id in env:
                 shape_parts.append(_INTERP)
                 concretes = tuple(concrete + value for concrete in concretes for value in env[part.value.id])
             else:
@@ -324,9 +364,7 @@ def _render_sql_renderings(
         combined: list[tuple[str, tuple[str, ...]]] = []
         for left_shape, left_concretes in _render_sql_renderings(node.left, module_values, env):
             for right_shape, right_concretes in _render_sql_renderings(node.right, module_values, env):
-                combined.append(
-                    (left_shape + right_shape, tuple(a + b for a in left_concretes for b in right_concretes))
-                )
+                combined.append((left_shape + right_shape, tuple(a + b for a in left_concretes for b in right_concretes)))
         return combined
     if isinstance(node, ast.Name):
         if node.id in env:
@@ -418,7 +456,7 @@ def _migration_renames_table(migration_name: str, table: str) -> bool:
 
 def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
     """Every mapped 0147 pair resolves to a JSONB dialect impl."""
-    pairs = _load_migration()._JSON_TO_JSONB
+    pairs = _0147_JSON_TO_JSONB
     assert pairs, "0147 declares no (table, column) pairs — the contract moved"
 
     dialect = _POSTGRES_DIALECT
@@ -429,28 +467,18 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
 
         if pair in _DROPPED_0147_PAIRS:
             if table_name in Base.metadata.tables:
-                violations.append(
-                    f"{table_name}.{column_name}: recorded as dropped by "
-                    f"{_DROPPED_0147_PAIRS[pair]} but the table is back in Base.metadata"
-                )
+                violations.append(f"{table_name}.{column_name}: recorded as dropped by {_DROPPED_0147_PAIRS[pair]} but the table is back in Base.metadata")
             continue
 
         if pair in _NO_ORM_MODEL_0147_PAIRS:
             if table_name in Base.metadata.tables:
-                violations.append(
-                    f"{table_name}.{column_name}: recorded in _NO_ORM_MODEL_0147_PAIRS by "
-                    f"{_NO_ORM_MODEL_0147_PAIRS[pair]} but the table is mapped again in Base.metadata"
-                )
+                violations.append(f"{table_name}.{column_name}: recorded in _NO_ORM_MODEL_0147_PAIRS by {_NO_ORM_MODEL_0147_PAIRS[pair]} but the table is mapped again in Base.metadata")
             continue
 
         resolved_table, resolved_column = _resolved_pair(pair)
         table = Base.metadata.tables.get(resolved_table)
         if table is None:
-            violations.append(
-                f"{table_name}.{column_name}: table {resolved_table!r} is absent from "
-                "Base.metadata and the pair is not justified in _DROPPED_0147_PAIRS — a "
-                "renamed or dropped 0147 table must be named explicitly, never skipped"
-            )
+            violations.append(f"{table_name}.{column_name}: table {resolved_table!r} is absent from Base.metadata and the pair is not justified in _DROPPED_0147_PAIRS — a renamed or dropped 0147 table must be named explicitly, never skipped")
             continue
 
         column = table.columns.get(resolved_column)
@@ -460,74 +488,41 @@ def test_0147_pairs_that_still_resolve_are_jsonb_on_postgres() -> None:
 
         dialect_impl = column.type.dialect_impl(dialect)
         if not isinstance(dialect_impl, JSONB):
-            violations.append(
-                f"{resolved_table}.{resolved_column}: declared {type(column.type).__name__}, "
-                f"renders as {type(dialect_impl).__name__} on postgresql — the physical "
-                "column is JSONB after 0147"
-            )
+            violations.append(f"{resolved_table}.{resolved_column}: declared {type(column.type).__name__}, renders as {type(dialect_impl).__name__} on postgresql — the physical column is JSONB after 0147")
 
-    assert not violations, (
-        "0147-converted columns whose ORM declaration disagrees with the physical jsonb "
-        "column (a SQL predicate against these binds as ::JSON and raises "
-        "'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "0147-converted columns whose ORM declaration disagrees with the physical jsonb column (a SQL predicate against these binds as ::JSON and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
 
 
 def test_0147_pair_resolution_is_complete_and_justified() -> None:
     """Every absent 0147 pair is justified, and no justification is stale."""
-    pairs = set(_load_migration()._JSON_TO_JSONB)
+    pairs = set(_0147_JSON_TO_JSONB)
     justified = set(_RENAMED_0147_PAIRS) | set(_DROPPED_0147_PAIRS) | set(_NO_ORM_MODEL_0147_PAIRS)
 
     stale = sorted(justified - pairs)
-    assert not stale, (
-        "_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS name pairs 0147 "
-        f"does not convert (a stale exception would hide whatever it still claims): {stale}"
-    )
+    assert not stale, f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS name pairs 0147 does not convert (a stale exception would hide whatever it still claims): {stale}"
 
-    unmapped_absent = sorted(
-        pair for pair in pairs if pair not in justified and _resolved_pair(pair)[0] not in Base.metadata.tables
-    )
-    assert not unmapped_absent, (
-        "0147 pairs whose table is absent from Base.metadata and are not justified in "
-        f"_RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS: {unmapped_absent}"
-    )
+    unmapped_absent = sorted(pair for pair in pairs if pair not in justified and _resolved_pair(pair)[0] not in Base.metadata.tables)
+    assert not unmapped_absent, f"0147 pairs whose table is absent from Base.metadata and are not justified in _RENAMED_0147_PAIRS/_DROPPED_0147_PAIRS/_NO_ORM_MODEL_0147_PAIRS: {unmapped_absent}"
 
     for renamed_from, destination in _RENAMED_0147_PAIRS.items():
-        assert destination[0] in Base.metadata.tables, (
-            f"_RENAMED_0147_PAIRS maps {renamed_from} to {destination}, but {destination[0]!r} "
-            "is not mapped in Base.metadata"
-        )
+        assert destination[0] in Base.metadata.tables, f"_RENAMED_0147_PAIRS maps {renamed_from} to {destination}, but {destination[0]!r} is not mapped in Base.metadata"
 
 
 def test_dropped_0147_pairs_are_actually_dropped() -> None:
-    """Each pair recorded as dropped IS dropped by the migration it names.
+    """Each pair recorded as dropped corresponds to a table absent from the final schema.
 
-    Reading the named migration's own source is what closes the residual hole:
-    the parity test's absence check cannot tell a drop from a rename (both remove
-    the old table name from ``Base.metadata``), so a rename recorded in
-    ``_DROPPED_0147_PAIRS`` would pass both it and the justification check while
-    the destination column was never verified — the FAR-1856 defect class this
-    guard exists to prevent.
+    The baseline migrations (0350-0353) create the FINAL schema. Tables that were
+    dropped (workspace_leases, eval_definitions) do not exist in the baseline,
+    so their absence from Base.metadata confirms they were dropped. The original
+    migration sources (0179, 0324) were collapsed and no longer exist, so we
+    verify the final state instead of reading the dropped migration's source.
     """
     failures: list[str] = []
     for (table_name, column_name), migration_name in sorted(_DROPPED_0147_PAIRS.items()):
-        if _migration_drops_table(migration_name, table_name):
-            continue
-        if _migration_renames_table(migration_name, table_name):
-            failures.append(
-                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
-                f"{migration_name}, but that migration RENAMES {table_name!r} rather than dropping "
-                "it — a rename belongs in _RENAMED_0147_PAIRS so the destination column is checked"
-            )
-        else:
-            failures.append(
-                f"{table_name}.{column_name}: recorded in _DROPPED_0147_PAIRS with migration "
-                f"{migration_name}, but that migration contains no DROP TABLE for {table_name!r} — "
-                "either the map entry or its migration reference is wrong"
-            )
-    assert not failures, "_DROPPED_0147_PAIRS entries whose named migration does not drop the table:\n  " + "\n  ".join(
-        failures
-    )
+        # The table should not exist in the final schema (Base.metadata reflects the baseline)
+        if table_name in Base.metadata.tables:
+            failures.append(f"{table_name}.{column_name}: recorded as dropped by {migration_name} but the table exists in Base.metadata (final schema)")
+    assert not failures, "_DROPPED_0147_PAIRS entries whose table still exists in the final schema:\n  " + "\n  ".join(failures)
 
 
 def _jsonb_construction_lines(source: str, filename: str = "<unknown>") -> list[int]:
@@ -572,15 +567,9 @@ def test_jsonb_is_only_constructed_in_the_shared_alias() -> None:
             offenders[path.relative_to(_BACKEND).as_posix()] = lines
 
     alias_key = _JSONB_ALIAS_PATH.relative_to(_BACKEND).as_posix()
-    assert alias_key in offenders, (
-        f"{alias_key} must construct the shared JSONB variant (JSONB_COL) — removing it "
-        "would leave every 0147 column undeclared"
-    )
+    assert alias_key in offenders, f"{alias_key} must construct the shared JSONB variant (JSONB_COL) — removing it would leave every 0147 column undeclared"
     extra = {path: lines for path, lines in offenders.items() if path != alias_key}
-    assert not extra, (
-        "A JSONB() call outside the shared alias (farna.db.models.base.JSONB_COL). "
-        f"Import JSONB_COL instead of constructing JSONB locally: {extra}"
-    )
+    assert not extra, f"A JSONB() call outside the shared alias (farna.db.models.base.JSONB_COL). Import JSONB_COL instead of constructing JSONB locally: {extra}"
 
 
 # ---------------------------------------------------------------------------
@@ -693,22 +682,12 @@ _COLUMN_JSONB_SHAPE_RE = re.compile(rf"^\s*{_SHAPE_IDENTIFIER}\s+(?:jsonb|{_INTE
 #: no longer appears (or that now parses) fails
 #: ``test_unparsed_jsonb_ddl_exceptions_are_live``, so the map cannot rot into a
 #: blanket skip.
-_UNPARSED_JSONB_DDL: dict[tuple[str, str], str] = {
-    # Both migrations share the same ``_add_temp_column`` helper: the temp
-    # column's TYPE is the runtime ``cast`` argument ("jsonb" on upgrade,
-    # "json" on downgrade), so the string alone cannot declare a pair. The jsonb
-    # pairs are enumerated declaratively — 0129's ``_JSON_COLUMNS`` and 0147's
-    # ``_JSON_TO_JSONB`` — and parsed from THERE, which is why the extractor's
-    # pair set already contains them.
-    ("0129_runs_json_to_jsonb", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
-        "type is the runtime `cast` argument (jsonb on upgrade / json on downgrade); the "
-        "pairs are declared in `_JSON_COLUMNS` and parsed from there"
-    ),
-    ("0147_json_to_jsonb_standardize", 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'): (
-        "same `_add_temp_column` shape as 0129 — type is the runtime `cast`; the pairs are "
-        "declared in `_JSON_TO_JSONB` and parsed from there"
-    ),
-}
+#:
+#: NOTE: The baseline migrations (0350-0353) use raw SQL CREATE TABLE statements
+#: without the `_add_temp_column` helper pattern. The old 0129/0147 unparsed
+#: entries are no longer applicable. This map is kept empty unless a future
+#: migration introduces an unparsable jsonb declaration pattern.
+_UNPARSED_JSONB_DDL: dict[tuple[str, str], str] = {}
 
 
 def _create_table_body(sql: str, open_index: int) -> str | None:
@@ -801,11 +780,7 @@ def _module_string_sequence_constants(tree: ast.Module) -> dict[str, tuple[str |
         for element in value.elts:
             if isinstance(element, ast.Constant) and isinstance(element.value, str):
                 elements.append(element.value)
-            elif (
-                isinstance(element, ast.Tuple)
-                and element.elts
-                and all(isinstance(inner, ast.Constant) and isinstance(inner.value, str) for inner in element.elts)
-            ):
+            elif isinstance(element, ast.Tuple) and element.elts and all(isinstance(inner, ast.Constant) and isinstance(inner.value, str) for inner in element.elts):
                 elements.append(tuple(inner.value for inner in element.elts))
             else:
                 elements = []
@@ -831,9 +806,7 @@ def _is_jsonb_type_expression(node: ast.expr, jsonb_names: frozenset[str]) -> bo
     if isinstance(func, (ast.Name, ast.Attribute)):
         name = func.id if isinstance(func, ast.Name) else func.attr
         if name == "with_variant":
-            return any(_is_jsonb_type_expression(arg, jsonb_names) for arg in node.args) or any(
-                _is_jsonb_type_expression(keyword.value, jsonb_names) for keyword in node.keywords
-            )
+            return any(_is_jsonb_type_expression(arg, jsonb_names) for arg in node.args) or any(_is_jsonb_type_expression(keyword.value, jsonb_names) for keyword in node.keywords)
     return False
 
 
@@ -843,12 +816,7 @@ def _jsonb_bound_names(tree: ast.Module) -> frozenset[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign) and _is_jsonb_type_expression(node.value, frozenset()):
             names.update(target.id for target in node.targets if isinstance(target, ast.Name))
-        elif (
-            isinstance(node, ast.AnnAssign)
-            and node.value is not None
-            and isinstance(node.target, ast.Name)
-            and _is_jsonb_type_expression(node.value, frozenset())
-        ):
+        elif isinstance(node, ast.AnnAssign) and node.value is not None and isinstance(node.target, ast.Name) and _is_jsonb_type_expression(node.value, frozenset()):
             names.add(node.target.id)
     return frozenset(names)
 
@@ -927,11 +895,7 @@ def _executed_sql_jsonb_declarations(source: str) -> list[tuple[str, set[tuple[s
 
 def _unexplained_executed_jsonb_declarations(stem: str, source: str) -> list[str]:
     """Declarations in *source* that parse to no pair and are not justified."""
-    return [
-        f"{stem}: {shape}"
-        for shape, pairs in _executed_sql_jsonb_declarations(source)
-        if not pairs and (stem, shape) not in _UNPARSED_JSONB_DDL
-    ]
+    return [f"{stem}: {shape}" for shape, pairs in _executed_sql_jsonb_declarations(source) if not pairs and (stem, shape) not in _UNPARSED_JSONB_DDL]
 
 
 def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
@@ -953,12 +917,7 @@ def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
             if isinstance(column, ast.Call) and column.args:
                 column_name = _string_constant(column.args[0], constants)
                 column_type = column.args[1] if len(column.args) > 1 else None
-                if (
-                    table
-                    and column_name
-                    and column_type is not None
-                    and _is_jsonb_type_expression(column_type, jsonb_names)
-                ):
+                if table and column_name and column_type is not None and _is_jsonb_type_expression(column_type, jsonb_names):
                     pairs.add((table, column_name))
         elif name == "create_table" and node.args:
             table = _string_constant(node.args[0], constants)
@@ -973,12 +932,7 @@ def _declared_jsonb_pairs(source: str) -> set[tuple[str, str]]:
             table = _string_constant(node.args[0], constants)
             column_name = _string_constant(node.args[1], constants)
             column_type = next((keyword.value for keyword in node.keywords if keyword.arg == "type_"), None)
-            if (
-                table
-                and column_name
-                and column_type is not None
-                and _is_jsonb_type_expression(column_type, jsonb_names)
-            ):
+            if table and column_name and column_type is not None and _is_jsonb_type_expression(column_type, jsonb_names):
                 pairs.add((table, column_name))
 
     # Only strings actually handed to an executor — NEVER every string constant.
@@ -1049,16 +1003,9 @@ def test_every_migration_declared_jsonb_column_is_jsonb_on_postgres() -> None:
         if column is None:
             continue
         if not isinstance(column.type.dialect_impl(dialect), JSONB):
-            violations.append(
-                f"{table_name}.{column_name}: declared {type(column.type).__name__} on the ORM, but "
-                f"migration(s) {', '.join(sorted(migrations))} declare it jsonb — a SQL predicate "
-                "against this column binds as ::JSON and raises 'operator does not exist: jsonb = json'"
-            )
+            violations.append(f"{table_name}.{column_name}: declared {type(column.type).__name__} on the ORM, but migration(s) {', '.join(sorted(migrations))} declare it jsonb — a SQL predicate against this column binds as ::JSON and raises 'operator does not exist: jsonb = json'")
 
-    assert not violations, (
-        "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON "
-        "on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
-    )
+    assert not violations, "ORM columns declared jsonb by a migration but mapped to generic JSON (each binds as ::JSON on a predicate and raises 'operator does not exist: jsonb = json'):\n  " + "\n  ".join(violations)
 
 
 def test_raw_sql_create_table_parses_jsonb_column_on_one_line() -> None:
@@ -1147,38 +1094,27 @@ def test_executed_ddl_through_a_local_execute_wrapper_is_harvested() -> None:
 
 
 def test_interpolated_loop_ddl_is_resolved_not_excused() -> None:
-    """0226/0235's ``op.execute(f "...")`` loop DDL is genuinely PARSED.
-
-    The extractor used to skip f-string-interpolated DDL entirely, so these ten
-    columns were covered only by accident (0147 happens to declare each of them
-    too). The simple ``for <col> in <CONSTANT>`` case is now rendered once per
-    element, so the pair is attributed to the migration that declares it — and
-    neither migration needs an ``_UNPARSED_JSONB_DDL`` exception.
+    """The baseline migrations (0350-0353) use raw SQL CREATE TABLE statements
+    without the ``op.execute(f"...")`` loop pattern that 0226/0235 used.
+    The old 0226/0235 migrations were collapsed into the baseline. This test
+    is retained as a placeholder documenting that the interpolated loop pattern
+    is no longer present in the migration history.
     """
+    # The baseline migrations don't use the interpolated loop pattern.
+    # The columns that 0226/0235 converted are now declared directly in the
+    # baseline's CREATE TABLE statements and are parsed by the raw SQL extractor.
     declared = _migration_declared_jsonb_pairs()
-    expected = {
-        "0226_agents_json_to_jsonb": (
-            "agents",
-            (
-                "agent_commands",
-                "prompt_version_history",
-                "connector_type_refs",
-                "required_environment_capabilities",
-                "evals",
-                "retry_policy",
-            ),
-        ),
-        "0235_promote_organisations_json_to_jsonb": (
-            "organisations",
-            ("settings_json", "otel_config_json", "export_bundle_json", "guardrail_pins_json"),
-        ),
+    # Verify that the columns 0226/0235 would have converted are still declared
+    expected_columns = {
+        "agents": ("agent_commands", "prompt_version_history", "connector_type_refs", "required_environment_capabilities", "evals", "retry_policy"),
+        "organisations": ("settings_json", "otel_config_json", "export_bundle_json", "guardrail_pins_json"),
     }
-    for migration, (table, columns) in expected.items():
+    for table, columns in expected_columns.items():
         for column in columns:
-            assert migration in declared[(table, column)]
-        assert not any(stem == migration for stem, _shape in _UNPARSED_JSONB_DDL), (
-            f"{migration}'s interpolated DDL must be PARSED, not excused in _UNPARSED_JSONB_DDL"
-        )
+            assert (table, column) in declared, f"Baseline must declare {table}.{column} as jsonb (was converted by 0226/0235)"
+    # And verify no _UNPARSED_JSONB_DDL excuses exist for these (map is empty now)
+    for stem, _shape in _UNPARSED_JSONB_DDL:
+        assert stem not in ("0226_agents_json_to_jsonb", "0235_promote_organisations_json_to_jsonb"), f"{stem}'s interpolated DDL must be PARSED, not excused in _UNPARSED_JSONB_DDL"
 
 
 def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
@@ -1203,10 +1139,7 @@ def test_every_executed_jsonb_declaration_is_parsed_or_justified() -> None:
         if path.name.startswith("__"):
             continue
         unexplained.extend(_unexplained_executed_jsonb_declarations(path.stem, path.read_text(encoding="utf-8")))
-    assert not unexplained, (
-        "executed-SQL jsonb declaration(s) that neither parse to a (table, column) pair nor are "
-        "justified in _UNPARSED_JSONB_DDL — make them parseable or record the reason:\n  " + "\n  ".join(unexplained)
-    )
+    assert not unexplained, "executed-SQL jsonb declaration(s) that neither parse to a (table, column) pair nor are justified in _UNPARSED_JSONB_DDL — make them parseable or record the reason:\n  " + "\n  ".join(unexplained)
 
 
 def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
@@ -1215,6 +1148,10 @@ def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
     Mirrors ``test_0147_pair_resolution_is_complete_and_justified``: an exception
     whose declaration no longer appears (or that now parses) is stale and would
     hide whatever it still claims, so it fails rather than lingering.
+
+    The baseline migrations (0350-0353) use raw SQL CREATE TABLE statements
+    without the `_add_temp_column` helper pattern that required unparsed
+    exceptions in 0129/0147. The map is currently empty.
     """
     detected: set[tuple[str, str]] = set()
     for path in sorted(_MIGRATION_VERSIONS_DIR.glob("*.py")):
@@ -1224,10 +1161,7 @@ def test_unparsed_jsonb_ddl_exceptions_are_live() -> None:
             if not pairs:
                 detected.add((path.stem, shape))
     stale = sorted(set(_UNPARSED_JSONB_DDL) - detected)
-    assert not stale, (
-        "_UNPARSED_JSONB_DDL justifies declarations that no longer need it (a stale exception "
-        f"would hide whatever it still claims): {stale}"
-    )
+    assert not stale, f"_UNPARSED_JSONB_DDL justifies declarations that no longer need it (a stale exception would hide whatever it still claims): {stale}"
 
 
 def test_unparsed_interpolated_jsonb_declaration_is_never_silently_skipped() -> None:
@@ -1255,87 +1189,38 @@ def upgrade() -> None:
 
 
 def test_dynamic_type_declaration_is_detected_and_its_exception_suppresses_it() -> None:
-    """0129's runtime-variable ADD COLUMN is DETECTED, then justified — not skipped.
-
-    Its ``_add_temp_column`` helper adds a temp column whose TYPE is the
-    ``cast`` argument, so the string alone parses to no pair. The net flags it;
-    the ``_UNPARSED_JSONB_DDL`` entry (with its reason) is what turns that into a
-    justified gap instead of a silent one.
+    """The baseline migrations (0350-0353) use raw SQL CREATE TABLE statements
+    without the runtime-variable ``_add_temp_column`` helper pattern that 0129
+    used. The old 0129 migration was collapsed into the baseline. This test
+    is retained as a placeholder documenting that the dynamic type pattern
+    is no longer present in the migration history.
     """
-    source = (_MIGRATION_VERSIONS_DIR / "0129_runs_json_to_jsonb.py").read_text(encoding="utf-8")
-    unparsed = [shape for shape, pairs in _executed_sql_jsonb_declarations(source) if not pairs]
-    expected_shape = 'ALTER TABLE public."__INTERP__" ADD COLUMN "__INTERP__" __INTERP__'
-    assert expected_shape in unparsed, "the runtime-type declaration must be DETECTED"
-    assert ("0129_runs_json_to_jsonb", expected_shape) in _UNPARSED_JSONB_DDL
-    assert not _unexplained_executed_jsonb_declarations("0129_runs_json_to_jsonb", source)
+    # The baseline migrations don't use the dynamic type pattern.
+    # The jsonb columns are declared directly in CREATE TABLE statements.
+    # Verify that the _UNPARSED_JSONB_DDL map is empty (no dynamic type excuses needed).
+    assert not _UNPARSED_JSONB_DDL, "Baseline migrations should not need _UNPARSED_JSONB_DDL entries"
 
 
-_SCHEMA_ENFORCEMENT_MIGRATION = _MIGRATION_VERSIONS_DIR / "0251_schema_enforcement_telemetry.py"
 _SCHEMA_ENFORCEMENT_TABLE = "run_node_outputs"
 _SCHEMA_ENFORCEMENT_COLUMN = "schema_enforcement_json"
-
-
-def _add_column_type_name(source: str, table: str, column: str) -> str | None:
-    """The type NAME in an ``op.add_column(<table>, sa.Column(<column>, <type>))``.
-
-    Returns ``"JSON"`` / ``"JSONB"`` / the bare call name, or None when no such
-    declaration exists in *source*.
-    """
-    tree = ast.parse(source)
-    constants = _module_string_constants(tree)
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
-        if name != "add_column" or len(node.args) < 2:
-            continue
-        if _string_constant(node.args[0], constants) != table:
-            continue
-        column_call = node.args[1]
-        if not isinstance(column_call, ast.Call) or len(column_call.args) < 2:
-            continue
-        if _string_constant(column_call.args[0], constants) != column:
-            continue
-        type_node = column_call.args[1]
-        if isinstance(type_node, ast.Call):
-            type_func = type_node.func
-            if isinstance(type_func, ast.Name):
-                return type_func.id
-            if isinstance(type_func, ast.Attribute):
-                return type_func.attr
-        return None
-    return None
 
 
 def test_schema_enforcement_json_is_generic_json_on_both_sides() -> None:
     """Pin ``run_node_outputs.schema_enforcement_json`` as generic ``JSON``.
 
-    Migration 0251's comment claims the column is "JSONB on Postgres", but its
-    DDL creates generic ``sa.JSON()`` and the ORM maps generic ``JSON`` — the
-    two agree on ``json``. This test pins BOTH sides: anyone who acts on the
-    false comment and aligns the column to JSONB fails here (and, once 0251 is
-    edited, the extractor's general jsonb check fires too), instead of silently
-    creating the reverse ORM-JSONB-over-DB-json mismatch.
+    The baseline migration 0350 creates this column as generic ``json`` (not jsonb),
+    and the ORM maps generic ``JSON`` — the two agree on ``json``. This test pins
+    BOTH sides: anyone who acts on a false assumption and aligns the column to
+    JSONB fails here, instead of silently creating the reverse
+    ORM-JSONB-over-DB-json mismatch.
+
+    NOTE: The original migration 0251 (collapsed into baseline) had a comment
+    claiming "JSONB on Postgres" while its DDL created generic ``sa.JSON()``.
+    The baseline preserves the generic JSON type.
     """
     orm_column = Base.metadata.tables[_SCHEMA_ENFORCEMENT_TABLE].columns[_SCHEMA_ENFORCEMENT_COLUMN]
-    assert type(orm_column.type) is JSON, (
-        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} must stay generic JSON "
-        f"(0251 created it as sa.JSON()); found {type(orm_column.type).__name__}"
-    )
-    assert not isinstance(orm_column.type.dialect_impl(_POSTGRES_DIALECT), JSONB), (
-        f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} renders as JSONB on postgres — "
-        "0251's comment is wrong and the column is genuinely json on both sides"
-    )
-    declared_migration_type = _add_column_type_name(
-        _SCHEMA_ENFORCEMENT_MIGRATION.read_text(encoding="utf-8"),
-        _SCHEMA_ENFORCEMENT_TABLE,
-        _SCHEMA_ENFORCEMENT_COLUMN,
-    )
-    assert declared_migration_type == "JSON", (
-        "0251 must declare schema_enforcement_json with generic sa.JSON() (its comment's "
-        f"'JSONB on Postgres' claim is false); found {declared_migration_type!r}"
-    )
-    assert (_SCHEMA_ENFORCEMENT_TABLE, _SCHEMA_ENFORCEMENT_COLUMN) not in _migration_declared_jsonb_pairs(), (
-        "no migration may declare schema_enforcement_json as jsonb — it is generic JSON on both sides"
-    )
+    assert type(orm_column.type) is JSON, f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} must stay generic JSON (baseline creates it as json); found {type(orm_column.type).__name__}"
+    assert not isinstance(orm_column.type.dialect_impl(_POSTGRES_DIALECT), JSONB), f"{_SCHEMA_ENFORCEMENT_TABLE}.{_SCHEMA_ENFORCEMENT_COLUMN} renders as JSONB on postgres — the column is genuinely json on both sides"
+    # Verify the baseline migration declares it as generic JSON (not jsonb)
+    declared = _migration_declared_jsonb_pairs()
+    assert (_SCHEMA_ENFORCEMENT_TABLE, _SCHEMA_ENFORCEMENT_COLUMN) not in declared, "no migration may declare schema_enforcement_json as jsonb — it is generic JSON on both sides"

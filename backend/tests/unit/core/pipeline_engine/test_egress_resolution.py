@@ -397,11 +397,7 @@ def test_regression_profile_none_node_unset_on_e2b_resolves_to_deny_all() -> Non
 # --- Cert-vs-actual: derive_sandbox_capabilities egress == resolve_egress ---
 
 
-_CERT_CASES: list[tuple[str | None, str | None, str]] = [
-    (_np, _pp, f"cert: node={_np or 'unset'}, profile={_pp or 'unset'}")
-    for _np in (None, "default", "deny_all", "selected")
-    for _pp in (None, "outbound", "none")
-]
+_CERT_CASES: list[tuple[str | None, str | None, str]] = [(_np, _pp, f"cert: node={_np or 'unset'}, profile={_pp or 'unset'}") for _np in (None, "default", "deny_all", "selected") for _pp in (None, "outbound", "none")]
 
 
 @pytest.mark.parametrize(

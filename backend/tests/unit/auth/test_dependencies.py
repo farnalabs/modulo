@@ -118,9 +118,7 @@ def _patch_identity_verify(*, rows: list[object], live_role: str | None) -> tupl
 
 @pytest.mark.asyncio
 async def test_verify_identity_returns_live_role_when_membership_exists() -> None:
-    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(
-        rows=[1, 1], live_role="admin"
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(rows=[1, 1], live_role="admin")
 
     with engine_patch, factory_patch, settings_patch, role_patch:
         role = await _verify_identity(_principal())
@@ -131,9 +129,7 @@ async def test_verify_identity_returns_live_role_when_membership_exists() -> Non
 
 @pytest.mark.asyncio
 async def test_verify_identity_raises_account_not_found() -> None:
-    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(
-        rows=[None, 1], live_role="admin"
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(rows=[None, 1], live_role="admin")
 
     with (
         engine_patch,
@@ -150,9 +146,7 @@ async def test_verify_identity_raises_account_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_verify_identity_raises_org_not_found() -> None:
-    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(
-        rows=[1, None], live_role="admin"
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(rows=[1, None], live_role="admin")
 
     with (
         engine_patch,
@@ -169,9 +163,7 @@ async def test_verify_identity_raises_org_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_verify_identity_raises_membership_not_found_when_no_live_role() -> None:
-    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(
-        rows=[1, 1], live_role=None
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, role_mock, _session = _patch_identity_verify(rows=[1, 1], live_role=None)
 
     with (
         engine_patch,
@@ -189,9 +181,7 @@ async def test_verify_identity_raises_membership_not_found_when_no_live_role() -
 
 @pytest.mark.asyncio
 async def test_verify_identity_sqlalchemy_error_maps_to_503() -> None:
-    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(
-        rows=[1], live_role="admin"
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(rows=[1], live_role="admin")
     session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
 
     with (
@@ -217,12 +207,8 @@ async def test_verify_identity_invalid_request_error_maps_to_500_not_503() -> No
     non-retryable local bug. Fail-before evidence: this test fails (503)
     without ``raise_session_contract_error`` as the arm's first statement.
     """
-    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(
-        rows=[1], live_role="admin"
-    )
-    session.execute = AsyncMock(
-        side_effect=InvalidRequestError("Autobegin is disabled on this Session; please call session.begin()")
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(rows=[1], live_role="admin")
+    session.execute = AsyncMock(side_effect=InvalidRequestError("Autobegin is disabled on this Session; please call session.begin()"))
 
     with (
         engine_patch,
@@ -240,9 +226,7 @@ async def test_verify_identity_invalid_request_error_maps_to_500_not_503() -> No
 @pytest.mark.asyncio
 async def test_verify_identity_operational_error_still_maps_to_503() -> None:
     """A GENUINE transient DB fault must keep the arm's 503 behaviour (FAR-1481)."""
-    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(
-        rows=[1], live_role="admin"
-    )
+    engine_patch, factory_patch, settings_patch, role_patch, _role_mock, session = _patch_identity_verify(rows=[1], live_role="admin")
     session.execute = AsyncMock(side_effect=OperationalError("select 1", {}, Exception("connection lost")))
 
     with (
@@ -327,9 +311,7 @@ async def test_api_key_resolution_invalid_request_error_maps_to_500_not_503() ->
     Fail-before evidence: without the leading ``raise_session_contract_error``
     guard this answers 503 "Database temporarily unavailable." and fails.
     """
-    factory = _api_key_failing_factory(
-        InvalidRequestError("Autobegin is disabled on this Session; please call session.begin()")
-    )
+    factory = _api_key_failing_factory(InvalidRequestError("Autobegin is disabled on this Session; please call session.begin()"))
 
     with (
         patch("farna.api.dependencies.get_or_create_engine", return_value=MagicMock()),

@@ -78,10 +78,7 @@ def _render(value: str) -> str:
     def substitute(match: re.Match[str]) -> str:
         expression = match.group(1)
         if expression not in _EXPRESSION_VALUES:
-            raise AssertionError(
-                f"Unmapped GitHub expression {expression!r} in ci.yml — add it to "
-                "_EXPRESSION_VALUES so the dispatch step stays executable under test"
-            )
+            raise AssertionError(f"Unmapped GitHub expression {expression!r} in ci.yml — add it to _EXPRESSION_VALUES so the dispatch step stays executable under test")
         return _EXPRESSION_VALUES[expression]
 
     return _EXPRESSION.sub(substitute, value)
@@ -237,9 +234,7 @@ def _run_dispatch(
         exit_code=completed.returncode,
         output=completed.stdout + completed.stderr,
         sleeps=sleeps_path.read_text(encoding="utf-8").split() if sleeps_path.exists() else [],
-        curl_calls=int((stub_dir / "curl_count").read_text(encoding="utf-8") or 0)
-        if (stub_dir / "curl_count").exists()
-        else 0,
+        curl_calls=int((stub_dir / "curl_count").read_text(encoding="utf-8") or 0) if (stub_dir / "curl_count").exists() else 0,
         gh_calls=gh_args.read_text(encoding="utf-8").split("\n=====\n") if gh_args.exists() else [],
         pr_comment_body=_pr_comment_body(gh_args) if gh_args.exists() else "",
         step_summary=summary_path.read_text(encoding="utf-8") if summary_path.exists() else "",
@@ -539,12 +534,7 @@ def test_capacity_exhaustion_applies_the_pending_label(tmp_path: Path) -> None:
 
     assert run.exit_code == 1, run.output
     label_calls = _label_api_calls(run)
-    assert any(
-        call.startswith("api -X POST")
-        and "repos/farnalabs/modulo/issues/42/labels" in call
-        and f"labels[]={PENDING_LABEL}" in call
-        for call in label_calls
-    ), label_calls
+    assert any(call.startswith("api -X POST") and "repos/farnalabs/modulo/issues/42/labels" in call and f"labels[]={PENDING_LABEL}" in call for call in label_calls), label_calls
     assert PENDING_LABEL in run.pr_comment_body, "the failure comment must mention the durable marker"
 
 
@@ -571,10 +561,7 @@ def test_successful_dispatch_clears_the_pending_label(tmp_path: Path) -> None:
 
     assert run.exit_code == 0, run.output
     label_calls = _label_api_calls(run)
-    assert any(
-        call.startswith("api -X DELETE") and f"repos/farnalabs/modulo/issues/42/labels/{PENDING_LABEL}" in call
-        for call in label_calls
-    ), label_calls
+    assert any(call.startswith("api -X DELETE") and f"repos/farnalabs/modulo/issues/42/labels/{PENDING_LABEL}" in call for call in label_calls), label_calls
     assert "::warning::" not in run.output
 
 

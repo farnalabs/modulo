@@ -48,10 +48,7 @@ def buildkite_connector_invalid(ctx: dict) -> None:
 @when("the connector checks health")
 def buildkite_health_check(ctx: dict) -> None:
     connector = ctx["connector"]
-    if ctx["valid"]:
-        response = httpx.Response(200, json={"id": "test-user"})
-    else:
-        response = httpx.Response(401, text="Unauthorized")
+    response = httpx.Response(200, json={"id": "test-user"}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/user").mock(return_value=response)
         ctx["health_result"] = asyncio.run(connector.health_check())
@@ -72,9 +69,7 @@ def buildkite_trigger_run(branch: str, ctx: dict) -> None:
         "creator": {"name": "dev"},
     }
     with respx.mock:
-        respx.post(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds").mock(
-            return_value=httpx.Response(201, json=body)
-        )
+        respx.post(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds").mock(return_value=httpx.Response(201, json=body))
         run = asyncio.run(ctx["connector"].trigger_run(pipeline_id="my-org/my-pipeline", branch=branch))
     assert run.status == CIRunStatus.QUEUED, run
     assert run.branch == branch, run
@@ -97,9 +92,7 @@ def buildkite_get_run_status(build: str, ctx: dict) -> None:
         "creator": {"name": "dev"},
     }
     with respx.mock:
-        respx.get(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds/{build}").mock(
-            return_value=httpx.Response(200, json=body)
-        )
+        respx.get(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds/{build}").mock(return_value=httpx.Response(200, json=body))
         run = asyncio.run(ctx["connector"].get_run_status(f"my-org/my-pipeline/{build}"))
     assert run.status == CIRunStatus.IN_PROGRESS, run
     assert run.id == f"my-org/my-pipeline/{build}", run
@@ -141,9 +134,7 @@ def buildkite_get_run_logs(build: str, ctx: dict) -> None:
         {"id": "job-uuid-2", "name": "test"},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds/{build}/jobs").mock(
-            return_value=httpx.Response(200, json=jobs)
-        )
+        respx.get(f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds/{build}/jobs").mock(return_value=httpx.Response(200, json=jobs))
         respx.get(
             f"{_BASE}/organizations/my-org/pipelines/my-pipeline/builds/{build}/jobs/job-uuid-1/log",
         ).mock(return_value=httpx.Response(200, text="Build log line 1\nBuild log line 2\n"))

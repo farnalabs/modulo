@@ -43,9 +43,7 @@ def opsgenie_query_with_limit(ctx: dict, resource: str, limit: int) -> None:
 
     data, total = _opsgenie_resource_fixture(resource)
     with respx.mock:
-        respx.get(f"{_BASE}/{_opsgenie_resource_path(resource)}", params={"limit": limit}).mock(
-            return_value=httpx.Response(200, json={"data": data, "totalCount": total})
-        )
+        respx.get(f"{_BASE}/{_opsgenie_resource_path(resource)}", params={"limit": limit}).mock(return_value=httpx.Response(200, json={"data": data, "totalCount": total}))
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, limit=limit)))
     if resource in ("schedules", "escalations"):
         ctx["records"] = data[:limit]
@@ -63,9 +61,7 @@ def opsgenie_query_alerts_status(ctx: dict, resource: str, status: str) -> None:
         {"id": "A2", "message": "High CPU", "status": status},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/alerts", params={"status": status}).mock(
-            return_value=httpx.Response(200, json={"data": data, "totalCount": len(data)})
-        )
+        respx.get(f"{_BASE}/alerts", params={"status": status}).mock(return_value=httpx.Response(200, json={"data": data, "totalCount": len(data)}))
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, filters={"status": status})))
     ctx["records"] = result.records
 
@@ -97,9 +93,7 @@ def opsgenie_query_alert_by_id(ctx: dict, resource: str, id_type: str, alert_id:
 
     data = {"id": alert_id, "message": "Disk full", "status": "open"}
     with respx.mock:
-        respx.get(f"{_BASE}/alerts/{alert_id}", params={"identifierType": id_type}).mock(
-            return_value=httpx.Response(200, json={"data": data})
-        )
+        respx.get(f"{_BASE}/alerts/{alert_id}", params={"identifierType": id_type}).mock(return_value=httpx.Response(200, json={"data": data}))
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, filters={"id": alert_id})))
     ctx["records"] = result.records
     assert ctx["records"][0]["message"] == "Disk full"
@@ -109,17 +103,9 @@ def opsgenie_query_alert_by_id(ctx: dict, resource: str, id_type: str, alert_id:
 def opsgenie_query_alert_subresource(ctx: dict, resource: str, alert_id: str) -> None:
     from farna.connectors.base import ConnectorQuery
 
-    if resource == "alert_notes":
-        data = [
-            {"id": "N1", "note": "Investigating", "owner": "Alice"},
-            {"id": "N2", "note": "Escalated", "owner": "Bob"},
-        ]
-    else:
-        data = [{"log": "Alert created", "loggedAt": "2026-01-01T00:00:00Z"}]
+    data = [{"id": "N1", "note": "Investigating", "owner": "Alice"}, {"id": "N2", "note": "Escalated", "owner": "Bob"}] if resource == "alert_notes" else [{"log": "Alert created", "loggedAt": "2026-01-01T00:00:00Z"}]
     with respx.mock:
-        respx.get(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(
-            return_value=httpx.Response(200, json={"data": data, "totalCount": len(data)})
-        )
+        respx.get(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(return_value=httpx.Response(200, json={"data": data, "totalCount": len(data)}))
         result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, filters={"id": alert_id})))
     ctx["records"] = result.records
 
@@ -133,12 +119,8 @@ def opsgenie_query_on_calls(ctx: dict, resource: str, schedule_id: str) -> None:
         "onCallParticipants": [{"name": "alice@example.com", "type": "user"}],
     }
     with respx.mock:
-        respx.get(f"{_BASE}/schedules/{schedule_id}/on-calls").mock(
-            return_value=httpx.Response(200, json={"data": data})
-        )
-        result = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource=resource, filters={"schedule_id": schedule_id}))
-        )
+        respx.get(f"{_BASE}/schedules/{schedule_id}/on-calls").mock(return_value=httpx.Response(200, json={"data": data}))
+        result = asyncio.run(ctx["connector"].query(ConnectorQuery(resource=resource, filters={"schedule_id": schedule_id})))
     ctx["records"] = result.records
     assert ctx["records"][0]["parent"]["id"] == schedule_id
 
@@ -164,9 +146,7 @@ def opsgenie_write_alert_by_id(ctx: dict, resource: str, alert_id: str) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(
-            return_value=httpx.Response(200, json={"data": {"success": True}})
-        )
+        respx.post(f"{_BASE}/alerts/{alert_id}/{_opsgenie_resource_path(resource)}").mock(return_value=httpx.Response(200, json={"data": {"success": True}}))
         result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id})))
     assert result["success"] is True, result
     ctx["write_result"] = result
@@ -177,12 +157,8 @@ def opsgenie_write_alert_note(ctx: dict, resource: str, alert_id: str, note: str
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/alerts/{alert_id}/notes").mock(
-            return_value=httpx.Response(201, json={"data": {"id": "N1", "note": note}})
-        )
-        result = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id, "note": note}))
-        )
+        respx.post(f"{_BASE}/alerts/{alert_id}/notes").mock(return_value=httpx.Response(201, json={"data": {"id": "N1", "note": note}}))
+        result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id, "note": note})))
     assert result["id"] == "N1", result
     ctx["write_result"] = result
 
@@ -192,12 +168,8 @@ def opsgenie_write_alert_snooze(ctx: dict, resource: str, alert_id: str, end_tim
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/alerts/{alert_id}/snooze").mock(
-            return_value=httpx.Response(200, json={"data": {"success": True}})
-        )
-        result = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id, "end_time": end_time}))
-        )
+        respx.post(f"{_BASE}/alerts/{alert_id}/snooze").mock(return_value=httpx.Response(200, json={"data": {"success": True}}))
+        result = asyncio.run(ctx["connector"].write(ConnectorPayload(resource=resource, data={"id": alert_id, "end_time": end_time})))
     assert result["success"] is True, result
     ctx["write_result"] = result
 
@@ -205,9 +177,7 @@ def opsgenie_write_alert_snooze(ctx: dict, resource: str, alert_id: str, end_tim
 @when("I check the connector health")
 def opsgenie_health_check(ctx: dict) -> None:
     with respx.mock:
-        respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(
-            return_value=httpx.Response(200, json={"data": [], "totalCount": 0})
-        )
+        respx.get(f"{_BASE}/alerts", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": [], "totalCount": 0}))
         ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
 
 

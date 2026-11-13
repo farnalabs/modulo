@@ -120,10 +120,7 @@ async def comp_rig(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, (:graph)::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, (:graph)::json)",
             ),
             {
                 "id": str(pipeline_id),
@@ -298,10 +295,7 @@ class TestCompensateBlockedRunAgainstRealDB:
             audit_types = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT event_type FROM audit_events WHERE resource_id = :rid AND "
-                            "event_type IN ('guardrail.compensation_attempted', 'guardrail.blocked_partial_written')"
-                        ),
+                        text("SELECT event_type FROM audit_events WHERE resource_id = :rid AND event_type IN ('guardrail.compensation_attempted', 'guardrail.blocked_partial_written')"),
                         {"rid": str(run_id)},
                     )
                 )
@@ -352,13 +346,7 @@ class TestExecutorMidRunCompensationWiring:
         run_number = int(run_id.int % 10**9) + 1
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status, claim_token) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, "
-                    ":rn, 'running', :tok)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status, claim_token) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'running', :tok)"),
                 {
                     "id": str(run_id),
                     "oid": str(org_id),
@@ -427,10 +415,7 @@ class TestExecutorMidRunCompensationWiring:
             audit_types = (
                 (
                     await conn.execute(
-                        text(
-                            "SELECT event_type FROM audit_events WHERE resource_id = :rid AND "
-                            "event_type IN ('guardrail.compensation_attempted', 'guardrail.blocked_partial_written')"
-                        ),
+                        text("SELECT event_type FROM audit_events WHERE resource_id = :rid AND event_type IN ('guardrail.compensation_attempted', 'guardrail.blocked_partial_written')"),
                         {"rid": str(run_id)},
                     )
                 )
@@ -530,11 +515,7 @@ class TestDependentTriggerSuppression:
         child_trigger_id = uuid.uuid4()
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
-                text(
-                    "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                    "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                    "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, (:cfg)::json, :uid)"
-                ),
+                text("INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'agent_signal', true, 5, (:cfg)::json, :uid)"),
                 {
                     "id": str(child_trigger_id),
                     "oid": str(test_org),
@@ -584,10 +565,7 @@ class TestDependentTriggerSuppression:
         async with db_engine.connect() as conn:
             suppressed = (
                 await conn.execute(
-                    text(
-                        "SELECT count(*) FROM audit_events WHERE resource_id = :rid AND "
-                        "event_type = 'guardrail.dependent_suppressed'"
-                    ),
+                    text("SELECT count(*) FROM audit_events WHERE resource_id = :rid AND event_type = 'guardrail.dependent_suppressed'"),
                     {"rid": str(source_run_id)},
                 )
             ).scalar_one()

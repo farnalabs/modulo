@@ -39,9 +39,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)",
+                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)",
             ),
             {
                 "id": str(account_id),
@@ -51,8 +49,7 @@ async def _create_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) ->
         )
         await conn.execute(
             text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                "VALUES (:mid, :aid, :oid, 'admin')",
+                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
             ),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
@@ -69,10 +66,7 @@ async def _create_pipeline(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "visibility, max_concurrent_runs, lock_wait_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :org_id, :name, :account_id, 'org', 1, 30, '{}'::json, '[]'::json)",
+                "INSERT INTO pipelines (id, organisation_id, name, account_id, visibility, max_concurrent_runs, lock_wait_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :org_id, :name, :account_id, 'org', 1, 30, '{}'::json, '[]'::json)",
             ),
             {
                 "id": str(pid),
@@ -161,9 +155,7 @@ async def _get_org_status(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str
     async with db_engine.connect() as conn:
         row = await conn.execute(
             text(
-                "SELECT status, deleted_at, deletion_token, "
-                "deletion_token_expires_at, export_bundle_json "
-                "FROM organisations WHERE id = :id",
+                "SELECT status, deleted_at, deletion_token, deletion_token_expires_at, export_bundle_json FROM organisations WHERE id = :id",
             ),
             {"id": str(org_id)},
         )
@@ -179,35 +171,21 @@ async def _get_org_status(db_engine: AsyncEngine, org_id: uuid.UUID) -> dict[str
         }
 
 
-async def _insert_checkpoint_triple(
-    db_engine: AsyncEngine, org_id: uuid.UUID, threads: list[str], created_at: datetime
-) -> None:
+async def _insert_checkpoint_triple(db_engine: AsyncEngine, org_id: uuid.UUID, threads: list[str], created_at: datetime) -> None:
     """Insert one ``checkpoints`` + ``checkpoint_writes`` + ``checkpoint_blobs`` row per thread."""
     async with db_engine.connect() as conn, conn.begin():
         for i, thread in enumerate(threads):
             ckp = f"ckp-{i}-{thread}"
             await conn.execute(
-                text(
-                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
-                    "parent_checkpoint_id, type, checkpoint, metadata, created_at) "
-                    "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)"
-                ),
+                text("INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)"),
                 {"org": str(org_id), "thread": thread, "ckp": ckp, "created_at": created_at},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id, "
-                    "task_id, idx, channel, type, blob, created_at) "
-                    "VALUES (:org, :thread, '', :ckp, 'task', 0, 'channel', 'json', :blob, :created_at)"
-                ),
+                text("INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, created_at) VALUES (:org, :thread, '', :ckp, 'task', 0, 'channel', 'json', :blob, :created_at)"),
                 {"org": str(org_id), "thread": thread, "ckp": ckp, "blob": b"write", "created_at": created_at},
             )
             await conn.execute(
-                text(
-                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, "
-                    "type, blob, created_at) "
-                    "VALUES (:org, :thread, '', 'channel', 'v1', 'bytes', :blob, :created_at)"
-                ),
+                text("INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob, created_at) VALUES (:org, :thread, '', 'channel', 'v1', 'bytes', :blob, :created_at)"),
                 {"org": str(org_id), "thread": thread, "blob": b"blob", "created_at": created_at},
             )
 
@@ -480,10 +458,7 @@ class TestConfirmOrgDeletion:
             expired_at = datetime.now(UTC) - timedelta(hours=1)
             await session.execute(
                 text(
-                    "UPDATE organisations SET status='deleted', "
-                    "deletion_token=:token, "
-                    "deletion_token_expires_at=:expires "
-                    "WHERE id=:id",
+                    "UPDATE organisations SET status='deleted', deletion_token=:token, deletion_token_expires_at=:expires WHERE id=:id",
                 ),
                 {
                     "token": "expired-token-value",
@@ -779,9 +754,7 @@ class TestExportOrgData:
         assert bundle["memberships"]
         assert bundle["pipelines"]
 
-    async def test_live_capture_non_blocking_concurrent_settings_patch(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_live_capture_non_blocking_concurrent_settings_patch(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-blocking proof (fail-first): export_org_data's live-capture path
         must NOT block a concurrent org settings patch.
 
@@ -857,9 +830,7 @@ class TestExportOrgData:
         # The org name follows the pattern from _create_org: "Deletion Test {suffix}"
         assert export_result["organisation"][0]["name"] == "Deletion Test nonblock-export"
 
-    async def test_request_deletion_snapshot_non_blocking_concurrent_settings_patch(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_request_deletion_snapshot_non_blocking_concurrent_settings_patch(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """Non-blocking proof (fail-first): request_org_deletion's snapshot phase
         must NOT block a concurrent org settings patch.
 
@@ -937,9 +908,7 @@ class TestExportOrgData:
         assert "token" in deletion_result
         assert "export" in deletion_result
 
-    async def test_request_deletion_premise_recheck_under_lock(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_request_deletion_premise_recheck_under_lock(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """Premise re-check pinned: if the org is mutated (e.g. confirmed deleted)
         between the snapshot phase and the FSM lock acquisition,
         request_org_deletion must raise the same ValueError as today.
@@ -1020,9 +989,7 @@ class TestExportOrgData:
         await deletion_session.rollback()
         await deletion_session.close()
 
-    async def test_snapshot_isolation_is_repeatable_read_read_only(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_snapshot_isolation_is_repeatable_read_read_only(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """Snapshot isolation pinned: assert the live-capture path actually runs
         REPEATABLE READ READ ONLY on its own connection.
 
@@ -1061,14 +1028,10 @@ class TestExportOrgData:
 
         # The snapshot must be REPEATABLE READ (and READ ONLY).
         # Postgres reports "repeatable read" for REPEATABLE READ isolation.
-        assert captured_isolation.get("level", "").lower() == "repeatable read", (
-            f"expected REPEATABLE READ isolation, got {captured_isolation.get('level')!r}"
-        )
+        assert captured_isolation.get("level", "").lower() == "repeatable read", f"expected REPEATABLE READ isolation, got {captured_isolation.get('level')!r}"
         # The snapshot must be READ ONLY.
         # Postgres reports "on" for READ ONLY transactions.
-        assert captured_read_only.get("status", "").lower() == "on", (
-            f"expected READ ONLY transaction, got {captured_read_only.get('status')!r}"
-        )
+        assert captured_read_only.get("status", "").lower() == "on", f"expected READ ONLY transaction, got {captured_read_only.get('status')!r}"
 
 
 # ── Tests: batch_delete_langgraph_checkpoints ───────────────────────
@@ -1131,17 +1094,13 @@ class TestBatchDeleteLanggraphCheckpoints:
             ):
                 await conn.execute(
                     text(
-                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
-                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
-                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
                     ),
                     {"org": str(org), "thread": thread, "ckp": ckp, "created_at": created_at},
                 )
                 await conn.execute(
                     text(
-                        "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
-                        "channel, version, type, blob, created_at) "
-                        "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                        "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob, created_at) VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
                     ),
                     {
                         "org": str(org),
@@ -1154,9 +1113,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 )
                 await conn.execute(
                     text(
-                        "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, "
-                        "checkpoint_id, task_id, idx, channel, type, blob, created_at) "
-                        "VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
+                        "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, created_at) VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
                     ),
                     {
                         "org": str(org),
@@ -1220,9 +1177,7 @@ class TestBatchDeleteLanggraphCheckpoints:
             for i in range(5):
                 await conn.execute(
                     text(
-                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
-                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
-                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
                     ),
                     {
                         "org": str(org),
@@ -1274,17 +1229,13 @@ class TestBatchDeleteLanggraphCheckpoints:
         async with db_engine.connect() as conn, conn.begin():
             await conn.execute(
                 text(
-                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
-                    "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
-                    "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                    "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
                 ),
                 {"org": str(org_id), "thread": thread, "ckp": "ckp-live", "created_at": old_ts},
             )
             await conn.execute(
                 text(
-                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
-                    "channel, version, type, blob, created_at) "
-                    "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob, created_at) VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
                 ),
                 {
                     "org": str(org_id),
@@ -1297,9 +1248,7 @@ class TestBatchDeleteLanggraphCheckpoints:
             )
             await conn.execute(
                 text(
-                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, "
-                    "checkpoint_id, task_id, idx, channel, type, blob, created_at) "
-                    "VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
+                    "INSERT INTO checkpoint_writes (organisation_id, thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob, created_at) VALUES (:org, :thread, '', :ckp, :task, 0, 'channel', 'json', :blob, :created_at)",
                 ),
                 {
                     "org": str(org_id),
@@ -1357,17 +1306,13 @@ class TestBatchDeleteLanggraphCheckpoints:
             for ckp, created_at in (("ckp-old", old_ts), ("ckp-fresh", fresh_ts)):
                 await conn.execute(
                     text(
-                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, "
-                        "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) "
-                        "VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
+                        "INSERT INTO checkpoints (organisation_id, thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata, created_at) VALUES (:org, :thread, '', :ckp, NULL, NULL, '{}'::jsonb, '{}'::jsonb, :created_at)",
                     ),
                     {"org": str(org_id), "thread": thread, "ckp": ckp, "created_at": created_at},
                 )
             await conn.execute(
                 text(
-                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, "
-                    "channel, version, type, blob, created_at) "
-                    "VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
+                    "INSERT INTO checkpoint_blobs (organisation_id, thread_id, checkpoint_ns, channel, version, type, blob, created_at) VALUES (:org, :thread, '', :channel, :version, 'bytes', :blob, :created_at)",
                 ),
                 {
                     "org": str(org_id),
@@ -1420,16 +1365,12 @@ class TestBatchDeleteLanggraphCheckpoints:
 
         threads = [f"thread-budget-{i}" for i in range(6)]
         for thread in threads:
-            await _insert_run(
-                db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete"
-            )
+            await _insert_run(db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete")
         await _insert_checkpoint_triple(db_engine, org_id, threads, old_ts)
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            count = await batch_delete_langgraph_checkpoints(
-                session, batch_size=1, max_age_days=30, max_rows_per_tick=2
-            )
+            count = await batch_delete_langgraph_checkpoints(session, batch_size=1, max_age_days=30, max_rows_per_tick=2)
 
         # One thread's checkpoint + write + blob — NOT all 18. The budget, not
         # the absence of work, stopped the sweep.
@@ -1444,9 +1385,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 )
                 assert result.scalar_one() == 5, f"{table} must retain 5 of 6 rows (budget-bounded)"
 
-    async def test_deployed_schema_path_bounded_and_committed(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_deployed_schema_path_bounded_and_committed(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-1971a: the deployed (no ``created_at``) path is candidate-driven.
 
         Production runs the branch where the checkpoint ``created_at`` column is
@@ -1472,9 +1411,7 @@ class TestBatchDeleteLanggraphCheckpoints:
 
         threads = [f"thread-deployed-{i}" for i in range(6)]
         for thread in threads:
-            run_id = await _insert_run(
-                db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete"
-            )
+            run_id = await _insert_run(db_engine, org_id=org_id, pipeline_id=pid, snapshot_id=sid, thread_id=thread, status="complete")
             async with db_engine.connect() as conn, conn.begin():
                 await conn.execute(
                     text("UPDATE runs SET completed_at = :ts WHERE id = :rid"),
@@ -1484,9 +1421,7 @@ class TestBatchDeleteLanggraphCheckpoints:
 
         factory = async_sessionmaker(db_engine, expire_on_commit=False)
         async with factory() as session:
-            count = await org_deletion_mod.batch_delete_langgraph_checkpoints(
-                session, batch_size=1, max_age_days=30, max_rows_per_tick=2
-            )
+            count = await org_deletion_mod.batch_delete_langgraph_checkpoints(session, batch_size=1, max_age_days=30, max_rows_per_tick=2)
 
         assert count == 3
         async with db_engine.connect() as conn:
@@ -1497,9 +1432,7 @@ class TestBatchDeleteLanggraphCheckpoints:
                 )
                 assert result.scalar_one() == 5, f"{table} must retain 5 of 6 rows (deployed path, bounded)"
 
-    async def test_deployed_path_keeps_thread_shared_with_live_run(
-        self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_deployed_path_keeps_thread_shared_with_live_run(self, db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-1971: the deployed path never purges a thread a live run shares.
 
         A resume child inherits its parent's ``langgraph_thread_id`` to continue

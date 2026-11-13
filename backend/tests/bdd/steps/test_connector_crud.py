@@ -242,9 +242,7 @@ def _given_connector_in_org(request: Any, connector_id: str) -> None:
     _ctx(request)["connector"] = _make_connector(
         id=_connector_uuid(connector_id),
         name="Staging Bot",
-        credentials_ciphertext=bytes(
-            Fernet(_FERNET_KEY.encode()).encrypt(json.dumps({"auth_mode": "bearer", "token": "tok-123"}).encode())
-        ),
+        credentials_ciphertext=bytes(Fernet(_FERNET_KEY.encode()).encrypt(json.dumps({"auth_mode": "bearer", "token": "tok-123"}).encode())),
     )
 
 
@@ -419,9 +417,7 @@ def _then_stored_fernet(request: Any) -> None:
     ciphertext = _ctx(request)["store_ciphertext"][-1]
     plaintext = Fernet(_FERNET_KEY.encode()).decrypt(ciphertext).decode()
     expected = json.dumps({"auth_mode": "bearer", "token": _ctx(request)["secret"]})
-    assert json.loads(plaintext) == json.loads(expected), (
-        f"stored credential round-trip mismatch: {plaintext!r} != {expected!r}"
-    )
+    assert json.loads(plaintext) == json.loads(expected), f"stored credential round-trip mismatch: {plaintext!r} != {expected!r}"
 
 
 @then("the updated credentials are stored Fernet-encrypted")

@@ -84,8 +84,7 @@ _NEW_INDEXES: tuple[tuple[str, str], ...] = (
 _DROP_INDEX_SQL: tuple[str, ...] = tuple(f"DROP INDEX IF EXISTS {name}" for name, _table in _NEW_INDEXES)
 
 _CREATE_INDEX_SQL: tuple[str, ...] = (
-    "CREATE INDEX IF NOT EXISTS ix_hitl_claims_org_decision_at "
-    "ON hitl_claims (organisation_id, decision_at) WHERE decision IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_hitl_claims_org_decision_at ON hitl_claims (organisation_id, decision_at) WHERE decision IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS ix_runs_org_snapshot_id ON runs (organisation_id, snapshot_id)",
     "CREATE INDEX IF NOT EXISTS ix_eval_results_org_eval_id ON eval_results (organisation_id, eval_id)",
 )
@@ -307,12 +306,7 @@ async def _set_indexes(engine: Any, statements: tuple[str, ...]) -> None:
 
 async def _analyze(engine: Any) -> None:
     async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                "ANALYZE organisations, accounts, pipelines, pipeline_snapshots, runs, "
-                "evals, eval_results, hitl_claims, audit_events, audit_chain_heads"
-            )
-        )
+        await conn.execute(text("ANALYZE organisations, accounts, pipelines, pipeline_snapshots, runs, evals, eval_results, hitl_claims, audit_events, audit_chain_heads"))
 
 
 async def _present_indexes(engine: Any) -> set[str]:
@@ -325,9 +319,7 @@ async def _present_indexes(engine: Any) -> set[str]:
 _EXPLAIN_QUERIES: tuple[tuple[str, str], ...] = (
     (
         "runs count(DISTINCT snapshot_id)",
-        "SELECT count(DISTINCT r.snapshot_id) FROM runs r "
-        "JOIN pipeline_snapshots s ON s.id = r.snapshot_id AND s.organisation_id = :org "
-        "WHERE r.organisation_id = :org",
+        "SELECT count(DISTINCT r.snapshot_id) FROM runs r JOIN pipeline_snapshots s ON s.id = r.snapshot_id AND s.organisation_id = :org WHERE r.organisation_id = :org",
     ),
     (
         "eval_results count(DISTINCT eval_id)",
@@ -335,8 +327,7 @@ _EXPLAIN_QUERIES: tuple[tuple[str, str], ...] = (
     ),
     (
         "hitl decided ordered scan",
-        "SELECT id FROM hitl_claims WHERE organisation_id = :org AND decision IS NOT NULL "
-        "ORDER BY decision_at DESC NULLS LAST LIMIT 10000",
+        "SELECT id FROM hitl_claims WHERE organisation_id = :org AND decision IS NOT NULL ORDER BY decision_at DESC NULLS LAST LIMIT 10000",
     ),
 )
 
@@ -486,15 +477,8 @@ async def _run(args: argparse.Namespace) -> int:
             hitl_full = next(entry for entry in full_index.artifacts if entry.artifact_type == "hitl_decision")
             hitl_scoped = next(entry for entry in scoped_index.artifacts if entry.artifact_type == "hitl_decision")
             print("\nHITL scan boundary:")
-            print(
-                f"- full history: {hitl_full.record_count:,} decided gates, "
-                f"scan truncated={hitl_full.detail['human_only_scan_truncated']} "
-                f"(limit {_HITL_SCAN_LIMIT:,})"
-            )
-            print(
-                f"- 30-day window: {hitl_scoped.record_count:,} decided gates, "
-                f"scan truncated={hitl_scoped.detail['human_only_scan_truncated']}"
-            )
+            print(f"- full history: {hitl_full.record_count:,} decided gates, scan truncated={hitl_full.detail['human_only_scan_truncated']} (limit {_HITL_SCAN_LIMIT:,})")
+            print(f"- 30-day window: {hitl_scoped.record_count:,} decided gates, scan truncated={hitl_scoped.detail['human_only_scan_truncated']}")
         finally:
             await engine.dispose()
     return 0

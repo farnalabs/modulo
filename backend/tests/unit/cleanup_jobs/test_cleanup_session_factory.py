@@ -53,13 +53,13 @@ class TestCleanupSessionFactory:
         ``MODULO_SYSTEM_DATABASE_URL`` raises RuntimeError instead of silently
         running the cross-org purge as farna_control_app."""
         settings = MagicMock(modulo_db="postgres")
-        settings.farna_control_system_database_url = ""
+        settings.modulo_system_database_url = ""
 
         with (
             patch.object(sw, "get_settings", return_value=settings),
             patch.object(sw, "_SYSTEM_ASYNC_ENGINE", None),
             patch.object(sw, "_make_session_factory") as mock_plain,
-            pytest.raises(RuntimeError, match="FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"),
+            pytest.raises(RuntimeError, match="MODULO_SYSTEM_DATABASE_URL"),
         ):
             sw._cleanup_session_factory()
 

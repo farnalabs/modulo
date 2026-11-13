@@ -120,9 +120,7 @@ def slack_api_response(draw):
         body.setdefault("members", draw(st.lists(json_obj(), max_size=5)))
     else:
         body.setdefault("error", draw(st.text(max_size=50)))
-    body.setdefault(
-        "response_metadata", draw(st.none() | st.dictionaries(st.text(max_size=20), st.text(max_size=50), max_size=3))
-    )
+    body.setdefault("response_metadata", draw(st.none() | st.dictionaries(st.text(max_size=20), st.text(max_size=50), max_size=3)))
     return body
 
 
@@ -210,27 +208,19 @@ async def _assert_safe_query(connector, q: ConnectorQuery) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_repos_fuzz(gh_connector, data):
     with respx.mock:
-        respx.get("https://api.github.com/user/repos").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj_list()))
-        )
+        respx.get("https://api.github.com/user/repos").mock(return_value=httpx.Response(200, json=data.draw(json_obj_list())))
         await _assert_safe_query(gh_connector, ConnectorQuery(resource="repos"))
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_pulls_fuzz(gh_connector, data):
     with respx.mock:
-        respx.get("https://api.github.com/repos/owner/repo/pulls").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj_list()))
-        )
+        respx.get("https://api.github.com/repos/owner/repo/pulls").mock(return_value=httpx.Response(200, json=data.draw(json_obj_list())))
         await _assert_safe_query(
             gh_connector,
             ConnectorQuery(
@@ -240,15 +230,11 @@ async def test_github_pulls_fuzz(gh_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_file_fuzz(gh_connector, data):
     with respx.mock:
-        respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             gh_connector,
             ConnectorQuery(
@@ -258,15 +244,11 @@ async def test_github_file_fuzz(gh_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_issues_fuzz(gh_connector, data):
     with respx.mock:
-        respx.get("https://api.github.com/repos/owner/repo/issues").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj_list()))
-        )
+        respx.get("https://api.github.com/repos/owner/repo/issues").mock(return_value=httpx.Response(200, json=data.draw(json_obj_list())))
         await _assert_safe_query(
             gh_connector,
             ConnectorQuery(
@@ -276,15 +258,11 @@ async def test_github_issues_fuzz(gh_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_single_issue_fuzz(gh_connector, data):
     with respx.mock:
-        respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             gh_connector,
             ConnectorQuery(
@@ -299,15 +277,11 @@ async def test_github_single_issue_fuzz(gh_connector, data):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_notion_database_fuzz(notion_connector, data):
     with respx.mock:
-        respx.get("https://api.notion.com/v1/databases/fuzz-db-id").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://api.notion.com/v1/databases/fuzz-db-id").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             notion_connector,
             ConnectorQuery(
@@ -317,15 +291,11 @@ async def test_notion_database_fuzz(notion_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_notion_page_fuzz(notion_connector, data):
     with respx.mock:
-        respx.get("https://api.notion.com/v1/pages/fuzz-page-id").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://api.notion.com/v1/pages/fuzz-page-id").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             notion_connector,
             ConnectorQuery(
@@ -335,27 +305,19 @@ async def test_notion_page_fuzz(notion_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_notion_databases_search_fuzz(notion_connector, data):
     with respx.mock:
-        respx.post("https://api.notion.com/v1/search").mock(
-            return_value=httpx.Response(200, json=data.draw(notion_response()))
-        )
+        respx.post("https://api.notion.com/v1/search").mock(return_value=httpx.Response(200, json=data.draw(notion_response())))
         await _assert_safe_query(notion_connector, ConnectorQuery(resource="databases"))
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_notion_blocks_fuzz(notion_connector, data):
     with respx.mock:
-        respx.get("https://api.notion.com/v1/blocks/fuzz-block-id/children").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://api.notion.com/v1/blocks/fuzz-block-id/children").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             notion_connector,
             ConnectorQuery(
@@ -370,27 +332,19 @@ async def test_notion_blocks_fuzz(notion_connector, data):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_slack_channels_fuzz(slack_connector, data):
     with respx.mock:
-        respx.get("https://slack.com/api/conversations.list").mock(
-            return_value=httpx.Response(200, json=data.draw(slack_api_response()))
-        )
+        respx.get("https://slack.com/api/conversations.list").mock(return_value=httpx.Response(200, json=data.draw(slack_api_response())))
         await _assert_safe_query(slack_connector, ConnectorQuery(resource="channels"))
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_slack_messages_fuzz(slack_connector, data):
     with respx.mock:
-        respx.get("https://slack.com/api/conversations.history").mock(
-            return_value=httpx.Response(200, json=data.draw(slack_api_response()))
-        )
+        respx.get("https://slack.com/api/conversations.history").mock(return_value=httpx.Response(200, json=data.draw(slack_api_response())))
         await _assert_safe_query(
             slack_connector,
             ConnectorQuery(
@@ -400,15 +354,11 @@ async def test_slack_messages_fuzz(slack_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_slack_users_fuzz(slack_connector, data):
     with respx.mock:
-        respx.get("https://slack.com/api/users.list").mock(
-            return_value=httpx.Response(200, json=data.draw(slack_api_response()))
-        )
+        respx.get("https://slack.com/api/users.list").mock(return_value=httpx.Response(200, json=data.draw(slack_api_response())))
         await _assert_safe_query(slack_connector, ConnectorQuery(resource="users"))
 
 
@@ -417,15 +367,11 @@ async def test_slack_users_fuzz(slack_connector, data):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_jira_issue_fuzz(jira_connector, data):
     with respx.mock:
-        respx.get("https://fuzz-test.atlassian.net/rest/api/3/issue/FUZZ-1").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.get("https://fuzz-test.atlassian.net/rest/api/3/issue/FUZZ-1").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             jira_connector,
             ConnectorQuery(
@@ -435,15 +381,11 @@ async def test_jira_issue_fuzz(jira_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_jira_search_fuzz(jira_connector, data):
     with respx.mock:
-        respx.post("https://fuzz-test.atlassian.net/rest/api/3/search").mock(
-            return_value=httpx.Response(200, json=data.draw(json_obj()))
-        )
+        respx.post("https://fuzz-test.atlassian.net/rest/api/3/search").mock(return_value=httpx.Response(200, json=data.draw(json_obj())))
         await _assert_safe_query(
             jira_connector,
             ConnectorQuery(
@@ -472,16 +414,12 @@ _JIRA_ISSUE_TPL = {
 }
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_github_single_issue_mutated_fuzz(gh_connector, data):
     with respx.mock:
         mutated = data.draw(mutate_response(_GITHUB_ISSUE_TPL))
-        respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(
-            return_value=httpx.Response(200, json=mutated)
-        )
+        respx.get("https://api.github.com/repos/owner/repo/issues/1").mock(return_value=httpx.Response(200, json=mutated))
         await _assert_safe_query(
             gh_connector,
             ConnectorQuery(
@@ -491,9 +429,7 @@ async def test_github_single_issue_mutated_fuzz(gh_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_notion_page_mutated_fuzz(notion_connector, data):
     with respx.mock:
@@ -508,9 +444,7 @@ async def test_notion_page_mutated_fuzz(notion_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_slack_message_mutated_fuzz(slack_connector, data):
     with respx.mock:
@@ -526,16 +460,12 @@ async def test_slack_message_mutated_fuzz(slack_connector, data):
         )
 
 
-@settings(
-    max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000
-)
+@settings(max_examples=5, suppress_health_check=[HealthCheck.too_slow, HealthCheck.function_scoped_fixture], deadline=5000)
 @given(data=st.data())
 async def test_jira_issue_mutated_fuzz(jira_connector, data):
     with respx.mock:
         mutated = data.draw(mutate_response(_JIRA_ISSUE_TPL))
-        respx.get("https://fuzz-test.atlassian.net/rest/api/3/issue/FUZZ-1").mock(
-            return_value=httpx.Response(200, json=mutated)
-        )
+        respx.get("https://fuzz-test.atlassian.net/rest/api/3/issue/FUZZ-1").mock(return_value=httpx.Response(200, json=mutated))
         await _assert_safe_query(
             jira_connector,
             ConnectorQuery(

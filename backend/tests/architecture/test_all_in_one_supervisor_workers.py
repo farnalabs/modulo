@@ -147,7 +147,7 @@ def test_the_compose_wires_the_system_database_url_the_system_worker_requires():
     """``dispatcher_reconcile`` - and therefore readiness - needs it (FAR-1509).
 
     The system worker's ``dispatcher_reconcile`` builds its session factory
-    from ``MODULO_SYSTEM_DATABASE_URL`` and FAILS CLOSED when it is unset
+    from ``FARNA_CONTROL_SYSTEM_DATABASE_URL`` and FAILS CLOSED when it is unset
     (``core/cron_helpers.py::_get_system_engine`` raises ``RuntimeError``), so
     the cron never runs. ``/healthz/ready`` reports that cron ``unavailable``
     and **gates** on it (FAR-199): the backend never becomes ready, even
@@ -155,7 +155,7 @@ def test_the_compose_wires_the_system_database_url_the_system_worker_requires():
 
     The prod compose never needed this before FAR-1509 because it never ran
     the system worker at all - observed on a live bring-up, not inferred: the
-    worker logged ``MODULO_SYSTEM_DATABASE_URL is not set: cross-org system
+    worker logged ``FARNA_CONTROL_SYSTEM_DATABASE_URL is not set: cross-org system
     crons require the farna_control_system role`` on every tick and readiness stayed
     503 with ``dispatcher_reconcile has never run``. The Helm chart wires the
     same URL for the same reason (``deploy/helm/.../_helpers.tpl``).
@@ -167,16 +167,16 @@ def test_the_compose_wires_the_system_database_url_the_system_worker_requires():
     environment = compose.get("services", {}).get(_APP_SERVICE, {}).get("environment", {})
     assert isinstance(environment, dict), f"services.{_APP_SERVICE}.environment must be a mapping"
 
-    value = environment.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL")
+    value = environment.get("FARNA_CONTROL_SYSTEM_DATABASE_URL")
     assert value, (
-        f"deploy/compose/docker-compose.prod.yml does not pass MODULO_SYSTEM_DATABASE_URL to "
+        f"deploy/compose/docker-compose.prod.yml does not pass FARNA_CONTROL_SYSTEM_DATABASE_URL to "
         f"{_APP_SERVICE}: the system worker's dispatcher_reconcile cron fails closed without it, "
         "so /healthz/ready never reports ready (the API + workers can all be up and the deployment is "
         "still permanently 503) - see core/cron_helpers.py::_get_system_engine"
     )
-    assert value.startswith("postgresql+asyncpg://"), f"MODULO_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
-    assert "farna_control_system:" in value, f"MODULO_SYSTEM_DATABASE_URL must authenticate as the farna_control_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
+    assert value.startswith("postgresql+asyncpg://"), f"FARNA_CONTROL_SYSTEM_DATABASE_URL must use the asyncpg dialect the app's engine builder expects, got {value!r}"
+    assert "farna_control_system:" in value, f"FARNA_CONTROL_SYSTEM_DATABASE_URL must authenticate as the farna_control_system (BYPASSRLS) role, got {value!r} - the app role is NOBYPASSRLS and the cron refuses to fall back to it"
     # Same password as the app role: bootstrap_role parses the password out of
     # this URL when it creates/alters the role, so both sides must reference the
-    # ONE operator secret (MODULO_DB_PASSWORD) rather than two literals drifting.
-    assert "${MODULO_DB_PASSWORD" in value, f"MODULO_SYSTEM_DATABASE_URL must interpolate ${{MODULO_DB_PASSWORD}} so the role password and the URL agree, got {value!r}"
+    # ONE operator secret (FARNA_CONTROL_DB_PASSWORD) rather than two literals drifting.
+    assert "${FARNA_CONTROL_DB_PASSWORD" in value, f"FARNA_CONTROL_SYSTEM_DATABASE_URL must interpolate ${{MODULO_DB_PASSWORD}} so the role password and the URL agree, got {value!r}"

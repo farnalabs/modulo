@@ -362,10 +362,7 @@ def _run_matches_journey(run: Run, journey: Journey) -> bool:
     """
     if run.work_item_id == journey.canonical_work_item_id:
         return True
-    for entry in run.work_item_refs or []:
-        if isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref:
-            return True
-    return False
+    return any(isinstance(entry, dict) and entry.get("kind") == journey.kind and entry.get("ref") == journey.ref for entry in run.work_item_refs or [])
 
 
 async def _fetch_journey(

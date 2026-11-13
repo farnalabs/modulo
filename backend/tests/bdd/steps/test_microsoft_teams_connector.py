@@ -48,11 +48,7 @@ def teams_connector_invalid(ctx: dict) -> None:
 
 @when("the connector checks health")
 def teams_health_check(ctx: dict) -> None:
-    response = (
-        httpx.Response(200, json={"value": [{"id": "U1"}]})
-        if ctx["valid"]
-        else httpx.Response(401, text="Unauthorized")
-    )
+    response = httpx.Response(200, json={"value": [{"id": "U1"}]}) if ctx["valid"] else httpx.Response(401, text="Unauthorized")
     with respx.mock:
         respx.get(f"{_BASE}/users", params={"$top": 1, "$select": "id"}).mock(return_value=response)
         ctx["health_result"] = asyncio.run(ctx["connector"].health_check())
@@ -78,9 +74,7 @@ def teams_query_team(team_id: str, ctx: dict) -> None:
     team = {"id": team_id, "displayName": "Engineering", "description": "Build stuff"}
     with respx.mock:
         respx.get(f"{_BASE}/teams/{team_id}").mock(return_value=httpx.Response(200, json=team))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="team", filters={"team_id": team_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="team", filters={"team_id": team_id})))
 
 
 @when(parsers.parse('the connector queries channels for team "{team_id}"'))
@@ -93,9 +87,7 @@ def teams_query_channels(team_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/teams/{team_id}/channels").mock(return_value=httpx.Response(200, json={"value": channels}))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="channels", filters={"team_id": team_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="channels", filters={"team_id": team_id})))
 
 
 @when(parsers.parse('the connector queries channel with team_id "{team_id}" and channel_id "{channel_id}"'))
@@ -105,11 +97,7 @@ def teams_query_channel(team_id: str, channel_id: str, ctx: dict) -> None:
     channel = {"id": channel_id, "displayName": "General", "description": "General discussions"}
     with respx.mock:
         respx.get(f"{_BASE}/teams/{team_id}/channels/{channel_id}").mock(return_value=httpx.Response(200, json=channel))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(
-                ConnectorQuery(resource="channel", filters={"team_id": team_id, "channel_id": channel_id})
-            )
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="channel", filters={"team_id": team_id, "channel_id": channel_id})))
 
 
 @when(parsers.parse('the connector queries messages in team "{team_id}" and channel "{channel_id}"'))
@@ -121,14 +109,8 @@ def teams_query_messages(team_id: str, channel_id: str, ctx: dict) -> None:
         {"id": "M2", "body": {"content": "World"}},
     ]
     with respx.mock:
-        respx.get(f"{_BASE}/teams/{team_id}/channels/{channel_id}/messages").mock(
-            return_value=httpx.Response(200, json={"value": messages})
-        )
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(
-                ConnectorQuery(resource="messages", filters={"team_id": team_id, "channel_id": channel_id})
-            )
-        )
+        respx.get(f"{_BASE}/teams/{team_id}/channels/{channel_id}/messages").mock(return_value=httpx.Response(200, json={"value": messages}))
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="messages", filters={"team_id": team_id, "channel_id": channel_id})))
 
 
 @when(parsers.parse('the connector queries members of team "{team_id}"'))
@@ -141,9 +123,7 @@ def teams_query_members(team_id: str, ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/teams/{team_id}/members").mock(return_value=httpx.Response(200, json={"value": members}))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="members", filters={"team_id": team_id}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="members", filters={"team_id": team_id})))
 
 
 @when("the connector queries users")

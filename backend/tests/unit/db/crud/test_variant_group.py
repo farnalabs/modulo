@@ -751,20 +751,12 @@ class TestRunVariantBatch:
         # create_run was handed the frozen config per variant.
         call_snaps = [call.kwargs["variant_config_snapshot"]["snapshot_id"] for call in mock_create.await_args_list]
         assert set(call_snaps) == {snap_a, snap_b}
-        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
-            "model_backend_id": "backend-control"
-        }
-        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["run_context_overrides"] == {
-            "model_backend_id": "backend-experiment"
-        }
+        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["run_context_overrides"] == {"model_backend_id": "backend-control"}
+        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["run_context_overrides"] == {"model_backend_id": "backend-experiment"}
         # The system-reserved override namespace rides in the frozen snapshot
         # (not the input payload), and each run was handed it via create_run.
-        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["_run_overrides"] == {
-            "model_backend_id": "backend-control"
-        }
-        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["_run_overrides"] == {
-            "model_backend_id": "backend-experiment"
-        }
+        assert mock_create.await_args_list[0].kwargs["variant_config_snapshot"]["_run_overrides"] == {"model_backend_id": "backend-control"}
+        assert mock_create.await_args_list[1].kwargs["variant_config_snapshot"]["_run_overrides"] == {"model_backend_id": "backend-experiment"}
         # The override never leaks into the payload handed to create_run.
         assert "_run_overrides" not in mock_create.await_args_list[0].kwargs["input_payload"]
         assert "_run_overrides" not in mock_create.await_args_list[1].kwargs["input_payload"]
@@ -1460,9 +1452,7 @@ class TestResolvePromptTemplateOverride:
             new_callable=AsyncMock,
             return_value=a,
         ):
-            resolved = await _resolve_prompt_template_override(
-                session, snapshot_id=snapshot_id, prompt_version="current"
-            )
+            resolved = await _resolve_prompt_template_override(session, snapshot_id=snapshot_id, prompt_version="current")
 
         assert resolved == {str(a.id): "live template"}
 
@@ -1936,20 +1926,14 @@ class TestValidateBatchOwnership:
         result = MagicMock()
         result.scalar_one_or_none.return_value = None
         session.execute = AsyncMock(return_value=result)
-        assert (
-            await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[])
-            is False
-        )
+        assert await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[]) is False
 
     async def test_returns_true_with_no_snapshots(self) -> None:
         session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         result = MagicMock()
         result.scalar_one_or_none.return_value = uuid.uuid4()
         session.execute = AsyncMock(return_value=result)
-        assert (
-            await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[])
-            is True
-        )
+        assert await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[]) is True
 
     async def test_returns_true_when_all_owned(self) -> None:
         sid1, sid2 = uuid.uuid4(), uuid.uuid4()
@@ -1961,12 +1945,7 @@ class TestValidateBatchOwnership:
         scalars_mock.__iter__ = MagicMock(return_value=iter([sid1, sid2]))
         snap_result.scalars.return_value = scalars_mock
         session.execute = AsyncMock(side_effect=[pipeline_result, snap_result])
-        assert (
-            await validate_batch_ownership(
-                session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]
-            )
-            is True
-        )
+        assert await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]) is True
 
     async def test_returns_false_when_not_all_owned(self) -> None:
         sid1 = uuid.uuid4()
@@ -1979,12 +1958,7 @@ class TestValidateBatchOwnership:
         scalars_mock.__iter__ = MagicMock(return_value=iter([sid1]))  # sid2 missing
         snap_result.scalars.return_value = scalars_mock
         session.execute = AsyncMock(side_effect=[pipeline_result, snap_result])
-        assert (
-            await validate_batch_ownership(
-                session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]
-            )
-            is False
-        )
+        assert await validate_batch_ownership(session, org_id=uuid.uuid4(), pipeline_id=uuid.uuid4(), snapshot_ids=[sid1, sid2]) is False
 
 
 # ---------------------------------------------------------------------------

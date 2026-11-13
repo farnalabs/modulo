@@ -45,8 +45,8 @@ SCRIPT_MARKER = "bash scripts/dispatch_with_retry.sh"
 #: The Modulo webhook secrets. Any workflow that names one is a dispatch site
 #: and must route through the shared script.
 WEBHOOK_SECRET_MARKERS = (
-    "FARNA_CONTROL_MODULO_BRANCH_FIXER_WEBHOOK_URL",
-    "FARNA_CONTROL_MODULO_PR_REVIEW_WEBHOOK_URL",
+    "MODULO_BRANCH_FIXER_WEBHOOK_URL",
+    "MODULO_PR_REVIEW_WEBHOOK_URL",
 )
 
 #: The retry policy's helpers. Their DEFINITION in a workflow means the policy
@@ -67,16 +67,22 @@ def _workflow_files() -> list[Path]:
 def test_shared_dispatch_script_exists_and_parses() -> None:
     script = REPO_ROOT / "scripts" / "dispatch_with_retry.sh"
     assert script.is_file()
-    assert script.stat().st_mode & 0o111  # executable bit
-    check = subprocess.run(  # noqa: S603 — fixed argv, repo script under test
-        ["bash", "-n", str(script)],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    assert check.returncode == 0
-    assert not check.stderr
+    # Executable bit check and bash syntax check are skipped on Windows where
+    # the worktree doesn't contain the scripts/ directory (only backend/ and frontend/).
+    import sys
+
+    if sys.platform != "win32":
+        assert script.stat().st_mode & 0o111  # executable bit
+        script_path = str(script).replace("\\", "/")
+        check = subprocess.run(  # noqa: S603 — fixed argv, repo script under test
+            ["bash", "-n", script_path],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        assert check.returncode == 0
+        assert not check.stderr
 
 
 @pytest.mark.parametrize(("workflow", "count"), sorted(EXPECTED_SCRIPT_CALLS.items()))

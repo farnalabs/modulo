@@ -29,9 +29,7 @@ async def test_handle_report_failure_counter_unavailable() -> None:
     client = _redis_mock("incr")
     with patch.object(ch, "_log") as log:
         await ch._handle_report_failure(AsyncMock(), client, report_id, datetime.now(UTC))
-    log.warning.assert_called_once_with(
-        "cron_helpers.report_failure_counter_unavailable report=%s", report_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.report_failure_counter_unavailable report=%s", report_id, exc_info=True)
 
 
 async def test_clear_report_failure_counter_failed() -> None:
@@ -39,9 +37,7 @@ async def test_clear_report_failure_counter_failed() -> None:
     client = _redis_mock("delete")
     with patch.object(ch, "_log") as log:
         await ch._clear_report_failure_counter(client, report_id)
-    log.warning.assert_called_once_with(
-        "cron_helpers.clear_report_failure_counter failed for %s", report_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.clear_report_failure_counter failed for %s", report_id, exc_info=True)
 
 
 async def test_bump_ongoing_failure_counter_unavailable() -> None:
@@ -49,9 +45,7 @@ async def test_bump_ongoing_failure_counter_unavailable() -> None:
     client = _redis_mock("incr")
     with patch.object(ch, "_log") as log:
         await ch._bump_ongoing_failure(MagicMock(), client, trigger_id)
-    log.warning.assert_called_once_with(
-        "cron_helpers.ongoing_failure_counter_unavailable trigger=%s", trigger_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.ongoing_failure_counter_unavailable trigger=%s", trigger_id, exc_info=True)
 
 
 async def test_clear_ongoing_failure_failed() -> None:
@@ -68,9 +62,7 @@ async def test_claim_catchup_marker_failed() -> None:
     with patch.object(ch, "_log") as log:
         result = await ch._claim_catchup_marker(client, trigger_id, 123)
     assert result is True
-    log.warning.assert_called_once_with(
-        "cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.catchup_marker_claim_failed trigger=%s", trigger_id, exc_info=True)
 
 
 async def test_mark_catchup_fired_failed() -> None:
@@ -78,9 +70,7 @@ async def test_mark_catchup_fired_failed() -> None:
     client = _redis_mock("set")
     with patch.object(ch, "_log") as log:
         await ch._mark_catchup_fired(client, trigger_id, 123)
-    log.warning.assert_called_once_with(
-        "cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id, exc_info=True
-    )
+    log.warning.assert_called_once_with("cron_helpers.catchup_marker_write_failed trigger=%s", trigger_id, exc_info=True)
 
 
 async def test_write_cron_liveness_failed() -> None:

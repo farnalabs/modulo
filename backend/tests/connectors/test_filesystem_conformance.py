@@ -41,9 +41,7 @@ class TestFilesystemConnector:
 
     async def test_read_write_file(self, fs_connector: FilesystemConnector) -> None:
         content = "world"
-        write_result = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "hello.txt", "content": content})
-        )
+        write_result = await fs_connector.write(ConnectorPayload(resource="file", data={"path": "hello.txt", "content": content}))
         assert_write_result_shape(write_result)
         assert write_result.get("bytes_written") == len(content)
         assert "hello.txt" in write_result.get("path", "")
@@ -83,9 +81,7 @@ class TestFilesystemConnector:
         outside_dir = tmp_path_factory.mktemp("outside")
         (tmp_path / "link_dir").symlink_to(outside_dir, target_is_directory=True)
         with pytest.raises(PathTraversalError):
-            await fs_connector.write(
-                ConnectorPayload(resource="file", data={"path": "link_dir/escape.txt", "content": "x"})
-            )
+            await fs_connector.write(ConnectorPayload(resource="file", data={"path": "link_dir/escape.txt", "content": "x"}))
 
     async def test_invalid_path_empty(self, fs_connector: FilesystemConnector) -> None:
         with pytest.raises(IsADirectoryError, match="Cannot read directory as file"):
@@ -101,9 +97,7 @@ class TestFilesystemConnector:
 
     async def test_unknown_write_resource_raises(self, fs_connector: FilesystemConnector) -> None:
         with pytest.raises(ValueError, match="Unsupported filesystem write resource"):
-            await fs_connector.write(
-                ConnectorPayload(resource="__nonexistent_write_resource__", data={"path": "x", "content": "x"})
-            )
+            await fs_connector.write(ConnectorPayload(resource="__nonexistent_write_resource__", data={"path": "x", "content": "x"}))
 
     async def test_read_directory_as_file_raises(self, fs_connector: FilesystemConnector) -> None:
         await fs_connector.write(ConnectorPayload(resource="file", data={"path": "sub/inner.txt", "content": "x"}))
@@ -112,9 +106,7 @@ class TestFilesystemConnector:
 
     async def test_write_to_nested_path_creates_intermediate_dirs(self, fs_connector: FilesystemConnector) -> None:
         content = "nested"
-        result = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "a/b/c/nested.txt", "content": content})
-        )
+        result = await fs_connector.write(ConnectorPayload(resource="file", data={"path": "a/b/c/nested.txt", "content": content}))
         assert_write_result_shape(result)
         assert result.get("bytes_written") == len(content)
         read_result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "a/b/c/nested.txt"}))
@@ -142,37 +134,27 @@ class TestFilesystemConnector:
         assert result.total == 2
 
     async def test_overwrite_existing_file(self, fs_connector: FilesystemConnector) -> None:
-        first_write = await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "original"})
-        )
+        first_write = await fs_connector.write(ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "original"}))
         assert_write_result_shape(first_write)
-        await fs_connector.write(
-            ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "updated"})
-        )
+        await fs_connector.write(ConnectorPayload(resource="file", data={"path": "overwrite.txt", "content": "updated"}))
         read_result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "overwrite.txt"}))
         assert read_result.records[0]["content"] == "updated"
 
-    async def test_file_read_returns_absolute_path_inside_base(
-        self, fs_connector: FilesystemConnector, tmp_path: Path
-    ) -> None:
+    async def test_file_read_returns_absolute_path_inside_base(self, fs_connector: FilesystemConnector, tmp_path: Path) -> None:
         await fs_connector.write(ConnectorPayload(resource="file", data={"path": "loc.txt", "content": "x"}))
         result = await fs_connector.query(ConnectorQuery(resource="file", filters={"path": "loc.txt"}))
         returned = Path(result.records[0]["path"])
         assert returned.is_absolute()
         assert returned.is_relative_to(tmp_path)
 
-    async def test_write_returns_absolute_path_inside_base(
-        self, fs_connector: FilesystemConnector, tmp_path: Path
-    ) -> None:
+    async def test_write_returns_absolute_path_inside_base(self, fs_connector: FilesystemConnector, tmp_path: Path) -> None:
         result = await fs_connector.write(ConnectorPayload(resource="file", data={"path": "out.txt", "content": "x"}))
         assert_write_result_shape(result)
         returned = Path(result["path"])
         assert returned.is_absolute()
         assert returned.is_relative_to(tmp_path)
 
-    async def test_directory_listing_includes_type_field(
-        self, fs_connector: FilesystemConnector, tmp_path: Path
-    ) -> None:
+    async def test_directory_listing_includes_type_field(self, fs_connector: FilesystemConnector, tmp_path: Path) -> None:
         (tmp_path / "f.txt").write_text("x", encoding="utf-8")
         (tmp_path / "sub").mkdir()
         result = await fs_connector.query(ConnectorQuery(resource="directory"))

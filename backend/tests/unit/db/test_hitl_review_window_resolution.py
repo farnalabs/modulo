@@ -83,9 +83,7 @@ class TestInstanceDefaultParity:
     def test_default_reproduces_shipped_seventy_five_minutes(self) -> None:
         """Unset everywhere must reproduce today's ~75 min (4500s at defaults)."""
         settings = get_settings()
-        assert resolve_hitl_review_window_seconds(None, None) == (
-            DEFAULT_EXPIRY_SECONDS + int(settings.hitl_review_cancel_grace_seconds)
-        )
+        assert resolve_hitl_review_window_seconds(None, None) == (DEFAULT_EXPIRY_SECONDS + int(settings.hitl_review_cancel_grace_seconds))
         assert resolve_hitl_review_window_seconds(None, None) == 4500
 
     def test_default_tracks_the_env_grace(self, monkeypatch: pytest.MonkeyPatch) -> None:

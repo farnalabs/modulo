@@ -276,9 +276,7 @@ class TestHumanOnlyGateBypass:
                 claim_token="test-token",
             )
 
-        assert result.get("error") == "insufficient_scope", (
-            f"Runner should get insufficient_scope for approve, got {result}"
-        )
+        assert result.get("error") == "insufficient_scope", f"Runner should get insufficient_scope for approve, got {result}"
 
 
 # ── API-key role restrictions ─────────────────────────────────────────────

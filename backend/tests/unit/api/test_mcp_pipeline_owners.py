@@ -63,9 +63,7 @@ class TestSetPipelineOwners(_AuthContext):
 
     async def test_auth_failure_returns_auth_expired(self) -> None:
         with patch.object(ms, "validate_current_auth", new=AsyncMock(return_value=False)):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         assert result["error"] == "auth_expired"
 
     async def test_invalid_pipeline_id(self) -> None:
@@ -74,16 +72,12 @@ class TestSetPipelineOwners(_AuthContext):
         assert result["field"] == "pipeline_id"
 
     async def test_invalid_business_owner_id(self) -> None:
-        result = await ms.set_pipeline_owners(
-            pipeline_id=str(_PIPELINE_ID), business_owner_id="nope", reliability_owner_id=None
-        )
+        result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id="nope", reliability_owner_id=None)
         assert result["error"] == "invalid_id"
         assert result["field"] == "business_owner_id"
 
     async def test_invalid_reliability_owner_id(self) -> None:
-        result = await ms.set_pipeline_owners(
-            pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id="nope"
-        )
+        result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id="nope")
         assert result["error"] == "invalid_id"
         assert result["field"] == "reliability_owner_id"
 
@@ -91,9 +85,7 @@ class TestSetPipelineOwners(_AuthContext):
         ms._ctx_team_id.set(_TEAM_A)
         try:
             with patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_B)):
-                result = await ms.set_pipeline_owners(
-                    pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-                )
+                result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         finally:
             ms._ctx_team_id.set(None)
         assert result["error"] == "team_boundary_violation"
@@ -103,9 +95,7 @@ class TestSetPipelineOwners(_AuthContext):
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=None)),
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         assert result == {"error": "pipeline_not_found", "pipeline_id": str(_PIPELINE_ID)}
 
     async def test_success_returns_stored_owners(self) -> None:
@@ -116,9 +106,7 @@ class TestSetPipelineOwners(_AuthContext):
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)) as update,
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None)
         assert result == {
             "pipeline_id": str(_PIPELINE_ID),
             "business_owner_id": str(_OWNER_ID),
@@ -137,17 +125,13 @@ class TestSetPipelineOwners(_AuthContext):
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=exc)),
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=str(_OWNER_ID), reliability_owner_id=None)
         assert result["error"] == "validation_failed"
         assert "does not exist" in result["detail"]
 
     async def test_scope_denial_maps_to_insufficient_scope(self) -> None:
         with patch.object(ms, "_check_agent_tool_scope", side_effect=MCPAuthorizationError("no set_pipeline_owners")):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         assert result["error"] == "insufficient_scope"
 
     async def test_programming_error_maps_to_migration_required(self) -> None:
@@ -158,9 +142,7 @@ class TestSetPipelineOwners(_AuthContext):
                 new=AsyncMock(side_effect=ProgrammingError("stmt", {}, Exception())),
             ),
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         assert result["error"] == "migration_required"
 
     async def test_unexpected_error_maps_to_internal_error(self) -> None:
@@ -168,9 +150,7 @@ class TestSetPipelineOwners(_AuthContext):
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=None)),
             patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(_PIPELINE_ID), business_owner_id=None, reliability_owner_id=None)
         assert result["error"] == "server_error"
 
 

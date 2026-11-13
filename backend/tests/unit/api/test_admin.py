@@ -44,9 +44,7 @@ _EXPORT = {
     "exported_at": "2025-06-01T12:00:00+00:00",
 }
 _OTHER_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000099")
-_ACTIVE_ORG_DELETION_REFUSED = (
-    "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
-)
+_ACTIVE_ORG_DELETION_REFUSED = "Active organisation deletion is refused; a system admin must use DELETE /api/v1/admin/orgs/{org_id}"
 
 
 def _make_settings() -> Settings:
@@ -481,9 +479,7 @@ class TestServiceAccountCrossOrgTargetIsNotFound:
         account.decommissioned_at = None
         stack = ExitStack()
         stack.enter_context(patch("farna.api.routes.admin.get_account_by_id", AsyncMock(return_value=account)))
-        stack.enter_context(
-            patch("farna.api.routes.admin.get_membership_by_account_and_org", AsyncMock(return_value=None))
-        )
+        stack.enter_context(patch("farna.api.routes.admin.get_membership_by_account_and_org", AsyncMock(return_value=None)))
         return stack
 
     def _assert_not_found_without_disclosure(self, resp: Any) -> None:
@@ -543,9 +539,7 @@ class TestUpdateUserDeactivationRevocation:
             stack.enter_context(ctx)
         return stack
 
-    def test_put_deactivate_blacklists_token_families_scoped_to_caller_org(
-        self, admin_rls_with_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_put_deactivate_blacklists_token_families_scoped_to_caller_org(self, admin_rls_with_session: tuple[TestClient, AsyncMock]) -> None:
         client, mock_session = admin_rls_with_session
         with self._resolved_user_patches(deactivated=True):
             resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
@@ -561,9 +555,7 @@ class TestUpdateUserDeactivationRevocation:
         assert str(_ORG_ID) in {str(v) for v in params.values()}
         assert str(_OTHER_USER_ID) in {str(v) for v in params.values()}
 
-    def test_put_deactivate_revokes_live_org_api_keys_scoped_to_caller_org(
-        self, admin_rls_with_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_put_deactivate_revokes_live_org_api_keys_scoped_to_caller_org(self, admin_rls_with_session: tuple[TestClient, AsyncMock]) -> None:
         client, mock_session = admin_rls_with_session
         with self._resolved_user_patches(deactivated=True):
             resp = client.put(f"{self.URL}/{_OTHER_USER_ID}", json={"is_active": False})
@@ -1067,9 +1059,7 @@ class TestAdminReassignAllTeamResources:
 
     URL = f"/api/v1/admin/teams/{_ORG_ID}/reassign-all"
 
-    def test_reassign_all_reports_per_resource_counts(
-        self, admin_client_and_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_reassign_all_reports_per_resource_counts(self, admin_client_and_session: tuple[TestClient, AsyncMock]) -> None:
         client, session = admin_client_and_session
         counts = iter([3, 1, 0, 2])
 
@@ -1099,9 +1089,7 @@ class TestAdminReassignAllTeamResources:
         assert data["reassigned"] == 6
         assert data["resource_types"] == ["pipeline", "connector", "library primitive"]
 
-    def test_reassign_all_idempotent_when_team_has_no_resources(
-        self, admin_client_and_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_reassign_all_idempotent_when_team_has_no_resources(self, admin_client_and_session: tuple[TestClient, AsyncMock]) -> None:
         client, session = admin_client_and_session
         session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
         team = MagicMock()
@@ -1118,9 +1106,7 @@ class TestAdminReassignAllTeamResources:
         assert data["reassigned"] == 0
         assert not data["resource_types"]
 
-    def test_reassign_all_missing_team_returns_404(
-        self, admin_client_and_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_reassign_all_missing_team_returns_404(self, admin_client_and_session: tuple[TestClient, AsyncMock]) -> None:
         client, _session = admin_client_and_session
         with (
             patch("farna.api.routes.admin.get_team", return_value=None),
@@ -1130,9 +1116,7 @@ class TestAdminReassignAllTeamResources:
             resp = client.post(self.URL)
         assert resp.status_code == 404
 
-    def test_reassign_all_foreign_org_team_returns_404(
-        self, admin_client_and_session: tuple[TestClient, AsyncMock]
-    ) -> None:
+    def test_reassign_all_foreign_org_team_returns_404(self, admin_client_and_session: tuple[TestClient, AsyncMock]) -> None:
         client, session = admin_client_and_session
         session.execute.side_effect = lambda *_a, **_k: MagicMock(rowcount=0)
         team = MagicMock()

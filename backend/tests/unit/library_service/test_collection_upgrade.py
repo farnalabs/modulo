@@ -316,9 +316,7 @@ class TestDetectAndUpdateErrors:
 
         session = AsyncMock()
         session.get = AsyncMock(side_effect=_get)
-        report = await detect_collection_update(
-            session, install.organisation_id, install.install_id, install.collection_id
-        )
+        report = await detect_collection_update(session, install.organisation_id, install.install_id, install.collection_id)
         assert report["update_available"] is False
         assert report["delta"] is None
 

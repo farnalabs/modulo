@@ -152,56 +152,33 @@ def test_manifest_route_entries_have_core_fields():
         missing = sorted({"name", "breadcrumb", "type", "deprecated"} - set(entry))
         if missing:
             incomplete[path] = missing
-    assert not incomplete, (
-        "manifest routes missing core fields consumed by the router / sidebar / docs indexer:\n"
-        + "\n".join(f"  {path} -> {fields}" for path, fields in sorted(incomplete.items()))
-    )
+    assert not incomplete, "manifest routes missing core fields consumed by the router / sidebar / docs indexer:\n" + "\n".join(f"  {path} -> {fields}" for path, fields in sorted(incomplete.items()))
 
 
 def test_sidebar_group_references_resolve():
     data = _load_manifest()
     groups = set(data.get("sidebar_groups", {}))
     dangling = _nav_shared.sidebar_group_references(data["routes"], groups)
-    assert not dangling, "manifest routes reference undeclared sidebar_groups:\n" + "\n".join(
-        f"  {path} -> {group}" for path, group in sorted(dangling)
-    )
+    assert not dangling, "manifest routes reference undeclared sidebar_groups:\n" + "\n".join(f"  {path} -> {group}" for path, group in sorted(dangling))
 
 
 def test_sidebar_order_unique_within_group():
     conflicts = _nav_shared.sidebar_order_conflicts(_load_manifest()["routes"])
-    assert not conflicts, "duplicate sidebar_order within a group leaves the sort order ambiguous:\n" + "\n".join(
-        f"  {group} order {order}: {first} and {second}" for group, order, first, second in conflicts
-    )
+    assert not conflicts, "duplicate sidebar_order within a group leaves the sort order ambiguous:\n" + "\n".join(f"  {group} order {order}: {first} and {second}" for group, order, first, second in conflicts)
 
 
 def test_mapped_routes_exist_in_router():
     routes = _load_manifest()["routes"]
     router_names = set(_named_routes())
-    missing = {
-        path: entry["name"]
-        for path, entry in routes.items()
-        if isinstance(entry, dict) and entry.get("name") and entry["name"] not in router_names
-    }
-    assert not missing, "manifest routes with no corresponding frontend router route:\n" + "\n".join(
-        f"  {path} -> {name}" for path, name in sorted(missing.items())
-    )
+    missing = {path: entry["name"] for path, entry in routes.items() if isinstance(entry, dict) and entry.get("name") and entry["name"] not in router_names}
+    assert not missing, "manifest routes with no corresponding frontend router route:\n" + "\n".join(f"  {path} -> {name}" for path, name in sorted(missing.items()))
 
 
 def test_mapped_routes_render_a_page_not_a_redirect():
     named = _named_routes()
     routes = _load_manifest()["routes"]
-    redirect_only = {
-        path: entry["name"]
-        for path, entry in routes.items()
-        if isinstance(entry, dict)
-        and entry.get("name")
-        and entry["name"] in named
-        and not named[entry["name"]]["renders"]
-    }
-    assert not redirect_only, (
-        "manifest advertises pages the router only redirects away from; drop the map entry or ship the page:\n"
-        + "\n".join(f"  {path} -> {name}" for path, name in sorted(redirect_only.items()))
-    )
+    redirect_only = {path: entry["name"] for path, entry in routes.items() if isinstance(entry, dict) and entry.get("name") and entry["name"] in named and not named[entry["name"]]["renders"]}
+    assert not redirect_only, "manifest advertises pages the router only redirects away from; drop the map entry or ship the page:\n" + "\n".join(f"  {path} -> {name}" for path, name in sorted(redirect_only.items()))
 
 
 def test_route_names_are_unique_across_manifest():
@@ -216,10 +193,7 @@ def test_route_names_are_unique_across_manifest():
             duplicated.append(f"  {name}: {seen[name]} and {path}")
         else:
             seen[name] = path
-    assert not duplicated, (
-        "duplicate route names corrupt the router's manifestByName lookup and breadcrumb hierarchy; "
-        "each route must be uniquely named:\n" + "\n".join(duplicated)
-    )
+    assert not duplicated, "duplicate route names corrupt the router's manifestByName lookup and breadcrumb hierarchy; each route must be uniquely named:\n" + "\n".join(duplicated)
 
 
 def test_route_parent_hierarchy_is_acyclic_and_resolves():
@@ -244,10 +218,7 @@ def test_route_parent_hierarchy_is_acyclic_and_resolves():
             seen.add(cursor)
             next_entry = routes[cursor]
             cursor = next_entry.get("parent") if isinstance(next_entry, dict) else None
-    assert not invalid, (
-        "dangling or circular parent references break breadcrumbs and Assistant's page hierarchy:\n"
-        + "\n".join(invalid)
-    )
+    assert not invalid, "dangling or circular parent references break breadcrumbs and Assistant's page hierarchy:\n" + "\n".join(invalid)
 
 
 def _load_elements() -> dict[str, list[dict]]:
@@ -291,21 +262,15 @@ def test_element_testids_unique_within_route():
             if testid is None:
                 continue
             if testid in seen:
-                raise AssertionError(
-                    f"duplicate element testid {testid!r} in {path} (entries {seen[testid]} and {index})"
-                )
+                raise AssertionError(f"duplicate element testid {testid!r} in {path} (entries {seen[testid]} and {index})")
             seen[testid] = index
 
 
 def test_element_testids_exist_in_frontend():
     elements = _load_elements()
     live = _static_testids_in_frontend()
-    dangling = {
-        testid: path for path, items in elements.items() for item in items if (testid := item.get("testid")) not in live
-    }
-    assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(
-        f"  {path} -> {testid}" for testid, path in sorted(dangling.items())
-    )
+    dangling = {testid: path for path, items in elements.items() for item in items if (testid := item.get("testid")) not in live}
+    assert not dangling, "elements reference data-testids that do not exist in the frontend:\n" + "\n".join(f"  {path} -> {testid}" for testid, path in sorted(dangling.items()))
 
 
 def test_no_data_test_id_typo_in_frontend():
@@ -332,11 +297,7 @@ def test_no_data_test_id_typo_in_frontend():
         lines = [index for index, line in enumerate(text.splitlines(), start=1) if _DATA_TEST_ID_TYPO.search(line)]
         if lines:
             offenders[path.relative_to(REPO_ROOT).as_posix()] = lines
-    assert not offenders, (
-        "frontend source uses the 'data-test-id' typo instead of 'data-testid' "
-        "(invisible to the product map element guard and Playwright getByTestId):\n"
-        + "\n".join(f"  {path}: lines {', '.join(map(str, lines))}" for path, lines in sorted(offenders.items()))
-    )
+    assert not offenders, "frontend source uses the 'data-test-id' typo instead of 'data-testid' (invisible to the product map element guard and Playwright getByTestId):\n" + "\n".join(f"  {path}: lines {', '.join(map(str, lines))}" for path, lines in sorted(offenders.items()))
 
 
 def test_mapped_route_elements_cover_owning_view_testids():
@@ -428,24 +389,8 @@ def test_mapped_route_elements_cover_owning_view_testids():
     for route, view_rel in OWNED_PAGES.items():
         view_rels = view_rel if isinstance(view_rel, (tuple, list)) else (view_rel,)
         documented = {item.get("testid") for item in elements.get(route, [])}
-        missing = sorted(
-            {
-                testid
-                for view_rel in view_rels
-                for testid in (
-                    t
-                    for match in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8"))
-                    for t in match
-                    if t
-                )
-            }
-            - documented
-        )
-        assert not missing, (
-            f"static data-testids in {', '.join(view_rels)} are missing from the product map "
-            f"elements for {route} (invisible to Assistant's docs indexer / /api/v1/manifest):\n"
-            + "\n".join(f"  {t}" for t in missing)
-        )
+        missing = sorted({testid for view_rel in view_rels for testid in (t for match in _TESTID_LITERAL.findall((REPO_ROOT / view_rel).read_text(encoding="utf-8")) for t in match if t)} - documented)
+        assert not missing, f"static data-testids in {', '.join(view_rels)} are missing from the product map elements for {route} (invisible to Assistant's docs indexer / /api/v1/manifest):\n" + "\n".join(f"  {t}" for t in missing)
 
 
 OWNED_PAGES = {
@@ -914,11 +859,7 @@ def test_registered_elements_render_on_their_route():
                 continue
             if not re.search(rf"['\"`]{re.escape(testid)}['\"`]", closure_text):
                 missing.setdefault(route, []).append(testid)
-    assert not missing, (
-        "registered elements that never render on their route (the product map "
-        "advertises a surface the page does not ship; drop or re-home the element):\n"
-        + "\n".join(f"  {route} -> {', '.join(testids)}" for route, testids in sorted(missing.items()))
-    )
+    assert not missing, "registered elements that never render on their route (the product map advertises a surface the page does not ship; drop or re-home the element):\n" + "\n".join(f"  {route} -> {', '.join(testids)}" for route, testids in sorted(missing.items()))
 
 
 def test_every_mapped_route_owns_a_component_closure():
@@ -940,15 +881,9 @@ def test_every_mapped_route_owns_a_component_closure():
     owned = set(OWNED_PAGES)
     aliases = set(_ROUTE_ALIAS_OWNERS)
     uncovered = sorted(path for path in _load_manifest()["routes"] if path not in owned and path not in aliases)
-    assert not uncovered, (
-        "mapped product routes with no OWNED_PAGES entry (exempt from both element-coverage "
-        "guards - register the owning view(s), or record a documented alias):\n"
-        + "\n".join(f"  {path}" for path in uncovered)
-    )
+    assert not uncovered, "mapped product routes with no OWNED_PAGES entry (exempt from both element-coverage guards - register the owning view(s), or record a documented alias):\n" + "\n".join(f"  {path}" for path in uncovered)
     stale_aliases = sorted(alias for alias, owner in _ROUTE_ALIAS_OWNERS.items() if owner not in owned)
-    assert not stale_aliases, "aliases point at routes that are themselves unowned:\n" + "\n".join(
-        f"  {alias} -> {_ROUTE_ALIAS_OWNERS[alias]}" for alias in stale_aliases
-    )
+    assert not stale_aliases, "aliases point at routes that are themselves unowned:\n" + "\n".join(f"  {alias} -> {_ROUTE_ALIAS_OWNERS[alias]}" for alias in stale_aliases)
 
 
 #: Deprecated compatibility URLs that render a component already owned by the
@@ -961,19 +896,9 @@ _ROUTE_ALIAS_OWNERS: dict[str, str] = {
 
 def test_every_non_auth_router_route_is_mapped():
     named = _named_routes()
-    manifest_names = {
-        entry["name"] for entry in _load_manifest()["routes"].values() if isinstance(entry, dict) and entry.get("name")
-    }
-    uncovered = sorted(
-        name
-        for name, info in named.items()
-        if name not in manifest_names and name not in NON_PRODUCT_ROUTES and info["renders"]
-    )
-    assert not uncovered, (
-        "frontend router pages with no product-map entry:\n"
-        + "\n".join(f"  {name}" for name in uncovered)
-        + "\nAdd each page to frontend/src/manifest.yaml or to NON_PRODUCT_ROUTES if it is auth/public/dev-only."
-    )
+    manifest_names = {entry["name"] for entry in _load_manifest()["routes"].values() if isinstance(entry, dict) and entry.get("name")}
+    uncovered = sorted(name for name, info in named.items() if name not in manifest_names and name not in NON_PRODUCT_ROUTES and info["renders"])
+    assert not uncovered, "frontend router pages with no product-map entry:\n" + "\n".join(f"  {name}" for name in uncovered) + "\nAdd each page to frontend/src/manifest.yaml or to NON_PRODUCT_ROUTES if it is auth/public/dev-only."
 
 
 # ---------------------------------------------------------------------------
@@ -1072,28 +997,17 @@ def _load_locale_object() -> dict:
 def test_sidebar_routes_have_navigation_icon_and_label():
     routes = _load_manifest()["routes"]
     uncovered = _nav_shared.nav_routes_missing_config(routes, set(_route_config_entries()))
-    assert not uncovered, (
-        "sidebar-linked manifest routes missing a routeConfigMap icon/labelKey "
-        "(nav falls back to a generic icon and an unresolved 'nav.<name>' label):\n"
-        + "\n".join(f"  {path} -> {name}" for path, name in sorted(uncovered))
-    )
+    assert not uncovered, "sidebar-linked manifest routes missing a routeConfigMap icon/labelKey (nav falls back to a generic icon and an unresolved 'nav.<name>' label):\n" + "\n".join(f"  {path} -> {name}" for path, name in sorted(uncovered))
 
 
 def test_navigation_config_keys_resolve_to_manifest_routes():
     stale = _nav_shared.dead_config_keys(_load_manifest()["routes"], set(_route_config_entries()))
-    assert not stale, (
-        "routeConfigMap entries with no corresponding manifest route (dead sidebar config):\n"
-        + "\n".join(f"  {name}" for name in stale)
-    )
+    assert not stale, "routeConfigMap entries with no corresponding manifest route (dead sidebar config):\n" + "\n".join(f"  {name}" for name in stale)
 
 
 def test_navigation_label_keys_resolve_in_default_locale():
     locale = _load_locale_object()
-    unresolved = {
-        name: label_key
-        for name, (_icon, label_key) in _route_config_entries().items()
-        if not _resolve_locale_path(locale, label_key)
-    }
+    unresolved = {name: label_key for name, (_icon, label_key) in _route_config_entries().items() if not _resolve_locale_path(locale, label_key)}
     manifest = _load_manifest()
     for group_id, group in manifest.get("sidebar_groups", {}).items():
         if not isinstance(group, dict):
@@ -1103,18 +1017,10 @@ def test_navigation_label_keys_resolve_in_default_locale():
             continue
         if not _resolve_locale_path(locale, label_key):
             unresolved[f"sidebar_group:{group_id}"] = label_key
-    assert not unresolved, (
-        "sidebar labelKeys that resolve to nothing in locales/en-US.js "
-        "(the sidebar would render the literal key string):\n"
-        + "\n".join(f"  {name} -> {key}" for name, key in sorted(unresolved.items()))
-    )
+    assert not unresolved, "sidebar labelKeys that resolve to nothing in locales/en-US.js (the sidebar would render the literal key string):\n" + "\n".join(f"  {name} -> {key}" for name, key in sorted(unresolved.items()))
 
 
 def test_navigation_icons_resolve_in_svg_icon_map():
     icon_map = _svg_icon_map_keys()
     unknown = {name: icon for name, (icon, _label_key) in _route_config_entries().items() if icon not in icon_map}
-    assert not unknown, (
-        "routeConfigMap icons missing from SvgIcon.vue's iconMap "
-        "(the sidebar renders a generic placeholder for these):\n"
-        + "\n".join(f"  {name} -> {icon}" for name, icon in sorted(unknown.items()))
-    )
+    assert not unknown, "routeConfigMap icons missing from SvgIcon.vue's iconMap (the sidebar renders a generic placeholder for these):\n" + "\n".join(f"  {name} -> {icon}" for name, icon in sorted(unknown.items()))

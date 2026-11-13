@@ -330,9 +330,7 @@ async def _seed_full_org(session: AsyncSession, slug: str = "acme") -> dict[str,
     eval_id = await _make_eval(session, org_id, pipeline_id, account_id)
     await _make_eval_result(session, org_id, eval_id, run_id, passed=True, evaluated_at=_BASE_TIME + timedelta(hours=5))
     await _make_eval_result(session, org_id, eval_id, run_id, passed=True, evaluated_at=_BASE_TIME + timedelta(hours=6))
-    await _make_eval_result(
-        session, org_id, eval_id, run_id, passed=False, evaluated_at=_BASE_TIME + timedelta(hours=7)
-    )
+    await _make_eval_result(session, org_id, eval_id, run_id, passed=False, evaluated_at=_BASE_TIME + timedelta(hours=7))
 
     first_event = await _make_audit_event(session, org_id, event_type="pipeline_created", created_at=_BASE_TIME)
     await _make_audit_event(
@@ -517,9 +515,7 @@ class TestSeededOrganisation:
 
 
 class TestMissingArtefactsAreLoud:
-    async def test_empty_org_surfaces_every_instance_artefact_as_absent(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_empty_org_surfaces_every_instance_artefact_as_absent(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(evidence_index_module, "get_version", lambda: "0.0.0-dev")
         org_id = await _make_org(session, "empty")
         await session.commit()
@@ -551,9 +547,7 @@ class TestMissingArtefactsAreLoud:
             assert entry.absence_reason
             assert entry.absence_reason.strip()
 
-    async def test_strict_mode_raises_and_names_the_missing_types(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_strict_mode_raises_and_names_the_missing_types(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(evidence_index_module, "get_version", lambda: "0.0.0-dev")
         org_id = await _make_org(session, "empty-strict")
         await session.commit()
@@ -597,12 +591,7 @@ class TestTenantIsolation:
         assert index.organisation_id == str(empty_org)
         # Only artefacts that are instance-wide or operator-supplied may be
         # non-absent for an org with no records of its own.
-        org_scoped_presence = {
-            entry.artifact_type
-            for entry in index.artifacts
-            if entry.status != STATUS_ABSENT
-            and entry.artifact_type not in {ARTIFACT_RELEASE_SBOM, ARTIFACT_BUILD_IDENTITY}
-        }
+        org_scoped_presence = {entry.artifact_type for entry in index.artifacts if entry.status != STATUS_ABSENT and entry.artifact_type not in {ARTIFACT_RELEASE_SBOM, ARTIFACT_BUILD_IDENTITY}}
         assert not org_scoped_presence
 
 
@@ -693,9 +682,7 @@ class TestHumanOnlyCountingMatchesTheProductRule:
 
 
 class TestHitlScanCorrectness:
-    async def test_truncated_scan_reports_lower_bounds(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_truncated_scan_reports_lower_bounds(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", 2)
         seeded = await _seed_full_org(session, slug="truncated")
         await session.commit()
@@ -762,9 +749,7 @@ class TestHitlScanBoundary:
 
     _LIMIT = 4
 
-    async def test_exactly_at_the_limit_the_counts_are_exact_and_untagged(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_exactly_at_the_limit_the_counts_are_exact_and_untagged(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", self._LIMIT)
         seeded = await _seed_full_org(session, slug="boundary-exact")
         await session.commit()
@@ -778,9 +763,7 @@ class TestHitlScanBoundary:
         assert entry.detail["human_only_gate_decisions"] == 3
         assert entry.detail["human_only_gate_approvals"] == 2
 
-    async def test_one_past_the_limit_truncates_and_reports_lower_bounds(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_one_past_the_limit_truncates_and_reports_lower_bounds(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(evidence_index_module, "_HITL_SCAN_LIMIT", self._LIMIT)
         seeded = await _seed_full_org(session, slug="boundary-plus-one")
         await _make_hitl(
@@ -882,9 +865,7 @@ class TestCollectorQueryScoping:
         assert entry.status == STATUS_PRESENT
         assert entry.identifiers == ("audit-chain-head:" + "b" * 64,)
 
-    async def test_a_collector_set_that_drifts_from_the_vocabulary_fails_loudly(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_a_collector_set_that_drifts_from_the_vocabulary_fails_loudly(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """A collector added/removed/renamed without updating the vocabulary is a bug.
 
         Serving the index anyway would leave a silent hole in the audit
@@ -1185,9 +1166,7 @@ class TestAuditPeriodScoping:
         )
 
         assert naively_scoped.period_from == aware_scoped.period_from
-        assert [entry.record_count for entry in naively_scoped.artifacts] == [
-            entry.record_count for entry in aware_scoped.artifacts
-        ]
+        assert [entry.record_count for entry in naively_scoped.artifacts] == [entry.record_count for entry in aware_scoped.artifacts]
 
     async def test_a_scoped_index_keeps_the_tenant_boundary(self, session: AsyncSession) -> None:
         mine = await _seed_full_org(session, slug="window-mine")

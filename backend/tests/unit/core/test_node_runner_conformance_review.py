@@ -425,9 +425,7 @@ async def test_gate_resume_foreign_decision_block_still_blocks(monkeypatch: pyte
         ConformanceRecheckResult(
             blocked=True,
             review_id="guardrail_conformance_g_block",
-            detail=(
-                "guardrail 'g_block' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"
-            ),
+            detail=("guardrail 'g_block' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"),
             state="absent",
             warned=False,
             claimed=True,
@@ -485,9 +483,7 @@ async def test_gate_warned_advisory_audits_and_continues(monkeypatch: pytest.Mon
         ConformanceRecheckResult(
             blocked=False,
             review_id=None,
-            detail=(
-                "guardrail 'g_warn' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"
-            ),
+            detail=("guardrail 'g_warn' requires capabilities ['sandbox.e2b'] which are no longer present (state=absent)"),
             state="absent",
             warned=True,
             claimed=True,
@@ -525,9 +521,7 @@ async def test_gate_zero_claim_result_continues(monkeypatch: pytest.MonkeyPatch)
     _set_ctx(monkeypatch)
     _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(
-            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
-        ),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -623,9 +617,7 @@ async def test_gate_forwards_node_def_to_check_node_start(monkeypatch: pytest.Mo
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(
-            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
-        ),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)
@@ -647,9 +639,7 @@ async def test_gate_absent_node_def_forwards_none(monkeypatch: pytest.MonkeyPatc
     _set_ctx(monkeypatch)
     check = _patch_check_node_start(
         monkeypatch,
-        ConformanceRecheckResult(
-            blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False
-        ),
+        ConformanceRecheckResult(blocked=False, review_id=None, detail="", state="present", warned=False, claimed=False),
     )
     audit = _patch_audit(monkeypatch)
     interrupt = _patch_interrupt(monkeypatch)

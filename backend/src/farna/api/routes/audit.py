@@ -316,15 +316,7 @@ async def _scan_body(
     pre-stream errors (validation/permission/database) as a proper HTTP status;
     it is re-emitted here so no event is lost.
     """
-    if format == "csv":
-        body = reemit_primed_stream(
-            stream,
-            first,
-            lambda item: _csv_stream_line(header=False, item=item),
-            header=_csv_stream_line(header=True),
-        )
-    else:
-        body = reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
+    body = reemit_primed_stream(stream, first, lambda item: _csv_stream_line(header=False, item=item), header=_csv_stream_line(header=True)) if format == "csv" else reemit_primed_stream(stream, first, lambda item: json.dumps(item) + "\n")
     async for chunk in body:
         yield chunk
 

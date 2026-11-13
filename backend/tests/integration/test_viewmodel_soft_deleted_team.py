@@ -40,16 +40,11 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": email.split("@", maxsplit=1)[0]},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
         )
     return account_id
@@ -64,19 +59,13 @@ async def _seed_soft_deleted_team(
     team_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings, "
-                "deleted_at) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, now())"
-            ),
+            text("INSERT INTO teams (id, organisation_id, name, account_id, notification_endpoints, settings, deleted_at) VALUES (:id, :oid, :name, :aid, '[]'::json, '{}'::json, now())"),
             {"id": str(team_id), "oid": str(org_id), "name": name, "aid": str(account_id)},
         )
         # Membership survives the team's soft delete (team_memberships is not
         # soft-deletable) — the gate stays visible to the team's members.
         await conn.execute(
-            text(
-                "INSERT INTO team_memberships (id, organisation_id, team_id, account_id, role) "
-                "VALUES (:id, :oid, :tid, :aid, 'viewer')"
-            ),
+            text("INSERT INTO team_memberships (id, organisation_id, team_id, account_id, role) VALUES (:id, :oid, :tid, :aid, 'viewer')"),
             {"id": str(uuid.uuid4()), "oid": str(org_id), "tid": str(team_id), "aid": str(account_id)},
         )
     return team_id
@@ -125,11 +114,7 @@ async def _seed_awaiting_human_run(
     now = datetime.now(UTC)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "input_hash, langgraph_thread_id, run_number, created_at) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'awaiting_human', :ih, :lt, 1, :ca)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, input_hash, langgraph_thread_id, run_number, created_at) VALUES (:id, :oid, :pid, :sid, 'manual', 'awaiting_human', :ih, :lt, 1, :ca)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -154,10 +139,7 @@ async def _seed_hitl_claim(
     claim_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, required_team_id, review_id, "
-                "pipeline_id, expires_at) VALUES (:id, :oid, :rid, :tid, 'gate-1', :pid, :exp)"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, required_team_id, review_id, pipeline_id, expires_at) VALUES (:id, :oid, :rid, :tid, 'gate-1', :pid, :exp)"),
             {
                 "id": str(claim_id),
                 "oid": str(org_id),
@@ -212,7 +194,4 @@ async def test_pending_hitl_required_team_name_survives_soft_deleted_team(
     matching = [p for p in pending if p["id"] == str(claim_id)]
     assert len(matching) == 1, f"the pending gate must surface for the team member, got {pending!r}"
     assert matching[0]["required_team_id"] == str(team_id)
-    assert matching[0]["required_team_name"] == "Far1653 Deleted Gate Team", (
-        "a soft-deleted required team's NAME must still render on the pending-HITL "
-        f"list, got {matching[0]['required_team_name']!r}"
-    )
+    assert matching[0]["required_team_name"] == "Far1653 Deleted Gate Team", f"a soft-deleted required team's NAME must still render on the pending-HITL list, got {matching[0]['required_team_name']!r}"

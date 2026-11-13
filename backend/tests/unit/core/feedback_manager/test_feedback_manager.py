@@ -116,9 +116,7 @@ class TestCreateFeedbackRecord:
         "handler_type",
         ["ai_correction", "ai_correction_with_human_review"],
     )
-    async def test_creates_with_handler_type(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str
-    ) -> None:
+    async def test_creates_with_handler_type(self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str) -> None:
         dummy = await self._dummy_record(handler_type)
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)),
@@ -139,9 +137,7 @@ class TestCreateFeedbackRecord:
         "handler_type",
         ["ai_correction", "ai_correction_with_human_review"],
     )
-    async def test_auto_triggers_correction(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str
-    ) -> None:
+    async def test_auto_triggers_correction(self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str) -> None:
         dummy = await self._dummy_record(handler_type)
         with (
             patch.object(mgr, "update_status", AsyncMock(return_value=dummy)) as mock_update,
@@ -161,9 +157,7 @@ class TestCreateFeedbackRecord:
             mock_spawn.assert_called_once_with(record.id)
 
     @pytest.mark.parametrize("reason", ["", "   "])
-    async def test_rejects_empty_rejection_reason(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, reason: str
-    ) -> None:
+    async def test_rejects_empty_rejection_reason(self, mock_session: AsyncMock, mgr: FeedbackManager, reason: str) -> None:
         with pytest.raises(ValidationError, match="rejection_reason must not be empty"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
@@ -200,9 +194,7 @@ class TestCreateFeedbackRecord:
             )
 
     @pytest.mark.parametrize("handler_type", ["", "auto", "ai_correction_human", "HUMAN"])
-    async def test_rejects_unknown_handler_type(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str
-    ) -> None:
+    async def test_rejects_unknown_handler_type(self, mock_session: AsyncMock, mgr: FeedbackManager, handler_type: str) -> None:
         with pytest.raises(ValidationError, match="unknown feedback_handler_type"):
             await mgr.create_feedback_record(
                 run_id=_RUN_ID,
@@ -243,9 +235,7 @@ class TestPaginationValidation:
             await mgr.get_feedback_records(page=page)
 
     @pytest.mark.parametrize("page_size", [0, -5])
-    async def test_rejects_page_size_below_one(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, page_size: int
-    ) -> None:
+    async def test_rejects_page_size_below_one(self, mock_session: AsyncMock, mgr: FeedbackManager, page_size: int) -> None:
         with pytest.raises(ValidationError, match="page_size must be >= 1"):
             await mgr.get_feedback_records(page_size=page_size)
 
@@ -264,9 +254,7 @@ class TestPaginationValidation:
 
 
 class TestPaginateUnscopedWarning:
-    async def test_warns_when_called_with_no_conditions(
-        self, mock_session: AsyncMock, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_warns_when_called_with_no_conditions(self, mock_session: AsyncMock, caplog: pytest.LogCaptureFixture) -> None:
         """Pagination with empty conditions is a tenant-scoping hazard — must log a warning."""
         import logging
 
@@ -335,9 +323,7 @@ class TestGetFeedbackRecords:
         mock_session.execute = AsyncMock(return_value=mock_result)
         return mock_result
 
-    async def test_returns_paginated_results(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_paginated_results(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records(page=1, page_size=20)
@@ -349,9 +335,7 @@ class TestGetFeedbackRecords:
         # A single row against a total of one: nothing follows.
         assert result["has_more"] is False
 
-    async def test_filters_by_status(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_filters_by_status(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records(status="pending")
@@ -366,9 +350,7 @@ class TestGetFeedbackRecords:
         assert result["total"] == 0
         assert not result["items"]
 
-    async def test_filters_by_pipeline_id(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_filters_by_pipeline_id(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records(pipeline_id=uuid.uuid4())
@@ -377,9 +359,7 @@ class TestGetFeedbackRecords:
         assert len(result["items"]) == 1
         assert any("feedback_records.run_id IN" in sql for sql in _executed_sql(mock_session))
 
-    async def test_applies_tenant_scope_filter(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_applies_tenant_scope_filter(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Every query must be scoped by organisation_id — no unscoped listing."""
         await self._setup_mock(mock_session, [sample_record], 1)
 
@@ -394,9 +374,7 @@ class TestGetFeedbackRecords:
 
 
 class TestGetFeedbackRecord:
-    async def test_returns_record_when_found(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_record_when_found(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = sample_record
         mock_session.execute = AsyncMock(return_value=mock_result)
@@ -415,9 +393,7 @@ class TestGetFeedbackRecord:
 
 
 class TestUpdateStatus:
-    async def test_updates_status_successfully(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_updates_status_successfully(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         updated = MagicMock(spec=FeedbackRecord)
         updated.id = sample_record.id
         updated.feedback_status = "routing"
@@ -431,9 +407,7 @@ class TestUpdateStatus:
         assert record is not None
         assert record.feedback_status == "routing"
 
-    async def test_rejects_invalid_transition(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_rejects_invalid_transition(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         fetch_result = MagicMock()
         fetch_result.scalar_one_or_none.return_value = sample_record
         mock_session.execute = AsyncMock(return_value=fetch_result)
@@ -449,9 +423,7 @@ class TestUpdateStatus:
         with pytest.raises(FeedbackRecordNotFoundError, match="not found"):
             await mgr.update_status(uuid.uuid4(), "routing")
 
-    async def test_raises_on_concurrent_modification(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_raises_on_concurrent_modification(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The UPDATE affects 0 rows when the status changed concurrently."""
         fetch_result = MagicMock()
         fetch_result.scalar_one_or_none.return_value = sample_record
@@ -462,9 +434,7 @@ class TestUpdateStatus:
         with pytest.raises(ConcurrentModificationError, match="status changed concurrently"):
             await mgr.update_status(sample_record.id, "routing")
 
-    async def test_rejects_transition_from_terminal_status(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_rejects_transition_from_terminal_status(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         sample_record.feedback_status = "resolved"
         fetch_result = MagicMock()
         fetch_result.scalar_one_or_none.return_value = sample_record
@@ -473,9 +443,7 @@ class TestUpdateStatus:
         with pytest.raises(InvalidTransitionError, match="Cannot transition"):
             await mgr.update_status(sample_record.id, "routing")
 
-    async def test_allows_pending_to_dismissed(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_allows_pending_to_dismissed(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The dismiss review action sets 'dismissed' (PRD 8.20) — pending may transition there."""
         updated = MagicMock(spec=FeedbackRecord)
         updated.id = sample_record.id
@@ -489,9 +457,7 @@ class TestUpdateStatus:
         record = await mgr.update_status(sample_record.id, "dismissed")
         assert record.feedback_status == "dismissed"
 
-    async def test_allows_escalated_to_dismissed(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_allows_escalated_to_dismissed(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Escalated records may still be dismissed (PRD 8.20)."""
         sample_record.feedback_status = "escalated"
         updated = MagicMock(spec=FeedbackRecord)
@@ -506,9 +472,7 @@ class TestUpdateStatus:
         record = await mgr.update_status(sample_record.id, "dismissed")
         assert record.feedback_status == "dismissed"
 
-    async def test_allows_routing_to_dismissed(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_allows_routing_to_dismissed(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The inbox shows the dismiss action for every record, and routing records appear
         in the inbox — dismiss must not 409 on them (FAR-233 review MAJOR-2)."""
         sample_record.feedback_status = "routing"
@@ -524,9 +488,7 @@ class TestUpdateStatus:
         record = await mgr.update_status(sample_record.id, "dismissed")
         assert record.feedback_status == "dismissed"
 
-    async def test_allows_correcting_to_dismissed(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_allows_correcting_to_dismissed(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Correcting records also surface in the inbox with a dismiss button — allow it."""
         sample_record.feedback_status = "correcting"
         updated = MagicMock(spec=FeedbackRecord)
@@ -541,9 +503,7 @@ class TestUpdateStatus:
         record = await mgr.update_status(sample_record.id, "dismissed")
         assert record.feedback_status == "dismissed"
 
-    async def test_dismissed_is_terminal(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_dismissed_is_terminal(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Once dismissed, no further transition is allowed (terminal state)."""
         sample_record.feedback_status = "dismissed"
         fetch_result = MagicMock()
@@ -555,9 +515,7 @@ class TestUpdateStatus:
 
 
 class TestLinkCorrectionRun:
-    async def test_links_correction_run(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_links_correction_run(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         correction_id = uuid.uuid4()
         updated = MagicMock(spec=FeedbackRecord)
         updated.id = sample_record.id
@@ -582,9 +540,7 @@ class TestLinkCorrectionRun:
         with pytest.raises(FeedbackRecordNotFoundError, match="not found"):
             await mgr.link_correction_run(uuid.uuid4(), uuid.uuid4())
 
-    async def test_raises_when_correcting_not_allowed(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_raises_when_correcting_not_allowed(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Records in terminal status (resolved) cannot be linked to a correction run."""
         sample_record.feedback_status = "resolved"
         fetch_result = MagicMock()
@@ -594,9 +550,7 @@ class TestLinkCorrectionRun:
         with pytest.raises(InvalidTransitionError, match="Cannot link correction run"):
             await mgr.link_correction_run(sample_record.id, uuid.uuid4())
 
-    async def test_raises_when_already_linked(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_raises_when_already_linked(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         sample_record.correction_run_id = uuid.uuid4()
         fetch_result = MagicMock()
         fetch_result.scalar_one_or_none.return_value = sample_record
@@ -605,9 +559,7 @@ class TestLinkCorrectionRun:
         with pytest.raises(ConcurrentModificationError, match="already has a correction run linked"):
             await mgr.link_correction_run(sample_record.id, uuid.uuid4())
 
-    async def test_raises_on_concurrent_modification(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_raises_on_concurrent_modification(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The guarded UPDATE affects 0 rows when status/correction_run_id changed concurrently."""
         correction_id = uuid.uuid4()
         fetch_result = MagicMock()
@@ -621,9 +573,7 @@ class TestLinkCorrectionRun:
 
 
 class TestDetectEvalGap:
-    async def test_returns_true_when_no_evals(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_true_when_no_evals(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         mock_session.execute = AsyncMock()
 
         is_gap = await mgr.detect_eval_gap(sample_record, eval_suite=[])
@@ -638,9 +588,7 @@ class TestDetectEvalGap:
         result.outcome = JudgeOutcome.PASS if passed else JudgeOutcome.FAIL
         return result
 
-    async def test_returns_false_when_eval_fails(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_false_when_eval_fails(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """A failing eval means NO gap — the eval caught the failure."""
         mock_eval_engine = MagicMock()
         mock_eval_engine.evaluate = MagicMock(return_value=await self._fake_eval_result(False))
@@ -654,9 +602,7 @@ class TestDetectEvalGap:
         assert sample_record.eval_gap is None
         mock_eval_engine.evaluate.assert_called_once()
 
-    async def test_an_error_outcome_is_not_asserted_as_an_eval_gap(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_an_error_outcome_is_not_asserted_as_an_eval_gap(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """A judge that produced no verdict is not evidence of an eval gap.
 
         ADR 066 D6/D18: an error is an instrument failure, excluded from the
@@ -679,9 +625,7 @@ class TestDetectEvalGap:
         assert is_gap is False
         assert sample_record.eval_gap is None
 
-    async def test_real_engine_judge_without_a_hub_is_not_an_eval_gap(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_real_engine_judge_without_a_hub_is_not_an_eval_gap(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Drive the REAL engine: a model_judge with no hub is ``outcome=error``.
 
         This is the discriminating version of the test above — a MagicMock
@@ -709,9 +653,7 @@ class TestDetectEvalGap:
         assert is_gap is False
         assert sample_record.eval_gap is None
 
-    async def test_model_judge_resolves_the_shared_judge_callable(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_model_judge_resolves_the_shared_judge_callable(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The feedback path uses the SAME resolver as pipeline/suite runs."""
         from farna.core.eval_engine import EvalDefinition, EvalType
         from farna.core.eval_engine.typed_judge import JudgeOutcome
@@ -742,9 +684,7 @@ class TestDetectEvalGap:
 
         assert mock_eval_engine.evaluate.call_args.kwargs["model_judge_callable"] is sentinel
 
-    async def test_returns_true_when_eval_passes(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_true_when_eval_passes(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Every eval passing means an eval gap: none caught the failure."""
         mock_eval_engine = MagicMock()
         mock_eval_engine.evaluate = MagicMock(side_effect=[await self._fake_eval_result(True)])
@@ -759,9 +699,7 @@ class TestDetectEvalGap:
         assert sample_record.eval_gap is True
         assert mock_eval_engine.evaluate.call_count == 2
 
-    async def test_skips_malformed_eval_defs(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_skips_malformed_eval_defs(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         mock_eval_engine = MagicMock()
         mock_eval_engine.evaluate = MagicMock(return_value=await self._fake_eval_result(True))
 
@@ -773,9 +711,7 @@ class TestDetectEvalGap:
         assert is_gap is True
         mock_eval_engine.evaluate.assert_not_called()
 
-    async def test_skips_eval_that_raises(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_skips_eval_that_raises(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """An eval that raises is treated as inconclusive — the loop continues."""
         mock_eval_engine = MagicMock()
         mock_eval_engine.evaluate = MagicMock(
@@ -793,9 +729,7 @@ class TestDetectEvalGap:
         assert is_gap is True
         assert sample_record.eval_gap is True
 
-    async def test_propagates_cancellation(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_propagates_cancellation(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """asyncio.CancelledError must propagate, not be swallowed by the generic except."""
         import asyncio
 
@@ -810,9 +744,7 @@ class TestDetectEvalGap:
             )
         assert sample_record.eval_gap is None
 
-    async def test_double_detection_is_idempotent(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_double_detection_is_idempotent(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Re-running gap detection on the same record keeps eval_gap True (idempotent read)."""
         mock_eval_engine = MagicMock()
         mock_eval_engine.evaluate = MagicMock(return_value=await self._fake_eval_result(True))
@@ -833,9 +765,7 @@ class TestDetectEvalGap:
         assert second is True
         assert sample_record.eval_gap is True
 
-    async def test_uses_real_eval_engine_standalone_path(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_uses_real_eval_engine_standalone_path(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """Gap detection exercises the standalone EvalEngine.evaluate() interface against
         the rejected output with real regex eval definitions (PRD 8.20 ¶Eval suite growth)."""
         from farna.core.eval_engine import EvalDefinition, EvalEngine, EvalType
@@ -872,9 +802,7 @@ class TestDetectEvalGap:
         assert no_gap is False
         assert failing_record.eval_gap is None
 
-    async def test_round_trips_orm_eval_definition_through_detect_gap(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_round_trips_orm_eval_definition_through_detect_gap(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         """The real ORM Eval shape (config_json, string eval_type) must survive
         detect_eval_gap — EvalEngine.evaluate reads eval_def.config, so the ORM row must
         be normalised to the DTO first, else every eval is swallowed as eval_gap=True
@@ -1091,9 +1019,7 @@ class TestGetFeedbackRecordsInbox:
         mock_session.execute = AsyncMock(return_value=mock_result)
         return mock_result
 
-    async def test_returns_paginated_inbox(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_paginated_inbox(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records_inbox(page=1, page_size=20)
@@ -1101,9 +1027,7 @@ class TestGetFeedbackRecordsInbox:
         assert result["total"] == 1
         assert len(result["items"]) == 1
 
-    async def test_filters_by_handler_type(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_filters_by_handler_type(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records_inbox(handler_type="human")
@@ -1118,18 +1042,14 @@ class TestGetFeedbackRecordsInbox:
         assert result["total"] == 0
         assert not result["items"]
 
-    async def test_filters_by_status_and_pipeline(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_filters_by_status_and_pipeline(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_feedback_records_inbox(status="pending", pipeline_id=uuid.uuid4())
         assert result["total"] == 1
         assert len(result["items"]) == 1
 
-    async def test_filters_by_date_range(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_filters_by_date_range(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         from datetime import UTC, datetime
 
         await self._setup_mock(mock_session, [sample_record], 1)
@@ -1145,9 +1065,7 @@ class TestGetFeedbackRecordsInbox:
         assert "feedback_records.created_at >=" in sql
         assert "feedback_records.created_at <=" in sql
 
-    async def test_includes_pipeline_map(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_includes_pipeline_map(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         sample_record.run_id = uuid.uuid4()
         count_result = MagicMock()
         count_result.scalar.return_value = 1
@@ -1183,9 +1101,7 @@ class TestGetEvalProposals:
         mock_session.execute = AsyncMock(return_value=mock_result)
         return mock_result
 
-    async def test_returns_proposals(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_returns_proposals(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         result = await mgr.get_eval_proposals(page=1, page_size=20)
@@ -1199,9 +1115,7 @@ class TestGetEvalProposals:
         assert result["total"] == 0
         assert not result["items"]
 
-    async def test_proposal_query_is_scoped_to_eval_gap_and_open_status(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_proposal_query_is_scoped_to_eval_gap_and_open_status(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         await self._setup_mock(mock_session, [sample_record], 1)
 
         await mgr.get_eval_proposals()
@@ -1266,18 +1180,14 @@ class TestRunPostCorrectionEval:
         ):
             await mgr.run_post_correction_eval(uuid.uuid4())
 
-    async def test_raises_when_not_in_correcting_status(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord
-    ) -> None:
+    async def test_raises_when_not_in_correcting_status(self, mock_session: AsyncMock, mgr: FeedbackManager, sample_record: FeedbackRecord) -> None:
         with (
             patch.object(mgr, "get_feedback_record", return_value=sample_record),
             pytest.raises(InvalidTransitionError, match="expected 'correcting'"),
         ):
             await mgr.run_post_correction_eval(sample_record.id)
 
-    async def test_raises_when_no_correction_run_linked(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, correcting_record: MagicMock
-    ) -> None:
+    async def test_raises_when_no_correction_run_linked(self, mock_session: AsyncMock, mgr: FeedbackManager, correcting_record: MagicMock) -> None:
         correcting_record.correction_run_id = None
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
@@ -1285,9 +1195,7 @@ class TestRunPostCorrectionEval:
         ):
             await mgr.run_post_correction_eval(correcting_record.id)
 
-    async def test_raises_when_correction_run_not_found(
-        self, mock_session: AsyncMock, mgr: FeedbackManager, correcting_record: MagicMock
-    ) -> None:
+    async def test_raises_when_correction_run_not_found(self, mock_session: AsyncMock, mgr: FeedbackManager, correcting_record: MagicMock) -> None:
         with (
             patch.object(mgr, "get_feedback_record", return_value=correcting_record),
             patch("farna.core.feedback_manager.get_run", return_value=None),
@@ -1341,9 +1249,7 @@ class TestRunPostCorrectionEval:
         correction_run.id = uuid.uuid4()
         correction_run.status = "complete"
         correction_run.outputs_json = {"node-a": {"summary": "corrected output"}}
-        correction_run.node_telemetry_json = {
-            "node-a": {"status": "completed", "agent_stdout": "console noise", "error_message": "boom"}
-        }
+        correction_run.node_telemetry_json = {"node-a": {"status": "completed", "agent_stdout": "console noise", "error_message": "boom"}}
 
         mock_eval_engine = MagicMock()
         mock_eval_result = MagicMock()
@@ -1560,9 +1466,7 @@ class TestRunPostCorrectionEval:
                 eval_engine=mock_eval_engine,
             )
 
-    async def test_escalate_raises_when_status_changed_concurrently(
-        self, mock_session: AsyncMock, mgr: FeedbackManager
-    ) -> None:
+    async def test_escalate_raises_when_status_changed_concurrently(self, mock_session: AsyncMock, mgr: FeedbackManager) -> None:
         """_escalate_record is atomic: 0 rows affected means the record left 'correcting'."""
         exec_result = MagicMock()
         exec_result.scalar_one_or_none.return_value = None

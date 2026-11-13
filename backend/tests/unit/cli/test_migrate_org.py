@@ -245,23 +245,17 @@ class TestValidateBundle:
         assert "'users' must be a JSON array" in errors[0]
 
     def test_row_not_a_dict_reports_error(self) -> None:
-        errors = _validate_bundle(
-            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": "u1"}, "not-a-row"]}
-        )
+        errors = _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": "u1"}, "not-a-row"]})
         assert any("'users' row 1" in e and "must be a JSON object" in e for e in errors)
 
     def test_non_string_row_id_reports_error(self) -> None:
-        errors = _validate_bundle(
-            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": 123, "email": "a@b.com"}]}
-        )
+        errors = _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": 123, "email": "a@b.com"}]})
         assert any("'id' must be a string" in e for e in errors)
 
     def test_null_row_id_is_accepted(self) -> None:
         # A row without a persistent id is re-created fresh on import; export
         # never emits one, but null is a legitimate structural shape.
-        assert not _validate_bundle(
-            {"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": None, "email": "a@b.com"}]}
-        )
+        assert not _validate_bundle({"__meta__": {"version": 1}, "organisation": {"id": "o1"}, "users": [{"id": None, "email": "a@b.com"}]})
 
     def test_multiple_problems_accumulate(self) -> None:
         errors = _validate_bundle(

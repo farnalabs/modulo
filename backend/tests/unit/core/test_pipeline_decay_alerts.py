@@ -472,11 +472,7 @@ def test_health_query_filters_to_webhook_terminal_runs_in_the_window() -> None:
     from farna.db.models.run import TERMINAL_STATUSES
 
     since = datetime(2026, 10, 25, 10, 0, tzinfo=UTC)
-    sql = str(
-        decay.build_health_query(since=since).compile(
-            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
-        )
-    )
+    sql = str(decay.build_health_query(since=since).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
 
     assert "runs.trigger_type = 'webhook'" in sql
     assert "runs.completed_at >=" in sql

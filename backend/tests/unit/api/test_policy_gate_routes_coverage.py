@@ -587,10 +587,7 @@ def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str,
     """
     pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
     model_fields = list(evals_routes.PolicyGateUpdateRequest.model_fields)
-    assert sorted(pinned) == sorted(model_fields), (
-        "PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every "
-        f"mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
-    )
+    assert sorted(pinned) == sorted(model_fields), f"PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
     return {field: pinned[field] for field in model_fields}
 
 

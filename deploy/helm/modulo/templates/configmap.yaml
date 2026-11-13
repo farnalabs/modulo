@@ -6,13 +6,13 @@ metadata:
   labels:
     {{- include "farna-control.labels" . | nindent 4 }}
 data:
-  MODULO_DB: "{{ .Values.backend.env.MODULO_DB | default "postgres" }}"
-  MODULO_LOG_LEVEL: "{{ .Values.backend.env.MODULO_LOG_LEVEL | default "info" }}"
+  FARNA_CONTROL_DB: "{{ .Values.backend.env.FARNA_CONTROL_DB | default "postgres" }}"
+  FARNA_CONTROL_LOG_LEVEL: "{{ .Values.backend.env.FARNA_CONTROL_LOG_LEVEL | default "info" }}"
   MODULO_ENV: "{{ .Values.backend.env.MODULO_ENV | default "production" }}"
-  MODULO_PUBLIC_URL: "{{ .Values.backend.env.MODULO_PUBLIC_URL | default "http://localhost:8000" }}"
-  MODULO_MAX_LOCAL_CONCURRENCY: "{{ .Values.backend.env.MODULO_MAX_LOCAL_CONCURRENCY | default "2" }}"
+  FARNA_CONTROL_PUBLIC_URL: "{{ .Values.backend.env.FARNA_CONTROL_PUBLIC_URL | default "http://localhost:8000" }}"
+  FARNA_CONTROL_MAX_LOCAL_CONCURRENCY: "{{ .Values.backend.env.FARNA_CONTROL_MAX_LOCAL_CONCURRENCY | default "2" }}"
   CORS_ORIGINS: "{{ .Values.backend.env.CORS_ORIGINS | default "http://localhost:5173" }}"
-  MODULO_PLUGIN_DISCOVERY: "{{ .Values.backend.env.MODULO_PLUGIN_DISCOVERY | default "false" }}"
+  FARNA_CONTROL_PLUGIN_DISCOVERY: "{{ .Values.backend.env.FARNA_CONTROL_PLUGIN_DISCOVERY | default "false" }}"
   {{- if .Values.workspaceNetworkPolicy.enabled }}
   # FAR-2068 enforcement contract: present ONLY when the chart renders the
   # workspace egress NetworkPolicy below. The backend gates the Kubernetes

@@ -124,19 +124,9 @@ def _real_attestation_payload(sha256: str) -> list[dict[str, Any]]:
                             "digest": {"sha256": sha256},
                         }
                     ],
-                    "predicate": {
-                        "buildDefinition": {
-                            "buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"
-                        }
-                    },
+                    "predicate": {"buildDefinition": {"buildType": "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1"}},
                 },
-                "signature": {
-                    "certificate": {
-                        "subjectAlternativeName": (
-                            "https://github.com/farnalabs/modulo/.github/workflows/release-unified.yml@refs/tags/v0.1.0-rc1"
-                        )
-                    }
-                },
+                "signature": {"certificate": {"subjectAlternativeName": ("https://github.com/farnalabs/modulo/.github/workflows/release-unified.yml@refs/tags/v0.1.0-rc1")}},
                 "verifiedTimestamps": [
                     {
                         "type": "Tlog",
@@ -144,11 +134,7 @@ def _real_attestation_payload(sha256: str) -> list[dict[str, Any]]:
                         "timestamp": "2026-11-08T00:00:00Z",
                     }
                 ],
-                "verifiedIdentity": {
-                    "subjectAlternativeName": (
-                        "https://github.com/farnalabs/modulo/.github/workflows/release-unified.yml@refs/tags/v0.1.0-rc1"
-                    )
-                },
+                "verifiedIdentity": {"subjectAlternativeName": ("https://github.com/farnalabs/modulo/.github/workflows/release-unified.yml@refs/tags/v0.1.0-rc1")},
             },
         }
     ]
@@ -276,13 +262,7 @@ def test_render_helper_fails_when_no_modulo_image_line_exists(tmp_path: Path) ->
 
 def test_render_helper_refuses_multiple_modulo_image_lines(tmp_path: Path) -> None:
     compose_file = tmp_path / "docker-compose.prod.yml"
-    original = (
-        "services:\n"
-        "  modulo:\n"
-        "    image: ghcr.io/farnalabs/modulo:v1.0.0\n"
-        "  worker:\n"
-        "    image: ghcr.io/farnalabs/modulo:v1.0.0\n"
-    )
+    original = "services:\n  modulo:\n    image: ghcr.io/farnalabs/modulo:v1.0.0\n  worker:\n    image: ghcr.io/farnalabs/modulo:v1.0.0\n"
     compose_file.write_text(original, encoding="utf-8")
 
     with pytest.raises(ValueError, match="expected exactly one modulo image to render, found 2"):
@@ -589,12 +569,7 @@ def test_macos_staple_retry_workflow_exists_and_is_dispatch_and_scheduled() -> N
 
 def test_macos_staple_retry_invokes_the_idempotent_helper() -> None:
     workflow = _staple_retry_workflow()
-    run_scripts = [
-        step["run"]
-        for job in workflow["jobs"].values()
-        for step in job.get("steps", [])
-        if isinstance(step.get("run"), str)
-    ]
+    run_scripts = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if isinstance(step.get("run"), str)]
     combined = "\n".join(run_scripts)
 
     assert "scripts/macos/staple-and-verify.sh" in combined, "the workflow must run the staple helper"
@@ -668,9 +643,7 @@ def test_macos_staple_retry_republish_is_consistency_driven() -> None:
     # Regression pin: gating the publish job on the staple result is what left a
     # partial upload permanently unrepaired - the next run's staple is a no-op
     # `unchanged`, so nothing ever regenerated the stale metadata.
-    assert "needs.staple.outputs.changed" not in condition, (
-        "publication must be driven by metadata consistency, not by whether this run stapled"
-    )
+    assert "needs.staple.outputs.changed" not in condition, "publication must be driven by metadata consistency, not by whether this run stapled"
 
     detect = _step(workflow, "publish-stapled", "Detect whether the release metadata matches its artefacts")
     script = detect["run"]
@@ -684,9 +657,7 @@ def test_macos_staple_retry_republish_is_consistency_driven() -> None:
         "Publish the stapled DMG(s) and refreshed manifest",
     ):
         step = _step(workflow, "publish-stapled", step_name)
-        assert "needs_republish == 'true'" in str(step.get("if", "")), (
-            f"{step_name!r} must only run when the metadata disagrees with the artefacts"
-        )
+        assert "needs_republish == 'true'" in str(step.get("if", "")), f"{step_name!r} must only run when the metadata disagrees with the artefacts"
 
 
 def test_macos_staple_retry_verifies_the_published_metadata() -> None:
@@ -729,9 +700,7 @@ def test_macos_staple_retry_records_and_honours_a_completion_marker() -> None:
     for reset in ('version=""', 'release_tag=""', 'architectures=""', 'run_id=""'):
         assert reset in completion_branch, f"the completion branch must blank {reset}"
     staple_condition = " ".join(str(workflow["jobs"]["staple"]["if"]).split())
-    assert "needs.resolve-target.outputs.completed != 'true'" in staple_condition, (
-        "the staple job must gate on the resolve job's completed output"
-    )
+    assert "needs.resolve-target.outputs.completed != 'true'" in staple_condition, "the staple job must gate on the resolve job's completed output"
     assert "needs.resolve-target.outputs.architectures != ''" in staple_condition
 
     record = _step(workflow, "publish-stapled", "Record the verified staple state on the release")
@@ -799,9 +768,7 @@ def test_macos_staple_marker_records_only_the_architectures_this_run_verified(tm
     arm = by_name[f"Modulo-{version}-macos-arm64.dmg"]
     x86 = by_name[f"Modulo-{version}-macos-x86_64.dmg"]
     assert arm["staple_verified"] is True
-    assert x86["staple_verified"] is False, (
-        "a single-architecture run must never record the other DMG as staple-verified"
-    )
+    assert x86["staple_verified"] is False, "a single-architecture run must never record the other DMG as staple-verified"
     assert arm["sha256"] == hashlib.sha256(arm_bytes).hexdigest()
     assert x86["sha256"] == hashlib.sha256(x86_bytes).hexdigest()
 
@@ -943,12 +910,7 @@ def test_release_unified_staple_dispatch_is_non_fatal() -> None:
 
 def test_macos_staple_retry_python_heredocs_compile() -> None:
     workflow = _staple_retry_workflow()
-    scripts = [
-        step["run"]
-        for job in workflow["jobs"].values()
-        for step in job.get("steps", [])
-        if isinstance(step.get("run"), str) and "<<'PY'" in step["run"]
-    ]
+    scripts = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if isinstance(step.get("run"), str) and "<<'PY'" in step["run"]]
     assert scripts, "the staple retry workflow must embed its Python logic"
     for script in scripts:
         compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
@@ -956,12 +918,7 @@ def test_macos_staple_retry_python_heredocs_compile() -> None:
 
 def test_macos_staple_retry_manifest_heredoc_compiles_as_python() -> None:
     workflow = _staple_retry_workflow()
-    scripts = [
-        step["run"]
-        for job in workflow["jobs"].values()
-        for step in job.get("steps", [])
-        if isinstance(step.get("run"), str) and "build_release_manifest" in step["run"]
-    ]
+    scripts = [step["run"] for job in workflow["jobs"].values() for step in job.get("steps", []) if isinstance(step.get("run"), str) and "build_release_manifest" in step["run"]]
     assert scripts, "the republish job must regenerate the signed manifest"
     for script in scripts:
         compile(_python_heredoc(script, "PY"), str(STAPLE_RETRY_WORKFLOW), "exec")
@@ -970,11 +927,7 @@ def test_macos_staple_retry_manifest_heredoc_compiles_as_python() -> None:
 def test_release_unified_dispatches_the_staple_retry() -> None:
     workflow = yaml.safe_load(_release_workflow_text())
 
-    dispatch_jobs = [
-        job_id
-        for job_id, job in workflow["jobs"].items()
-        if any("macos-staple-retry.yml" in str(step.get("run", "")) for step in job.get("steps", []))
-    ]
+    dispatch_jobs = [job_id for job_id, job in workflow["jobs"].items() if any("macos-staple-retry.yml" in str(step.get("run", "")) for step in job.get("steps", []))]
     assert dispatch_jobs, "release-unified must consume the staple retry path"
     dispatch_job = workflow["jobs"][dispatch_jobs[0]]
     assert "publish-release" in dispatch_job["needs"]
@@ -1030,9 +983,7 @@ def test_final_release_manifest_timeout_fits_the_large_macos_installers() -> Non
 
 def test_final_release_manifest_hashes_each_artefact_without_loading_it_into_memory() -> None:
     workflow = _release_workflow()
-    script = _step(workflow, "final-release-manifest", "Build final signed manifest after every platform artifact")[
-        "run"
-    ]
+    script = _step(workflow, "final-release-manifest", "Build final signed manifest after every platform artifact")["run"]
 
     # Reading a ~400 MB DMG with read_bytes() holds the whole blob in memory;
     # the manifest hashes them one at a time, streaming a single chunk.
@@ -1308,9 +1259,7 @@ def test_release_schema_freshness_proof_is_wired_into_both_jobs() -> None:
     assert release_step["env"]["CUT_SHA"] == "${{ steps.cut-commit.outputs.cut_sha }}"
 
 
-def test_release_schema_freshness_proof_dispatches_ci_for_the_exact_commit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_dispatches_ci_for_the_exact_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     gh = _fake_gh(
         calls,
@@ -1338,9 +1287,7 @@ def test_release_schema_freshness_proof_dispatches_ci_for_the_exact_commit(
     assert "refs/tags/" + dispatch[4] in deletes[0][3]
 
 
-def test_release_schema_freshness_proof_does_not_read_an_unrelated_run_as_absence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_does_not_read_an_unrelated_run_as_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The observed failure shape: the commit's only ci.yml run is a re-run of
     # one unrelated failed job, so it has no Schema freshness job at all.
     # That run is not evidence the gate failed - the proof must dispatch a
@@ -1370,9 +1317,7 @@ def test_release_schema_freshness_proof_does_not_read_an_unrelated_run_as_absenc
     assert "Schema freshness passed on exact target " + _SCHEMA_PROOF_TARGET in stdout
 
 
-def test_release_schema_freshness_proof_waits_for_a_pending_run_without_duplicating(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_waits_for_a_pending_run_without_duplicating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pending_run = {"databaseId": 12, "status": "in_progress", "conclusion": None}
     calls: list[list[str]] = []
     gh = _fake_gh(
@@ -1392,9 +1337,7 @@ def test_release_schema_freshness_proof_waits_for_a_pending_run_without_duplicat
     assert "Schema freshness passed on exact target " + _SCHEMA_PROOF_TARGET in stdout
 
 
-def test_release_schema_freshness_proof_fails_closed_on_a_red_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_fails_closed_on_a_red_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     gh = _fake_gh(
         calls,
@@ -1410,9 +1353,7 @@ def test_release_schema_freshness_proof_fails_closed_on_a_red_job(
     assert not _tag_calls(calls), "a red gate must never create a verification tag"
 
 
-def test_release_schema_freshness_proof_times_out_and_cleans_up_the_tag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_times_out_and_cleans_up_the_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     gh = _fake_gh(calls, runs=[], jobs={}, runs_after_dispatch=[], jobs_after_dispatch={})
 
@@ -1425,9 +1366,7 @@ def test_release_schema_freshness_proof_times_out_and_cleans_up_the_tag(
     assert deletes, "a timed-out proof must still delete the temporary verification tag"
 
 
-def test_release_schema_freshness_proof_fails_closed_when_the_query_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_fails_closed_when_the_query_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A failed query is never evidence of absence.
     calls: list[list[str]] = []
     gh = _fake_gh(calls, runs=[], jobs={}, list_returncode=1)
@@ -1440,9 +1379,7 @@ def test_release_schema_freshness_proof_fails_closed_when_the_query_fails(
     assert not _dispatches(calls)
 
 
-def test_release_schema_freshness_proof_requires_a_successful_run_not_only_a_green_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_requires_a_successful_run_not_only_a_green_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A green Schema freshness job inside a run that concluded red is not proof
     # the commit's CI passed: the whole run must be a success.
     calls: list[list[str]] = []
@@ -1460,9 +1397,7 @@ def test_release_schema_freshness_proof_requires_a_successful_run_not_only_a_gre
     assert not _tag_calls(calls), "a red run must never be turned into a verification tag"
 
 
-def test_release_schema_freshness_proof_tolerates_a_lost_create_response(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_tolerates_a_lost_create_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tag = "ci-verify-" + _SCHEMA_PROOF_TARGET[:12] + "-4242"
     calls: list[list[str]] = []
     gh = _fake_gh(
@@ -1484,9 +1419,7 @@ def test_release_schema_freshness_proof_tolerates_a_lost_create_response(
     assert deletes, "a tag that existed must still be deleted"
 
 
-def test_release_schema_freshness_proof_fails_when_the_tag_was_not_created(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_release_schema_freshness_proof_fails_when_the_tag_was_not_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
     gh = _fake_gh(calls, runs=[], jobs={}, create_returncode=1, existing_tags=[])
 
@@ -1535,11 +1468,7 @@ def test_release_schema_gate_cleanup_reclaims_this_runs_tags(tmp_path: Path, mon
 
 def test_changelog_base_resolution_ignores_helper_tags() -> None:
     # A leaked ci-verify-* helper tag must never become the changelog base.
-    describes = [
-        line
-        for line in _release_workflow_text().splitlines()
-        if "git describe --tags" in line and not line.lstrip().startswith("#")
-    ]
+    describes = [line for line in _release_workflow_text().splitlines() if "git describe --tags" in line and not line.lstrip().startswith("#")]
     assert len(describes) >= 3
     for line in describes:
         assert "--match 'v*'" in line, line

@@ -219,11 +219,7 @@ _GUARDED_CALLS = ("replace_pipeline_graph", "rollback_to_snapshot")
 
 
 def _guarded_calls(tree: ast.AST) -> list[ast.Call]:
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _GUARDED_CALLS
-    ]
+    return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _GUARDED_CALLS]
 
 
 def _actor_kwarg(node: ast.Call) -> ast.Call | None:
@@ -295,9 +291,7 @@ def test_mcp_call_site_passes_literal_mcp_caller_type() -> None:
     for node in replace_calls:
         actor = _actor_kwarg(node)
         if actor is None:
-            violations.append(
-                f"api/mcp_server.py:{node.lineno}: replace_pipeline_graph() has no actor=GraphWriteActor(...)"
-            )
+            violations.append(f"api/mcp_server.py:{node.lineno}: replace_pipeline_graph() has no actor=GraphWriteActor(...)")
             continue
         caller_type = next((kw for kw in actor.keywords if kw.arg == "caller_type"), None)
         if caller_type is None or not isinstance(caller_type.value, ast.Constant) or caller_type.value.value != "mcp":

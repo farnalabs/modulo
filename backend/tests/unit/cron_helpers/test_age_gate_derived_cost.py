@@ -117,10 +117,7 @@ def _row(
     heartbeat_at: datetime | None = STARTED + timedelta(hours=2),
     completed_at: datetime | None = STARTED + timedelta(hours=3),
     code: str | None = ch._NO_PROGRESS_ERROR_CODE,
-    detail: str | None = (
-        "No node progress within the 135m age bound "
-        "(dispatcher_reconcile age gate; node_attempts=1, claims=2, dispatch_phase=unknown)"
-    ),
+    detail: str | None = ("No node progress within the 135m age bound (dispatcher_reconcile age gate; node_attempts=1, claims=2, dispatch_phase=unknown)"),
 ) -> tuple[Any, Any, Any, Any, Any]:
     return (started_at, heartbeat_at, completed_at, code, detail)
 

@@ -57,9 +57,7 @@ def _run_row(
 
 
 class TestGuardedStatusWrite:
-    async def test_parked_run_is_not_flipped_to_claimed(
-        self, sqlite_runs_engine, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_parked_run_is_not_flipped_to_claimed(self, sqlite_runs_engine, caplog: pytest.LogCaptureFixture) -> None:
         org_id = uuid.uuid4()
         run_id = uuid.uuid4()
         factory = async_sessionmaker(sqlite_runs_engine, expire_on_commit=False)

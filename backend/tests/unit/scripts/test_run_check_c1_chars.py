@@ -46,9 +46,7 @@ def test_clean_workflow_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert mod.main() == 0
 
 
-def test_c1_char_in_yml_workflow_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
+def test_c1_char_in_yml_workflow_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     workflows = _use_tmp_workflows_dir(tmp_path, monkeypatch)
     (workflows / "ci.yml").write_bytes(b"name: ci\n" + _NEL + b"\n")
     assert mod.main() == 1
@@ -57,9 +55,7 @@ def test_c1_char_in_yml_workflow_fails(
     assert "ci.yml" in err
 
 
-def test_c1_char_in_yaml_workflow_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
+def test_c1_char_in_yaml_workflow_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     workflows = _use_tmp_workflows_dir(tmp_path, monkeypatch)
     (workflows / "ci.yaml").write_bytes(b"name: ci\n" + _NEL + b"\n")
     assert mod.main() == 1
@@ -68,9 +64,7 @@ def test_c1_char_in_yaml_workflow_fails(
     assert "ci.yaml" in err
 
 
-def test_nested_workflow_is_scanned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
+def test_nested_workflow_is_scanned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     workflows = _use_tmp_workflows_dir(tmp_path, monkeypatch)
     subdir = workflows / "subdir"
     subdir.mkdir()
@@ -79,9 +73,7 @@ def test_nested_workflow_is_scanned(
     assert "deploy.yml" in capsys.readouterr().err
 
 
-def test_utf8_bom_in_workflow_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-):
+def test_utf8_bom_in_workflow_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     workflows = _use_tmp_workflows_dir(tmp_path, monkeypatch)
     (workflows / "ci.yml").write_bytes(b"\xef\xbb\xbfname: ci\n")
     assert mod.main() == 1

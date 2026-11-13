@@ -396,9 +396,7 @@ def test_stamp_guardrail_blocked_run_marks_terminal_eval_failed() -> None:
     fingerprint block — is stamped TERMINAL (eval_failed), never dispatched
     to the executor, never auto-retried."""
     run = MagicMock()
-    message = (
-        "policy gate mechanism error: snapshot policy-gate pin fingerprint mismatch (remediation: create a new run)"
-    )
+    message = "policy gate mechanism error: snapshot policy-gate pin fingerprint mismatch (remediation: create a new run)"
     _stamp_guardrail_blocked_run(run, message)
     assert run.status == "eval_failed"
     assert run.error_code == "eval_blocked"
@@ -443,9 +441,7 @@ async def test_guardrail_override_refuses_pin_mismatch_runs(
         guardrail_override,
     )
 
-    mismatch_detail = (
-        f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} (… remediation: create a new run)"
-    )
+    mismatch_detail = f"policy gate mechanism error: {POLICY_GATE_PIN_MISMATCH_MARKER} (… remediation: create a new run)"
     run = _override_run(error_detail=mismatch_detail)
     session = _override_session(run)
     load_rows = AsyncMock(return_value=[])
@@ -1000,11 +996,7 @@ def test_raw_insert_omitting_enabled_at_takes_the_server_default() -> None:
         }
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                    "action, version, enabled) "
-                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1)"
-                ),
+                text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version, enabled) VALUES (:i, :o, :e, :n, 'warn', 1, 1)"),
                 ids,
             )
             enabled_at = conn.execute(
@@ -1022,11 +1014,7 @@ def test_schema_policy_gate_enabled_timestamps_check_on_model() -> None:
     match the shipped post-0272 contract (FAR-967 F1)."""
     from sqlalchemy import CheckConstraint
 
-    checks = [
-        c
-        for c in PolicyGate.__table_args__
-        if isinstance(c, CheckConstraint) and c.name == "ck_policy_gates_enabled_timestamps"
-    ]
+    checks = [c for c in PolicyGate.__table_args__ if isinstance(c, CheckConstraint) and c.name == "ck_policy_gates_enabled_timestamps"]
     assert len(checks) == 1, "PolicyGate model must declare ck_policy_gates_enabled_timestamps"
     predicate = str(checks[0].sqltext)
     assert "enabled AND enabled_at IS NOT NULL AND disabled_at IS NULL" in predicate
@@ -1053,11 +1041,7 @@ def test_sqlite_create_all_enforces_enabled_timestamps_check() -> None:
         }
         with pytest.raises(IntegrityError), engine.begin() as conn:
             conn.execute(
-                text(
-                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                    "action, version, enabled, enabled_at, disabled_at) "
-                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1, NULL, NULL)"
-                ),
+                text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version, enabled, enabled_at, disabled_at) VALUES (:i, :o, :e, :n, 'warn', 1, 1, NULL, NULL)"),
                 invalid,
             )
         valid = {
@@ -1068,11 +1052,7 @@ def test_sqlite_create_all_enforces_enabled_timestamps_check() -> None:
         }
         with engine.begin() as conn:
             conn.execute(
-                text(
-                    "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, "
-                    "action, version, enabled, enabled_at, disabled_at) "
-                    "VALUES (:i, :o, :e, :n, 'warn', 1, 1, '2026-01-01 00:00:00', NULL)"
-                ),
+                text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action, version, enabled, enabled_at, disabled_at) VALUES (:i, :o, :e, :n, 'warn', 1, 1, '2026-01-01 00:00:00', NULL)"),
                 valid,
             )
     finally:

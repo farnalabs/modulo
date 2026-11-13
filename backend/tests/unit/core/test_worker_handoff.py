@@ -451,9 +451,7 @@ def test_base_worker_settings_installs_shutdown_handoff_hook(
     assert asyncio.iscoroutinefunction(sw._shutdown_handoff_hook)
 
 
-async def test_shutdown_handoff_hook_swallows_errors(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_shutdown_handoff_hook_swallows_errors(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Fail-open with a LOUD log: a handback failure must never fail shutdown.
 
     An exception escaping the hook would surface as a worker crash instead of
@@ -472,9 +470,7 @@ async def test_shutdown_handoff_hook_swallows_errors(
     assert any("shutdown_handoff_failed" in r.message for r in caplog.records)
 
 
-async def test_shutdown_handoff_hook_logs_handed_back_count(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_shutdown_handoff_hook_logs_handed_back_count(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
     async def _ok(_engine: object) -> dict[str, int]:
@@ -507,9 +503,7 @@ async def test_shutdown_handoff_hook_propagates_cancelled_error(
         await sw._shutdown_handoff_hook({})
 
 
-async def test_shutdown_handoff_hook_stays_quiet_when_nothing_handed_back(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_shutdown_handoff_hook_stays_quiet_when_nothing_handed_back(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Nothing released and nothing terminalised: no shutdown summary WARNING.
 
     The summary line is emitted only when a run actually moved
@@ -648,9 +642,7 @@ async def test_handback_terminalises_observed_activity(monkeypatch: pytest.Monke
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
-    monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(observed_activity=True), {"nodes": [{"id": "n1"}]})
-    )
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(observed_activity=True), {"nodes": [{"id": "n1"}]}))
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     fail = AsyncMock(return_value=True)
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", fail)
@@ -672,9 +664,7 @@ async def test_handback_terminal_fenced_out_books_no_cost(monkeypatch: pytest.Mo
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
-    monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
-    )
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]}))
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(return_value=False))
     book_cost = AsyncMock()
@@ -688,9 +678,7 @@ async def test_handback_terminal_write_fenced_out_counts_skipped(monkeypatch: py
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
-    monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
-    )
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]}))
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(return_value=False))
     result = await handback_inflight_runs(engine, registry=reg)
@@ -701,9 +689,7 @@ async def test_handback_terminal_write_error_counts_skipped(monkeypatch: pytest.
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
-    monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
-    )
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]}))
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(side_effect=RuntimeError("db down")))
     result = await handback_inflight_runs(engine, registry=reg)
@@ -714,9 +700,7 @@ async def test_handback_terminal_cancelled_error_propagates(monkeypatch: pytest.
     run_id, org_id = uuid.uuid4(), uuid.uuid4()
     reg = _observed_registry(run_id, org_id)
     engine = _handback_engine()
-    monkeypatch.setattr(
-        wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]})
-    )
+    monkeypatch.setattr(wh, "_load_handback_row", _load_returning(_row(), {"nodes": [{"id": "n1", "idempotent": False}]}))
     monkeypatch.setattr(row_lock, "set_mutation_row_lock_timeout", AsyncMock())
     monkeypatch.setattr(pipeline_execution, "fail_run_terminal", AsyncMock(side_effect=asyncio.CancelledError))
     with pytest.raises(asyncio.CancelledError):

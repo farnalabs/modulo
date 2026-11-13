@@ -110,18 +110,14 @@ async def _consume_with_own_tx(
 
 
 class TestBudgetWallet:
-    async def test_within_budget_spend_allowed_and_recorded(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_within_budget_spend_allowed_and_recorded(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         allowed = await _consume_with_own_tx(sessionmakers, n=4)
         assert allowed
 
         async with sessionmakers() as session:
             assert await _recorded_used(session, _ORG_ID) == 4
 
-    async def test_exact_limit_spend_is_the_last_allowed(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_exact_limit_spend_is_the_last_allowed(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         assert await _consume_with_own_tx(sessionmakers, n=6)
         assert await _consume_with_own_tx(sessionmakers, n=4)
         assert not await _consume_with_own_tx(sessionmakers, n=1)
@@ -129,9 +125,7 @@ class TestBudgetWallet:
         async with sessionmakers() as session:
             assert await _recorded_used(session, _ORG_ID) == 10
 
-    async def test_exceeding_spend_denied_and_not_recorded(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_exceeding_spend_denied_and_not_recorded(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         assert await _consume_with_own_tx(sessionmakers, n=8)
 
         allowed = await _consume_with_own_tx(sessionmakers, n=5)
@@ -140,9 +134,7 @@ class TestBudgetWallet:
         async with sessionmakers() as session:
             assert await _recorded_used(session, _ORG_ID) == 8
 
-    async def test_first_spend_of_window_over_limit_is_denied(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_first_spend_of_window_over_limit_is_denied(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         # Empty-window path: a spend larger than the whole budget is denied
         # by the insert arm (SELECT ... WHERE :n <= :limit), not only the
         # conflict arm.
@@ -151,9 +143,7 @@ class TestBudgetWallet:
         async with sessionmakers() as session:
             assert await _recorded_used(session, _ORG_ID) == 0
 
-    async def test_zero_and_negative_spend_vacuously_allowed(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_zero_and_negative_spend_vacuously_allowed(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         assert await _consume_with_own_tx(sessionmakers, n=0)
         assert await _consume_with_own_tx(sessionmakers, n=-3)
 
@@ -200,9 +190,7 @@ class TestBudgetWallet:
             assert rows[window_a.isoformat()] == 10
             assert rows[window_b.isoformat()] == 1
 
-    async def test_interleaved_consumes_never_oversubscribe(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_interleaved_consumes_never_oversubscribe(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         # Four independent sessions each try to consume 3 against a limit of
         # 10. A read-then-write guard could admit all four (12); the atomic
         # statement admits at most three (9) — each rejected consume sees the
@@ -216,9 +204,7 @@ class TestBudgetWallet:
         async with sessionmakers() as session:
             assert await _recorded_used(session, _ORG_ID) == 9
 
-    async def test_guard_error_fails_open(
-        self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int
-    ) -> None:
+    async def test_guard_error_fails_open(self, sessionmakers: async_sessionmaker[AsyncSession], budget_env: int) -> None:
         exploding_session = configure_mock_session(AsyncMock(), allow_empty_execute=True)
         exploding_session.execute = AsyncMock(side_effect=RuntimeError("db unavailable"))
 
@@ -250,17 +236,12 @@ class TestMigrationSchema:
         assert module.revision == "0242_org_mint_budget_usage"
         assert module.down_revision == "0241_journey_dismissal"
 
-    async def test_upgrade_creates_budget_table_on_sqlite(
-        self, sessionmakers: async_sessionmaker[AsyncSession]
-    ) -> None:
+    async def test_upgrade_creates_budget_table_on_sqlite(self, sessionmakers: async_sessionmaker[AsyncSession]) -> None:
         # The sessionmakers fixture already ran the upgrade on SQLite; the
         # composite PK and the cleanup index must exist so the single
         # statement conflicts correctly and the sweep query is servable.
         async with sessionmakers() as session:
-            columns = {
-                row[1]
-                for row in (await session.execute(sa.text("PRAGMA table_info(org_mint_budget_usage)"))).fetchall()
-            }
+            columns = {row[1] for row in (await session.execute(sa.text("PRAGMA table_info(org_mint_budget_usage)"))).fetchall()}
             assert columns == {"organisation_id", "window_start", "used"}
 
     async def test_downgrade_removes_budget_table(self, tmp_path: Path) -> None:
@@ -351,13 +332,7 @@ class TestRealPostgresConcurrency:
 
         engine = create_async_engine(pg_url)
         try:
-            ddl = (
-                "CREATE TABLE IF NOT EXISTS org_mint_budget_usage ("
-                "organisation_id UUID NOT NULL,"
-                "window_start TIMESTAMPTZ NOT NULL,"
-                "used INTEGER NOT NULL DEFAULT 0,"
-                "PRIMARY KEY (organisation_id, window_start))"
-            )
+            ddl = "CREATE TABLE IF NOT EXISTS org_mint_budget_usage (organisation_id UUID NOT NULL,window_start TIMESTAMPTZ NOT NULL,used INTEGER NOT NULL DEFAULT 0,PRIMARY KEY (organisation_id, window_start))"
             async with engine.begin() as conn:
                 await conn.execute(sa.text(ddl))
                 # Throwaway DB may carry rows from a previous probe run of
@@ -379,9 +354,7 @@ class TestRealPostgresConcurrency:
 class TestBudgetWiredIntoMintPaths:
     """FAR-795 budget cap must be consulted by the agent-mint paths (not dead code)."""
 
-    async def test_upsert_ref_provenances_consults_budget_and_suppresses_when_denied(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_upsert_ref_provenances_consults_budget_and_suppresses_when_denied(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from farna.core.lifecycle_map.advancement import upsert_ref_provenances
 
         consume = AsyncMock(return_value=False)

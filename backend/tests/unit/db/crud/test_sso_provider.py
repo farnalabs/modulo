@@ -229,10 +229,10 @@ class TestCreateProvider:
             )
         assert result.provider_id == "custom-id"
 
-    def _system_scan_patches(self, farna_control_system_database_url: str) -> object:
+    def _system_scan_patches(self, modulo_system_database_url: str) -> object:
         return patch(
             "farna.db.crud.sso_provider.get_settings",
-            MagicMock(return_value=MagicMock(farna_control_system_database_url=farna_control_system_database_url)),
+            MagicMock(return_value=MagicMock(modulo_system_database_url=modulo_system_database_url)),
         )
 
     async def test_system_session_scan_when_url_configured(self, mock_session: AsyncMock, system_session: AsyncMock) -> None:

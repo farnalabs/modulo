@@ -317,10 +317,7 @@ def test_retry_after_policy_failure_excludes_hang_death():
     # error_code="node_cancelled" with "likely hung" in error_detail. A
     # "failure"-only policy must NOT re-dispatch it — each re-dispatch burns a
     # full node timeout with zero recovery probability.
-    hang_detail = (
-        "Sandbox agent command produced no output within 1200s. No stdout/stderr "
-        "was captured — the agent likely hung before writing any result."
-    )
+    hang_detail = "Sandbox agent command produced no output within 1200s. No stdout/stderr was captured — the agent likely hung before writing any result."
     assert retry_after_policy({"on": ["failure"], "max_retries": 5}, "failed", "node_cancelled", hang_detail) is None
 
 
@@ -703,9 +700,7 @@ async def test_execute_retry_policy_suppressed_for_non_idempotent_graph():
         patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=AsyncMock()),
     ):
         executor = PipelineExecutor(MagicMock())
-        result = await executor.execute(
-            run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-        )
+        result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
 
     # No re-dispatch: execute() returned normally (no RunRetryPolicyError) and
     # no fenced pending-reset was issued.
@@ -825,9 +820,7 @@ async def test_execute_retry_policy_max_retries_1_retries_exactly_once():
     mock_finalize.assert_not_awaited()
 
     # Attempt 2 (count > budget): terminal fail — no re-dispatch.
-    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
-        node_attempt_count=2, retry_policy=policy
-    )
+    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(node_attempt_count=2, retry_policy=policy)
     assert kind2 == "terminal", f"attempt 2 should be terminal; got {kind2}"
     resets2 = [s for s in statements2 if "status='pending'" in s]
     assert resets2 == []
@@ -848,9 +841,7 @@ async def test_execute_retry_policy_max_retries_5_retries_all_five():
     retried = 0
     terminal_result = None
     for attempt in range(1, 7):
-        kind, payload, statements, mock_finalize = await _run_single_retry_attempt(
-            node_attempt_count=attempt, retry_policy=policy
-        )
+        kind, payload, statements, mock_finalize = await _run_single_retry_attempt(node_attempt_count=attempt, retry_policy=policy)
         if attempt <= 5:
             assert kind == "retry", f"attempt {attempt} should retry; got {kind}"
             assert payload.max_retries == 5
@@ -875,9 +866,7 @@ async def test_execute_retry_policy_exhausted_boundary_terminal_no_redispatch():
     covers the terminal branch the existing tests only skirt.
     """
 
-    kind, result, statements, mock_finalize = await _run_single_retry_attempt(
-        node_attempt_count=2, retry_policy={"on": ["failure"], "max_retries": 1}
-    )
+    kind, result, statements, mock_finalize = await _run_single_retry_attempt(node_attempt_count=2, retry_policy={"on": ["failure"], "max_retries": 1})
     assert kind == "terminal"
     # No re-dispatch: no fenced pending-reset was issued.
     resets = [s for s in statements if "status='pending'" in s]
@@ -927,15 +916,11 @@ async def test_execute_retry_policy_eval_failed_budget_exhaustion_terminalizes()
     eval_failed/eval_blocked and stays failed (no second re-dispatch)."""
     policy = {"on": ["eval_failed"], "max_retries": 1}
 
-    kind, exc, _statements, _mock_finalize = await _run_single_retry_attempt(
-        node_attempt_count=1, retry_policy=policy, compiled=_eval_blocked_compiled()
-    )
+    kind, exc, _statements, _mock_finalize = await _run_single_retry_attempt(node_attempt_count=1, retry_policy=policy, compiled=_eval_blocked_compiled())
     assert kind == "retry"
     assert exc.status == "eval_failed"
 
-    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(
-        node_attempt_count=2, retry_policy=policy, compiled=_eval_blocked_compiled()
-    )
+    kind2, result, statements2, mock_finalize2 = await _run_single_retry_attempt(node_attempt_count=2, retry_policy=policy, compiled=_eval_blocked_compiled())
     assert kind2 == "terminal", f"attempt 2 should be terminal; got {kind2}"
     assert not any("status='pending'" in s for s in statements2)
     mock_finalize2.assert_awaited_once()
@@ -1155,10 +1140,7 @@ async def test_execute_retry_policy_hang_death_terminal_no_redispatch():
     pure-function hang tests green while real hang deaths resumed retrying."""
     from farna.core.pipeline_engine.node_runner import SandboxNodeFailedError
 
-    hang_msg = (
-        "Sandbox agent command produced no output within 1200s. "
-        "No stdout/stderr was captured - the agent likely hung before writing any result."
-    )
+    hang_msg = "Sandbox agent command produced no output within 1200s. No stdout/stderr was captured - the agent likely hung before writing any result."
     run = _make_run(node_attempt_count=5, claim_token="tok-claim-abc")
     snapshot = _make_snapshot()
     statements: list[str] = []
@@ -1608,15 +1590,11 @@ async def _execute_with_real_runstart_checks(retry_policy: dict[str, Any]):
     sleep_mock = AsyncMock()
     with ExitStack() as stack:
         mock_finalize = _enter_execute_patches(stack, factory, run, compiled, registry, settings)
-        stack.enter_context(
-            patch("farna.core.pipeline_engine.executor.GraphValidator", new=_real_check_graph_validator())
-        )
+        stack.enter_context(patch("farna.core.pipeline_engine.executor.GraphValidator", new=_real_check_graph_validator()))
         stack.enter_context(patch("farna.core.pipeline_engine.executor.asyncio.sleep", new=sleep_mock))
         executor = PipelineExecutor(MagicMock())
         try:
-            result = await executor.execute(
-                run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc"
-            )
+            result = await executor.execute(run_id=run.id, org_id=uuid.uuid4(), input_payload={}, claim_token="tok-claim-abc")
         except Exception as exc:
             return "raised", exc, statements, sleep_mock, mock_finalize
         return "returned", result, statements, sleep_mock, mock_finalize
@@ -1625,9 +1603,7 @@ async def _execute_with_real_runstart_checks(retry_policy: dict[str, Any]):
 async def test_run_start_malformed_core_policy_still_raises_graph_validation_error():
     """A malformed CORE policy (bad max_retries) STILL raises at run start —
     the FAR-525 schedule layering must not soften the core check."""
-    _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks(
-        {"on": ["failure"], "max_retries": 99, "backoff_schedule": {"delay_seconds": 45}}
-    )
+    _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks({"on": ["failure"], "max_retries": 99, "backoff_schedule": {"delay_seconds": 45}})
     from farna.core.pipeline_engine import GraphValidationError
 
     assert isinstance(exc, GraphValidationError)
@@ -1640,9 +1616,7 @@ async def test_run_start_malformed_schedule_warns_and_run_proceeds():
     import logging as _logging
 
     with _capture_executor_logs(_logging.WARNING) as records:
-        kind, exc, _statements, sleep_mock, mock_finalize = await _execute_with_real_runstart_checks(
-            {"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 0}}
-        )
+        kind, exc, _statements, sleep_mock, mock_finalize = await _execute_with_real_runstart_checks({"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 0}})
     from farna.core.pipeline_engine import GraphValidationError
 
     assert not isinstance(exc, GraphValidationError)
@@ -1660,9 +1634,7 @@ async def test_run_start_valid_schedule_no_schedule_warning():
     import logging as _logging
 
     with _capture_executor_logs(_logging.WARNING) as records:
-        _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks(
-            {"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 45}}
-        )
+        _kind, exc, _statements, _sleep, _finalize = await _execute_with_real_runstart_checks({"on": ["failure"], "max_retries": 1, "backoff_schedule": {"delay_seconds": 45}})
     assert isinstance(exc, RunRetryPolicyError)
     assert not any(r.getMessage() == "pipeline.retry_policy_schedule_malformed" for r in records)
 
@@ -1908,9 +1880,7 @@ async def _drive_mayberetry_after_policy(*, elapsed_seconds: float) -> str:
             cleanup_run_resources_fn=executor._cleanup_run_resources,
             record_attempt_reset_fn=executor._record_attempt_reset,
             probe_script_lease_fn=executor._probe_script_lease,
-            read_retry_attempt_state_fn=AsyncMock(
-                return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))
-            ),
+            read_retry_attempt_state_fn=AsyncMock(return_value=(1, "tok-claim-abc", datetime.now(UTC) - timedelta(seconds=elapsed_seconds))),
             graph_has_script_mode_fn=lambda gj: False,
             node_timeouts=executor._node_timeouts.values(),
         )

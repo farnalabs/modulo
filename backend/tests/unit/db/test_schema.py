@@ -241,9 +241,7 @@ def test_visibility_and_trigger_outcome_constraints_are_complete() -> None:
         constraint_names = {constraint.name for constraint in tables[name].constraints}
         assert any(value is not None and value.endswith("_team_owner") for value in constraint_names)
 
-    trigger_checks = " ".join(
-        str(constraint.sqltext) for constraint in tables["trigger_events"].constraints if hasattr(constraint, "sqltext")
-    )
+    trigger_checks = " ".join(str(constraint.sqltext) for constraint in tables["trigger_events"].constraints if hasattr(constraint, "sqltext"))
     # The ORM CheckConstraint is generated from the full 19-value vocabulary —
     # every value must appear and the generated SQL must match exactly.
     from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES

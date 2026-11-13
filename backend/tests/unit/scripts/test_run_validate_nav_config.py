@@ -126,9 +126,7 @@ def test_group_missing_default_expanded_fails(tmp_path, monkeypatch, capsys):
 
 
 def test_duplicate_group_id_key_fails(tmp_path, monkeypatch, capsys):
-    manifest = _VALID_MANIFEST + (
-        "    build:\n        label: DUPLICATE\n        order: 2\n        default_expanded: false\n"
-    )
+    manifest = _VALID_MANIFEST + ("    build:\n        label: DUPLICATE\n        order: 2\n        default_expanded: false\n")
     _seed(tmp_path, monkeypatch, manifest, _VALID_NAV)
 
     assert mod._main([]) == 1
@@ -192,15 +190,7 @@ def test_missing_navigation_config_fails(tmp_path, monkeypatch, capsys):
 def test_detail_page_duplicate_order_is_not_a_conflict(tmp_path, monkeypatch, capsys):
     """detail_page routes are skipped by buildSidebarGroups, so their
     sidebar_order never competes with a rendered nav entry's slot."""
-    detail_route = (
-        "    /errors/:id:\n"
-        "        name: error-detail\n"
-        "        sidebar_group: build\n"
-        "        sidebar_order: 1\n"
-        "        type: detail_page\n"
-        "\n"
-        "sidebar_groups:"
-    )
+    detail_route = "    /errors/:id:\n        name: error-detail\n        sidebar_group: build\n        sidebar_order: 1\n        type: detail_page\n\nsidebar_groups:"
     manifest = _VALID_MANIFEST.replace("sidebar_groups:", detail_route, 1)
     _seed(tmp_path, monkeypatch, manifest, _VALID_NAV)
 

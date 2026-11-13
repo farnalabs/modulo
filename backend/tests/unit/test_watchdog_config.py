@@ -234,11 +234,7 @@ def test_watchdog_image_drops_root_in_the_final_stage():
 
 
 def test_watchdog_image_bases_are_pinned_to_specific_tags():
-    from_lines = [
-        line.split()[1]
-        for line in _DOCKERFILE_PATH.read_text(encoding="utf-8").splitlines()
-        if line.startswith("FROM ")
-    ]
+    from_lines = [line.split()[1] for line in _DOCKERFILE_PATH.read_text(encoding="utf-8").splitlines() if line.startswith("FROM ")]
 
     assert from_lines, "Dockerfile must declare its base images"
     for ref in from_lines:

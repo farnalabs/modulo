@@ -76,10 +76,7 @@ def _render_policy_gate_change(entry: dict[str, Any], *, scope: str | None) -> s
     from a generic "graph updated".
     """
     verb = _GATE_CHANGE_VERBS.get(str(entry.get("change")), str(entry.get("change")))
-    if entry.get("change") == "changed":
-        detail = f"{entry.get('previous_action')}->{entry.get('action')}"
-    else:
-        detail = f"{entry.get('action')}, eval {entry.get('eval_id')}"
+    detail = f"{entry.get('previous_action')}->{entry.get('action')}" if entry.get("change") == "changed" else f"{entry.get('action')}, eval {entry.get('eval_id')}"
     return f"gate {verb} pipeline {scope!r} node {entry.get('node')} ({detail})"
 
 

@@ -64,10 +64,7 @@ def test_scanner_flags_orm_deletion_outside_sanctioned_module(tmp_path: Path) ->
         tmp_path,
         {
             "core/evidence_retention.py": "",
-            "api/routes/evidence.py": (
-                "from sqlalchemy import delete\nfrom farna.db.models.evidence import Evidence\n\n\n"
-                "def wipe(session):\n    session.execute(delete(Evidence))\n"
-            ),
+            "api/routes/evidence.py": ("from sqlalchemy import delete\nfrom farna.db.models.evidence import Evidence\n\n\ndef wipe(session):\n    session.execute(delete(Evidence))\n"),
         },
     )
 
@@ -83,9 +80,7 @@ def test_scanner_flags_raw_sql_deletion_case_insensitively(tmp_path: Path) -> No
         tmp_path,
         {
             "core/evidence_retention.py": "",
-            "db/repositories/evidence_repo.py": (
-                "def purge(conn):\n    conn.execute('Delete From Evidence WHERE key = :k')\n"
-            ),
+            "db/repositories/evidence_repo.py": ("def purge(conn):\n    conn.execute('Delete From Evidence WHERE key = :k')\n"),
         },
     )
 
@@ -114,12 +109,8 @@ def test_scanner_clears_the_sanctioned_module(tmp_path: Path) -> None:
     root = _plant_tree(
         tmp_path,
         {
-            "core/evidence_retention.py": (
-                "async def batch(session, ids):\n"
-                "    await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))\n"
-            ),
-            "api/other.py": "from sqlalchemy import delete\nfrom farna.db.models.pipeline import Pipeline\n\n\n"
-            "def wipe(session):\n    session.execute(delete(Pipeline))\n",
+            "core/evidence_retention.py": ("async def batch(session, ids):\n    await session.execute(delete(Evidence).where(Evidence.id.in_(ids)))\n"),
+            "api/other.py": "from sqlalchemy import delete\nfrom farna.db.models.pipeline import Pipeline\n\n\ndef wipe(session):\n    session.execute(delete(Pipeline))\n",
         },
     )
 
@@ -145,12 +136,7 @@ def test_scanner_catches_reassignment_table_delete_pattern(tmp_path: Path) -> No
         tmp_path,
         {
             "core/evidence_retention.py": "",
-            "api/sneaky.py": (
-                "from farna.db.models.evidence import Evidence\n\n"
-                "def wipe():\n"
-                "    t = Evidence.__table__\n"
-                "    t.delete()\n"
-            ),
+            "api/sneaky.py": ("from farna.db.models.evidence import Evidence\n\ndef wipe():\n    t = Evidence.__table__\n    t.delete()\n"),
         },
     )
 

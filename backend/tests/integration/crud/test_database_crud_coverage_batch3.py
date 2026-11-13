@@ -48,11 +48,7 @@ async def _insert_run(
     run_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "langgraph_thread_id, trigger_type, input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :thread, 'manual', :hash, :rn)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, trigger_type, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, :thread, 'manual', :hash, :rn)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -78,11 +74,7 @@ async def _insert_trigger(
     trigger_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO triggers (id, organisation_id, pipeline_id, name, trigger_type, active, "
-                "max_concurrent_runs, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :name, 'webhook', true, 2, CAST(:config AS jsonb), :aid)"
-            ),
+            text("INSERT INTO triggers (id, organisation_id, pipeline_id, name, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (:id, :oid, :pid, :name, 'webhook', true, 2, CAST(:config AS jsonb), :aid)"),
             {
                 "id": str(trigger_id),
                 "oid": str(org_id),
@@ -215,11 +207,7 @@ async def test_node_observation_is_idempotent(
     observation_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO node_observations "
-                "(id, organisation_id, run_id, node_id, account_id, human_observed_at) "
-                "VALUES (:id, :oid, :rid, :nid, :aid, CURRENT_TIMESTAMP)"
-            ),
+            text("INSERT INTO node_observations (id, organisation_id, run_id, node_id, account_id, human_observed_at) VALUES (:id, :oid, :rid, :nid, :aid, CURRENT_TIMESTAMP)"),
             {
                 "id": str(observation_id),
                 "oid": str(test_org),

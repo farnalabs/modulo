@@ -263,10 +263,7 @@ class TestRecognisedKeysSync:
         """
         read_sites = _trigger_config_read_site_keys()
         engine_keys = set(_ENGINE_KEYS)
-        assert read_sites == engine_keys, (
-            f"engine reads keys missing from _RECOGNISED_TRIGGER_CONFIG_KEYS: {sorted(read_sites - engine_keys)}; "
-            f"_RECOGNISED_TRIGGER_CONFIG_KEYS lists keys the engine never reads: {sorted(engine_keys - read_sites)}"
-        )
+        assert read_sites == engine_keys, f"engine reads keys missing from _RECOGNISED_TRIGGER_CONFIG_KEYS: {sorted(read_sites - engine_keys)}; _RECOGNISED_TRIGGER_CONFIG_KEYS lists keys the engine never reads: {sorted(engine_keys - read_sites)}"
 
 
 #: The no-delivery-streak config keys the streak engine actually reads —

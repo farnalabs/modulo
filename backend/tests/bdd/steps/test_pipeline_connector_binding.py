@@ -128,11 +128,7 @@ def _graph_bound(ctx: dict, node: str, instance: str) -> None:
     ctx["nodes"] = [{"id": node, "node_type": "agent", "connector_binding": binding}]
 
 
-@given(
-    parsers.parse(
-        'a pipeline graph with a node "{node}" bound to connector instance "{instance}" for operation "{operation}"'
-    )
-)
+@given(parsers.parse('a pipeline graph with a node "{node}" bound to connector instance "{instance}" for operation "{operation}"'))
 def _graph_bound_for_operation(ctx: dict, node: str, instance: str, operation: str) -> None:
     ctx["node_id"] = node
     ctx["instance_name"] = instance
@@ -191,9 +187,7 @@ def _one_binding_points_at(ctx: dict, instance: str) -> None:
 
 @then(parsers.parse('no connector binding references "{instance}"'))
 def _no_binding_references(ctx: dict, instance: str) -> None:
-    assert not any(b.get("connector_instance_id") == str(_instance_uuid(instance)) for b in ctx["extracted"]), ctx[
-        "extracted"
-    ]
+    assert not any(b.get("connector_instance_id") == str(_instance_uuid(instance)) for b in ctx["extracted"]), ctx["extracted"]
 
 
 @then("no connector binding is extracted")
@@ -206,9 +200,7 @@ def _graph_rejected(ctx: dict, code: str) -> None:
     result = ctx["result"]
     assert result is not None, "no validation result"
     assert not result.is_valid, "expected the graph to be rejected"
-    assert any(issue.code == code for issue in result.issues), (
-        f"expected error code {code!r}, got: {[i.code for i in result.issues]}"
-    )
+    assert any(issue.code == code for issue in result.issues), f"expected error code {code!r}, got: {[i.code for i in result.issues]}"
 
 
 @then("the graph is valid")

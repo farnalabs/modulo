@@ -182,9 +182,7 @@ async def test_fresh_node_started_row_is_not_terminalized() -> None:
         fail = AsyncMock()
         redispatch = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail), patch.object(ch, "_redispatch_nodeless", redispatch):
-            handled = await ch._reconcile_nodeless_repair(
-                _FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -223,9 +221,7 @@ async def test_control_fresh_still_nodeless_row_is_terminalized() -> None:
         summary = _summary()
         fail = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail):
-            handled = await ch._reconcile_nodeless_repair(
-                _FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -252,9 +248,7 @@ async def test_control_fresh_still_nodeless_row_with_budget_is_redispatched() ->
         fail = AsyncMock()
         redispatch = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail), patch.object(ch, "_redispatch_nodeless", redispatch):
-            handled = await ch._reconcile_nodeless_repair(
-                _FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -275,9 +269,7 @@ async def test_control_fresh_left_running_row_is_deferred() -> None:
         summary = _summary()
         fail = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail):
-            handled = await ch._reconcile_nodeless_repair(
-                _FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_FreshSession(fresh), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -296,9 +288,7 @@ async def test_unreadable_fresh_state_fails_closed() -> None:
         summary = _summary()
         fail = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail):
-            handled = await ch._reconcile_nodeless_repair(
-                _UnreadableSession(), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_UnreadableSession(), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -322,9 +312,7 @@ async def test_fresh_row_vanished_is_deferred() -> None:
         summary = _summary()
         fail = AsyncMock()
         with patch.object(ch, "_fail_nodeless_run", fail):
-            handled = await ch._reconcile_nodeless_repair(
-                _FreshSession(None), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, []
-            )
+            handled = await ch._reconcile_nodeless_repair(_FreshSession(None), MagicMock(), uuid.uuid4(), snapshot, 35, 0, summary, [])
     finally:
         monkeypatch.undo()
 
@@ -453,9 +441,7 @@ async def test_aged_nodeless_router_defers_a_freshly_started_node() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], fresh)
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -482,9 +468,7 @@ async def test_aged_nodeless_router_still_fails_a_fresh_pre_node_row() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], fresh)
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == [run_id]
     fail.assert_awaited_once()
@@ -520,9 +504,7 @@ async def test_aged_nodeless_router_mixed_batch_routes_only_the_routable_id() ->
         },
     )
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == [routable]
     fail.assert_awaited_once()
@@ -541,9 +523,7 @@ async def test_aged_nodeless_router_defers_a_row_that_left_running() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], _locked_row(status="complete"))
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -559,9 +539,7 @@ async def test_aged_nodeless_router_defers_a_row_with_node_token_usage() -> None
     fail = AsyncMock()
     session = _RouterSession([run_id], _locked_row(node_token_usage=1234))
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -581,9 +559,7 @@ async def test_aged_nodeless_router_defers_a_row_with_node_attempts() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], _locked_row(node_attempt_count=1))
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -598,9 +574,7 @@ async def test_aged_nodeless_router_defers_a_row_with_a_final_output() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], _locked_row(), outputs_absent=False)
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -615,9 +589,7 @@ async def test_aged_nodeless_router_defers_a_row_with_a_checkpoint() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], _locked_row(), checkpoints_absent=False)
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -632,9 +604,7 @@ async def test_aged_nodeless_router_unreadable_locked_row_fails_closed() -> None
     fail = AsyncMock()
     session = _UnreadableRouterSession([run_id], None)
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -652,9 +622,7 @@ async def test_aged_nodeless_router_vanished_locked_row_defers() -> None:
     fail = AsyncMock()
     session = _RouterSession([run_id], {})
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == []
     fail.assert_not_awaited()
@@ -679,9 +647,7 @@ async def test_aged_nodeless_router_locks_before_checking_the_premise() -> None:
         SimpleNamespace(status="running", dispatch_phase="claimed", node_token_usage=None),
     )
     with patch.object(ch, "_fail_nodeless_run", fail):
-        routed = await ch._terminalize_aged_nodeless_zombies(
-            session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None
-        )
+        routed = await ch._terminalize_aged_nodeless_zombies(session, uuid.uuid4(), max_age_minutes=135, summary=summary, max_rows=None)
 
     assert routed == [run_id]
     assert session.get_calls == [(run_id, True)]

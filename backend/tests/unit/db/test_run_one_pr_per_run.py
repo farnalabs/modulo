@@ -715,12 +715,7 @@ class TestTerminalWriteEnforcement:
         run_id = uuid.uuid4()
         outputs, telemetry, markers = _far1254_blobs()
         async with engine.begin() as conn:
-            await conn.exec_driver_sql(
-                "CREATE TRIGGER trg_block_dup_pr_alert "
-                "BEFORE INSERT ON notifications "
-                "WHEN NEW.category = 'run.duplicate_pr_delivery' "
-                "BEGIN SELECT RAISE(ABORT, 'simulated db-level alert failure'); END"
-            )
+            await conn.exec_driver_sql("CREATE TRIGGER trg_block_dup_pr_alert BEFORE INSERT ON notifications WHEN NEW.category = 'run.duplicate_pr_delivery' BEGIN SELECT RAISE(ABORT, 'simulated db-level alert failure'); END")
         with caplog.at_level(logging.ERROR, logger="farna.db.crud.run"):
             async with session.begin():
                 await _seed_run(session, run_id, outputs=outputs, telemetry=telemetry, markers=markers)
