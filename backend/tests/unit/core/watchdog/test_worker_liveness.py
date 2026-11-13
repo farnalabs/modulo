@@ -330,7 +330,7 @@ class TestWorkerLivenessWatchdog:
         watchdog keeps evaluating the condition."""
         fake = _FakeWatchdogRedis()
         settings = _make_settings(
-            MODULO_ENV="staging",
+            environment="staging",
             ALERT_ENVIRONMENTS="production",
             ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
             ALERT_TEAMS_WEBHOOK_URL="https://outlook.office.com/webhook/t",
@@ -373,7 +373,7 @@ class TestWorkerLivenessWatchdog:
         fake.add_live_worker("system")
         fake.set_cron_heartbeat()
         settings = _make_settings(
-            MODULO_ENV="staging",
+            environment="staging",
             ALERT_ENVIRONMENTS="production",
             ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
         )
@@ -405,7 +405,7 @@ class TestWorkerLivenessWatchdog:
         sends nothing and claims nothing."""
         fake = _FakeWatchdogRedis()
         settings = _make_settings(
-            MODULO_ENV="staging",
+            environment="staging",
             ALERT_ENVIRONMENTS="production",
             ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
         )
@@ -438,7 +438,7 @@ class TestWorkerLivenessWatchdog:
         # An incident claim left over from an "included" window.
         fake._data[wl._ALERT_STATE_KEY] = json.dumps({"conditions": ["no live SAQ worker on any queue for 200s"], "started_at": time.time() - 500})
         excluded = _make_settings(
-            MODULO_ENV="staging",
+            environment="staging",
             ALERT_ENVIRONMENTS="production",
             ALERT_WEBHOOK_URL="https://hooks.slack.com/webhook",
         )
@@ -1492,7 +1492,7 @@ def _alert_context_settings() -> Settings:
         smtp_host="smtp.example.com",
         # Settings keys match the field's env alias case-insensitively (see
         # tests/unit/core/test_alert_context.py) — hence these spellings.
-        MODULO_ENV="staging",
+        environment="staging",
         ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
     )
 
@@ -1552,7 +1552,7 @@ class TestAlertContextOnWebhooks:
 
     def _webhook_settings(self, **overrides: Any) -> Settings:
         return _make_settings(
-            MODULO_ENV="staging",
+            environment="staging",
             ALERT_CONTEXT="runbook: https://example.com/runbook\npage the on-call",
             **overrides,
         )

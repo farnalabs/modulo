@@ -1,14 +1,13 @@
 """Python and SQL must agree on the autonomy rank ordering (one source of truth).
 
 The ``max_autonomy_level >= default_autonomy_level`` invariant is encoded in
-FIVE independently-edited places:
+FOUR independently-edited places:
 
 * ``core.run_context.autonomy._LEVEL_RANK`` (the Python side - every
   min/max/comparison in the app goes through it, never through StrEnum string
   ordering),
-* migration ``0264``'s CHECK + its behaviour-preserving repair (``pipelines``),
-* migration ``0270``'s CHECK + its behaviour-preserving repair
-  (``pipeline_snapshots``),
+* baseline migration ``0350``'s CHECK definitions for ``pipelines`` and
+  ``pipeline_snapshots``,
 * both ORM ``CheckConstraint``s (``ck_pipelines_max_autonomy_ge_default`` and
   ``ck_pipeline_snapshots_max_autonomy_ge_default``).
 
@@ -41,8 +40,7 @@ from farna.core.run_context.autonomy import AUTONOMY_LEVEL_VALUES, AutonomyLevel
 from farna.db.models.pipeline import Pipeline
 from farna.db.models.pipeline_snapshot import PipelineSnapshot
 
-_M0264 = "0264_pipelines_max_autonomy_ge_default"
-_M0270 = "0270_pipeline_snapshots_max_autonomy_ge_default"
+_M0350 = "0350_baseline_schema"
 
 _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
 
@@ -52,8 +50,8 @@ _VERSIONS = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migr
 #: regex over the literal SQL text is authoritative. The column name is
 #: captured so a test can assert that BOTH sides of the ``<=``/``>`` comparison
 #: were checked, not just whichever one the parser happened to match first.
-_CASE_BLOCK = re.compile(r"CASE\s+(\w+)\s+((?:WHEN\s+'[^']+'\s+THEN\s+-?\d+\s*)+)END", re.IGNORECASE)
-_WHEN_ARM = re.compile(r"WHEN\s+'([^']+)'\s+THEN\s+(-?\d+)")
+_CASE_BLOCK = re.compile(r"CASE\s+(\w+)\s+((?:WHEN\s+'[^']+'(?:::\w+)?\s+THEN\s+-?\d+\s*)+)END", re.IGNORECASE)
+_WHEN_ARM = re.compile(r"WHEN\s+'([^']+)'(?:::\w+)?\s+THEN\s+(-?\d+)")
 #: Both comparisons rank a default side against a ceiling side.
 _EXPECTED_CASE_COLUMNS = frozenset({"default_autonomy_level", "max_autonomy_level"})
 
@@ -62,10 +60,8 @@ _EXPECTED_CASE_COLUMNS = frozenset({"default_autonomy_level", "max_autonomy_leve
 _SOURCES: tuple[tuple[str, str], ...] = (
     ("orm:ck_pipelines_max_autonomy_ge_default", "ck_pipelines_max_autonomy_ge_default"),
     ("orm:ck_pipeline_snapshots_max_autonomy_ge_default", "ck_pipeline_snapshots_max_autonomy_ge_default"),
-    (f"{_M0264}:REPAIR_INVERTED_DEFAULTS", "REPAIR_INVERTED_DEFAULTS"),
-    (f"{_M0264}:_ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID", "_ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID"),
-    (f"{_M0270}:REPAIR_INVERTED_DEFAULTS", "REPAIR_INVERTED_DEFAULTS"),
-    (f"{_M0270}:_ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID", "_ADD_CEILING_GE_DEFAULT_CHECK_NOT_VALID"),
+    (f"{_M0350}:pipelines", "pipelines"),
+    (f"{_M0350}:pipeline_snapshots", "pipeline_snapshots"),
 )
 
 
@@ -88,6 +84,15 @@ def _source_sql(source_id: str, attr: str) -> str:
                 return str(constraint.sqltext)
         raise AssertionError(f"{model.__name__} declares no CHECK constraint named {attr!r}")
     revision = source_id.split(":", 1)[0]
+    if revision == _M0350:
+        baseline = (_VERSIONS / f"{revision}.py").read_text(encoding="utf-8")
+        constraint_name = {
+            "pipelines": "ck_pipelines_max_autonomy_ge_default",
+            "pipeline_snapshots": "ck_pipeline_snapshots_max_autonomy_ge_default",
+        }[attr]
+        start = baseline.index(f"CONSTRAINT {constraint_name} CHECK")
+        end = baseline.index("))),", start) + len("))),")
+        return baseline[start:end]
     return str(getattr(_load_migration(revision), attr))
 
 
@@ -103,7 +108,12 @@ def _expected_rank_map() -> dict[str, int]:
 
 def _sql_rank_maps(sql: str) -> list[tuple[str, dict[str, int]]]:
     """Every ``(column, rank map)`` CASE block in *sql*, in order of appearance."""
-    return [(column, {level: int(rank) for level, rank in _WHEN_ARM.findall(block)}) for column, block in _CASE_BLOCK.findall(sql)]
+    maps: list[tuple[str, dict[str, int]]] = []
+    for column, block in re.findall(r"CASE\s+(\w+)(.*?)END", sql, flags=re.IGNORECASE | re.DOTALL):
+        arms = {level: int(rank) for level, rank in _WHEN_ARM.findall(block)}
+        if arms:
+            maps.append((column, arms))
+    return maps
 
 
 def test_every_declared_level_has_a_rank() -> None:
