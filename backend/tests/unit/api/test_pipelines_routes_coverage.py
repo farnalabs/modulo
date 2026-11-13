@@ -528,7 +528,7 @@ def test_graph_node_validator_matrix() -> None:
             "template_id": "opencode",
             "agent_prompt": "Analyse the repo",
             "agent_commands": ["run analysis"],
-            "env_vars": {"FARNA_CONTROL_MODULO_SECRET": "x"},
+            "env_vars": {"MODULO_SECRET": "x"},
         },
         "reserved prefix",
     )

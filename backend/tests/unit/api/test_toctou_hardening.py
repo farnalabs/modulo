@@ -3,7 +3,7 @@
 Covers:
 - RateLimitConflictError domain exception
 - ErrorNotificationRule model has deleted_at column and partial unique index
-- Migration 0117 file exists and is well-formed
+- The post-collapse baseline migration preserves the 0117 index invariants
 - The per-signal unique index allows seeding multiple default rules per org (#1376)
 - The rate-limit conflict path in ``create_run`` maps a unique violation to a
   RateLimitConflictError without leaving the outer transaction aborted (#1105)
@@ -49,7 +49,7 @@ from farna.db.models.system_config import SystemConfig
 from farna.db.models.team import Team
 from farna.db.models.team_membership import TeamMembership
 
-_MIGRATION_FILE = Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0117_toctou_hardening.py"
+_MIGRATION_FILE = Path(__file__).parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0350_baseline_schema.py"
 
 _ORG = uuid.UUID("00000000-0000-0000-0000-000000000001")
 _PIPELINE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
@@ -129,14 +129,14 @@ class TestDefaultRuleSeedInvariant:
 # ---------------------------------------------------------------------------
 
 
-class TestMigration0117:
+class TestMigrationBaseline:
     def test_migration_file_exists(self) -> None:
         assert _MIGRATION_FILE.exists(), f"Migration not found at {_MIGRATION_FILE}"
 
     def test_migration_chain(self) -> None:
         content = _MIGRATION_FILE.read_text()
-        assert 'revision: str = "0117_toctou_hardening"' in content
-        assert 'down_revision: str | None = "0116_guardrail_trust_pr_b"' in content
+        assert 'revision: str = "0350_baseline_schema"' in content
+        assert "down_revision: str | None = None" in content
 
     def test_migration_has_both_indexes(self) -> None:
         content = _MIGRATION_FILE.read_text()
@@ -146,11 +146,10 @@ class TestMigration0117:
         assert "rate_limit_key IS NOT NULL" in content
 
     def test_migration_unique_index_keys_on_org_and_signal(self) -> None:
-        """Migration 0117 must not build the org-only unique index that would
-        break both the 10-rule cap and the default-rule seed."""
+        """The baseline must retain the per-(org, signal) unique index."""
         content = _MIGRATION_FILE.read_text()
-        assert "ON error_notification_rules (organisation_id, signal)" in content
-        assert "ON error_notification_rules (organisation_id) " not in content
+        assert "error_notification_rules USING btree (organisation_id, signal)" in content
+        assert "CREATE UNIQUE INDEX uq_enr_org_active ON public.error_notification_rules USING btree (organisation_id);" not in content
 
 
 # ---------------------------------------------------------------------------
