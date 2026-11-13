@@ -34,6 +34,20 @@ from farna.db.models.pipeline import Pipeline
 from farna.db.models.run import Run
 from farna.settings import get_settings
 
+# Kept as a module attribute for callers/tests that patch the session factory;
+# the actual database session is still imported only when a command runs.
+AsyncSessionLocal: Any = None
+
+
+def _session_factory() -> Any:
+    global AsyncSessionLocal
+    if AsyncSessionLocal is None:
+        from farna.db import session as db_session
+
+        AsyncSessionLocal = db_session.AsyncSessionLocal
+    return AsyncSessionLocal
+
+
 _log = logging.getLogger(__name__)
 
 # Label used when reporting a malformed --org-id argument to _parse_uuid.
@@ -73,7 +87,7 @@ _DB_OP_TIMEOUT_SECONDS = 600
 
 
 def _resolve_admin_auth(token: str | None) -> str | None:
-    raw = token or os.environ.get("FARNA_CONTROL_ADMIN_SECRET", "")
+    raw = token or os.environ.get("FARNA_CONTROL_ADMIN_SECRET") or os.environ.get("MODULO_ADMIN_SECRET") or os.environ.get("FARNA_CONTROL_MODULO_ADMIN_SECRET", "")
     if not raw:
         return None
     if token:
@@ -528,11 +542,9 @@ def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bo
 
 
 async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path, scope: _ScopeFlags) -> None:
-    from farna.db.session import AsyncSessionLocal
-
     export_completed = False
     try:
-        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), _session_factory()() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
             bundle = await _collect_org_data(session, org_id, pipelines_only=scope.pipelines_only, users_only=scope.users_only)
             hashes = _write_jsonl(bundle, output)
@@ -593,8 +605,6 @@ async def _async_import_org(
     strategy: ConflictStrategy,
     scope: _ScopeFlags,
 ) -> None:
-    from farna.db.session import AsyncSessionLocal
-
     meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
@@ -602,7 +612,7 @@ async def _async_import_org(
         raise click.ClickException("Import aborted: hash verification failed — file may be corrupted")
 
     try:
-        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
+        async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), _session_factory()() as session:
             await _verify_admin_access(session, org_id, ctx.obj["admin_user_id"])
             counts = await _import_org_data(
                 session,

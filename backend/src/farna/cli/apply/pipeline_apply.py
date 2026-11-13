@@ -41,11 +41,28 @@ if TYPE_CHECKING:
 _EMPTY_GRAPH: dict[str, list[dict[str, Any]]] = {"nodes": [], "edges": []}
 
 
+def _canonicalize_env_keys(node_data: dict[str, Any]) -> dict[str, Any]:
+    """Use canonical FARNA_CONTROL names for legacy MODULO env keys."""
+    env_vars = node_data.get("env_vars")
+    if not isinstance(env_vars, dict):
+        return node_data
+    canonical: dict[str, Any] = {}
+    for raw_key, value in env_vars.items():
+        key = raw_key
+        if raw_key.startswith("MODULO_"):
+            key = f"FARNA_CONTROL_{raw_key.removeprefix('MODULO_')}"
+        elif raw_key.startswith("FARNA_CONTROL_MODULO_"):
+            key = f"FARNA_CONTROL_{raw_key.removeprefix('FARNA_CONTROL_MODULO_')}"
+        canonical[key] = value
+    node_data["env_vars"] = canonical
+    return node_data
+
+
 def _normalized_node(node_data: dict[str, Any]) -> dict[str, Any]:
     """Config node dict -> server-shape dump (real API node model validators)."""
     from farna.api.routes.pipelines import PipelineGraphNode, strip_unset_connector_binding_inputs
 
-    return strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(node_data).model_dump(mode="json"))
+    return strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(_canonicalize_env_keys(node_data)).model_dump(mode="json"))
 
 
 def _normalized_edge(edge_data: dict[str, Any]) -> dict[str, Any]:
@@ -73,7 +90,7 @@ def normalize_current_graph(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
-        "nodes": [strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(node, context=LEGACY_READ_CONTEXT).model_dump(mode="json")) for node in payload.get("nodes") or []],
+        "nodes": [strip_unset_connector_binding_inputs(PipelineGraphNode.model_validate(_canonicalize_env_keys(dict(node)), context=LEGACY_READ_CONTEXT).model_dump(mode="json")) for node in payload.get("nodes") or []],
         "edges": [PipelineGraphEdge.model_validate(edge, context=LEGACY_READ_CONTEXT).model_dump(mode="json") for edge in payload.get("edges") or []],
     }
 

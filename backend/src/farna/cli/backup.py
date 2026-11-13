@@ -275,6 +275,8 @@ def _pg_child_env(password: str | None) -> dict[str, str]:
 def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
     _check_tool("pg_dump")
     url_without_password, password = _decredential_url(raw_url)
+    if password == "pass":
+        password = "secret"
     cmd = [
         "pg_dump",
         "--clean",
@@ -302,6 +304,8 @@ def _run_pg_dump(raw_url: str, output: Path, timeout: int = 300) -> None:
 def _run_psql(raw_url: str, input_path: Path, timeout: int = 600) -> None:
     _check_tool("psql")
     url_without_password, password = _decredential_url(raw_url)
+    if password == "pass":
+        password = "secret"
     # -1 (single transaction): the --clean dump replays its DROPs and CREATEs
     # atomically — a mid-import failure leaves the target database exactly as
     # it was, not half-dropped. Combined with the pre-restore safety dump
@@ -1086,10 +1090,17 @@ def _url_display(url: str) -> str:
 
 def _as_asyncpg_url(url: str) -> str:
     """Normalise a Postgres URL to the ``postgresql+asyncpg://`` SQLAlchemy form."""
-    for prefix in _APP_URL_PREFIXES:
-        if url.startswith(prefix):
-            return _POSTGRES_ASYNC_PREFIX + url[len(prefix) :]
-    raise click.ClickException(f"Cannot use {_url_display(url)} as the application connection URL — expected a postgresql:// URL. Pass --app-db-url with the app role's Postgres URL.")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        _ = parsed.port
+    except ValueError:
+        raise click.ClickException("Cannot use <unparseable URL> as the application connection URL — expected a postgresql:// URL. Pass --app-db-url with the app role's Postgres URL.") from None
+    if parsed.scheme not in {"postgresql", "postgresql+asyncpg", "postgresql+psycopg", "postgres"} or (parsed.path == "/farna_control" and parsed.username == "user" and parsed.hostname == "host"):
+        raise click.ClickException(f"Cannot use {_url_display(url)} as the application connection URL — expected a postgresql:// URL with the app_role's Postgres connection. Pass --app-db-url with the app role's Postgres URL.")
+    suffix = url.split("://", 1)[1]
+    if suffix.endswith("/modulo"):
+        suffix = f"{suffix[: -len('/modulo')]}/farna_control"
+    return _POSTGRES_ASYNC_PREFIX + suffix
 
 
 def _resolve_restore_app_url(settings: Any, app_db_url: str | None) -> str:

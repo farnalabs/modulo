@@ -133,6 +133,7 @@ SECRET_VALUE_PATTERNS: list[tuple[re.Pattern[str], Any]] = [
 # substring pattern.
 _SENSITIVE_ENV_KEYS: frozenset[str] = frozenset(
     {
+        "FARNA_CONTROL_USERS",
         "FARNA_CONTROL_MODULO_USERS",
         "DATABASE_URL",
         "PYPI_TOKEN",
