@@ -834,13 +834,29 @@ class ReleasePreflightChecker:
             "AZURE_TENANT_ID",
             "AZURE_SUBSCRIPTION_ID",
         ]
-        release_secrets = [
-            "BUNDLE_MANIFEST_SIGNING_KEY",
-            "MODULO_RELEASE_PR_TOKEN",
-        ]
+        release_secret_sources = {
+            "BUNDLE_MANIFEST_SIGNING_KEY": ("BUNDLE_MANIFEST_SIGNING_KEY",),
+            # FARNA_CONTROL_RELEASE_PR_TOKEN is canonical. Keep both historical
+            # spellings as fallbacks while callers migrate their workflow env.
+            "FARNA_CONTROL_RELEASE_PR_TOKEN": (
+                "FARNA_CONTROL_RELEASE_PR_TOKEN",
+                "MODULO_RELEASE_PR_TOKEN",
+                "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN",
+            ),
+        }
+
+        release_secrets = list(release_secret_sources)
+        resolved_release_secrets = {
+            canonical: next((self.env.get(source) for source in sources if self.env.get(source)), None)
+            for canonical, sources in release_secret_sources.items()
+        }
 
         if self.mode == "dry-run":
-            all_missing = [s for s in windows_signing_secrets + release_secrets if not self.env.get(s)]
+            all_missing = [
+                secret
+                for secret in windows_signing_secrets + release_secrets
+                if not self.env.get(secret) and resolved_release_secrets.get(secret) is None
+            ]
             if all_missing:
                 return PreflightCheckResult(
                     name,
@@ -861,7 +877,7 @@ class ReleasePreflightChecker:
         # (windows-installer.yml), which runs only when Windows is included.
         windows_packaging_required = self.include_windows and self.mode in ("cut", "recut")
 
-        missing_release = [s for s in release_secrets if not self.env.get(s)]
+        missing_release = [s for s in release_secrets if resolved_release_secrets[s] is None]
         missing_windows = (
             [s for s in windows_signing_secrets if not self.env.get(s)] if windows_packaging_required else []
         )
@@ -904,7 +920,7 @@ class ReleasePreflightChecker:
     # -------------------------------------------------------------------------
     def check_helm_chart(self) -> PreflightCheckResult:
         name = "Helm chart artefact validation"
-        chart_dir = self.repo_root / "deploy" / "helm" / "modulo"
+        chart_dir = self.repo_root / "deploy" / "helm" / "farna-control"
         if not chart_dir.is_dir():
             return PreflightCheckResult(name, False, "deploy/helm/modulo chart directory is missing")
 

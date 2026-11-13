@@ -57,7 +57,7 @@ def _make_dummy_repo(tmp_path: Path) -> Path:
     (tmp_path / "frontend" / "Dockerfile.prod").write_text("FROM alpine\n", encoding="utf-8")
     (tmp_path / "deploy" / "docker" / "runner-opencode.Dockerfile").write_text("FROM alpine\n", encoding="utf-8")
 
-    chart_dir = tmp_path / "deploy" / "helm" / "modulo"
+    chart_dir = tmp_path / "deploy" / "helm" / "farna-control"
     chart_dir.mkdir(parents=True, exist_ok=True)
     (chart_dir / "Chart.yaml").write_text("apiVersion: v2\nname: modulo\nversion: 0.1.0\n", encoding="utf-8")
     (chart_dir / "values.yaml").write_text("{}\n", encoding="utf-8")
@@ -709,7 +709,7 @@ def test_windows_native_artifacts_non_dry_run_passes_when_zip_exists(tmp_path: P
 # -----------------------------------------------------------------------------
 _RELEASE_SECRETS_ENV = {
     "BUNDLE_MANIFEST_SIGNING_KEY": "key-123",
-    "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN": "token-123",
+    "FARNA_CONTROL_RELEASE_PR_TOKEN": "token-123",
 }
 _AZURE_SIGNING_ENV = {
     "AZURE_CLIENT_ID": "id-123",
@@ -746,12 +746,12 @@ def test_release_secrets_are_required_when_windows_not_included(tmp_path: Path):
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_RELEASE_PR_TOKEN" in res.details
     # Only the Azure secrets may be skipped - the release secrets must be named as missing.
     assert "AZURE_CLIENT_ID" not in res.details
 
 
-@pytest.mark.parametrize("missing_secret", ["BUNDLE_MANIFEST_SIGNING_KEY", "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN"])
+@pytest.mark.parametrize("missing_secret", ["BUNDLE_MANIFEST_SIGNING_KEY", "FARNA_CONTROL_RELEASE_PR_TOKEN"])
 def test_each_release_secret_is_required_when_windows_not_included(tmp_path: Path, missing_secret: str):
     repo = _make_dummy_repo(tmp_path)
     env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != missing_secret}
@@ -771,7 +771,7 @@ def test_azure_signing_secrets_cut_and_recut_fail_when_missing(tmp_path: Path, m
     assert "Missing required release secret(s)" in res.details
     assert "Missing required Azure Trusted Signing secret(s)" in res.details
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in res.details
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_RELEASE_PR_TOKEN" in res.details
 
 
 def test_azure_signing_secrets_cut_fails_when_only_azure_secrets_missing(tmp_path: Path):
@@ -812,16 +812,16 @@ def test_release_pr_token_is_required_in_promote_without_windows(tmp_path: Path)
 
     ``promote`` does not build or sign a Windows installer, so the Azure
     Trusted Signing secrets are correctly not required — but the cut/promote PR
-    is driven by ``MODULO_RELEASE_PR_TOKEN``, so its absence must fail the gate
+    is driven by ``FARNA_CONTROL_RELEASE_PR_TOKEN``, so its absence must fail the gate
     and name the missing variable.
     """
     repo = _make_dummy_repo(tmp_path)
-    env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN"}
+    env = {key: value for key, value in _RELEASE_SECRETS_ENV.items() if key != "FARNA_CONTROL_RELEASE_PR_TOKEN"}
     checker = ReleasePreflightChecker(mode="promote", version="0.1.0", include_windows=False, repo_root=repo, env=env)
     res = checker.check_azure_signing_secrets()
     assert not res.passed
     assert "Missing required release secret(s)" in res.details
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in res.details
+    assert "FARNA_CONTROL_RELEASE_PR_TOKEN" in res.details
     # The configured release secret is not reported, and Azure is not demanded.
     assert "BUNDLE_MANIFEST_SIGNING_KEY" not in res.details
     assert "AZURE_CLIENT_ID" not in res.details
@@ -843,7 +843,7 @@ def test_azure_signing_secrets_cut_passes_when_present(tmp_path: Path):
 # -----------------------------------------------------------------------------
 def test_helm_chart_fails_when_required_file_missing(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
-    (repo / "deploy" / "helm" / "modulo" / "Chart.yaml").unlink()
+    (repo / "deploy" / "helm" / "farna-control" / "Chart.yaml").unlink()
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
     res = checker.check_helm_chart()
     assert not res.passed
@@ -853,9 +853,9 @@ def test_helm_chart_fails_when_required_file_missing(tmp_path: Path):
 
 def test_helm_chart_fails_when_chart_directory_missing(tmp_path: Path):
     repo = _make_dummy_repo(tmp_path)
-    (repo / "deploy" / "helm" / "modulo" / "values.yaml").unlink()
-    (repo / "deploy" / "helm" / "modulo" / "Chart.yaml").unlink()
-    (repo / "deploy" / "helm" / "modulo").rmdir()
+    (repo / "deploy" / "helm" / "farna-control" / "values.yaml").unlink()
+    (repo / "deploy" / "helm" / "farna-control" / "Chart.yaml").unlink()
+    (repo / "deploy" / "helm" / "farna-control").rmdir()
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo)
     res = checker.check_helm_chart()
     assert not res.passed
@@ -883,7 +883,7 @@ def test_helm_chart_runs_helm_lint_when_available(tmp_path: Path, monkeypatch):
     checker = ReleasePreflightChecker(mode="cut", version="0.1.0", repo_root=repo, run_cmd=fake_run)
     res = checker.check_helm_chart()
     assert res.passed
-    assert calls == [["/usr/bin/helm", "lint", str(repo / "deploy" / "helm" / "modulo")]]
+    assert calls == [["/usr/bin/helm", "lint", str(repo / "deploy" / "helm" / "farna-control")]]
 
 
 def test_helm_chart_fails_when_helm_lint_fails(tmp_path: Path, monkeypatch):
@@ -1108,7 +1108,7 @@ def test_run_all_checks_skips_windows_checks_by_default(tmp_path: Path, monkeypa
     # Windows is out of scope, and it does not demand the Azure secrets.
     assert not azure.passed
     assert "BUNDLE_MANIFEST_SIGNING_KEY" in azure.details
-    assert "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN" in azure.details
+    assert "FARNA_CONTROL_RELEASE_PR_TOKEN" in azure.details
     assert "AZURE_CLIENT_ID" not in azure.details
     assert not all(r.passed for r in results)
 
@@ -1282,7 +1282,7 @@ _PREFLIGHT_SECRET_ENV_KEYS = (
     "AZURE_TENANT_ID",
     "AZURE_SUBSCRIPTION_ID",
     "BUNDLE_MANIFEST_SIGNING_KEY",
-    "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN",
+    "FARNA_CONTROL_RELEASE_PR_TOKEN",
     "GH_TOKEN",
     "GITHUB_TOKEN",
     "GITHUB_ACTIONS",
@@ -1464,7 +1464,7 @@ def test_preflight_passes_secrets_but_never_prints_them():
         "AZURE_TENANT_ID",
         "AZURE_SUBSCRIPTION_ID",
         "BUNDLE_MANIFEST_SIGNING_KEY",
-        "FARNA_CONTROL_MODULO_RELEASE_PR_TOKEN",
+        "MODULO_RELEASE_PR_TOKEN",
     ):
         assert env[secret_name] == f"${{{{ secrets.{secret_name} }}}}"
     # The run block must reference the environment, never interpolate a secret.
