@@ -82,8 +82,9 @@ jobs:
       contents: write
       actions: write
     steps:
-      # No checkout: the proof only talks to the GitHub API through `gh`, so it
-      # never needs repository credentials persisted on disk.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Ensure schema freshness CI on the exact commit
         if: inputs.mode != 'dry-run'
         shell: bash
