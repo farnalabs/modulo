@@ -32,7 +32,6 @@ from farna.db.models.library_primitive import LibraryPrimitive
 from farna.db.models.model_backend import ModelBackend
 from farna.db.models.pipeline import Pipeline
 from farna.db.models.run import Run
-from farna.db.session import AsyncSessionLocal
 from farna.settings import get_settings
 
 _log = logging.getLogger(__name__)
@@ -529,6 +528,8 @@ def export_org(ctx: click.Context, org_id: str, output: Path, pipelines_only: bo
 
 
 async def _async_export_org(ctx: click.Context, org_id: uuid.UUID, output: Path, scope: _ScopeFlags) -> None:
+    from farna.db.session import AsyncSessionLocal
+
     export_completed = False
     try:
         async with asyncio.timeout(_DB_OP_TIMEOUT_SECONDS), AsyncSessionLocal() as session:
@@ -592,6 +593,8 @@ async def _async_import_org(
     strategy: ConflictStrategy,
     scope: _ScopeFlags,
 ) -> None:
+    from farna.db.session import AsyncSessionLocal
+
     meta, records = await _read_jsonl(input_path)
     click.echo(f"Loaded {len(records)} records from {input_path}")
 
