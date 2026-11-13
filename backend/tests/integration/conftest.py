@@ -320,6 +320,7 @@ def db_url(
     # pydantic-settings reads the MODULO_* name; some test fixtures read the
     # FARNA_CONTROL_MODULO_* name directly via os.environ subscript.
     sys_url = _with_credentials(url, "farna_control_system", "syspass")
+    session_monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", sys_url)
     session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
     session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
     return url
@@ -439,6 +440,7 @@ def migrated_db_url(db_url: str, session_monkeypatch: pytest.MonkeyPatch) -> str
     # different names: pydantic-settings reads the MODULO_* name; some test
     # fixtures read the FARNA_CONTROL_MODULO_* name directly via os.environ
     # subscript.
+    session_monkeypatch.setenv("FARNA_CONTROL_SYSTEM_DATABASE_URL", sys_url)
     session_monkeypatch.setenv("MODULO_SYSTEM_DATABASE_URL", sys_url)
     session_monkeypatch.setenv("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", sys_url)
 
