@@ -674,7 +674,7 @@ def test_perform_upgrade_live_process_aborts(tmp_path, monkeypatch, patched_trus
 @pytest.mark.skipif(os.name != "posix", reason="posix symlinks + sh (the verbatim-restore E2E)")
 def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monkeypatch, patched_trust_store):
     """The refusal names the snapshot + the exact restore; the EMITTED command
-    executes VERBATIM end-to-end (the PATH shim's `modulo` records its argv)."""
+    executes VERBATIM end-to-end (the PATH shim's `farna-control` records its argv)."""
     import subprocess
 
     from farna.launcher import upgrade as upgrade_module
@@ -720,7 +720,7 @@ def test_perform_upgrade_boot_failure_prints_snapshot_and_restore(tmp_path, monk
     # The EMITTED restore command executes VERBATIM (the shim records argv).
     shim_dir = tmp_path / "shim"
     shim_dir.mkdir()
-    shim_file = shim_dir / "modulo"
+    shim_file = shim_dir / "farna-control"
     shim_file.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
     shim_file.chmod(0o755)
     run_env = dict(os.environ, PATH=f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}")
