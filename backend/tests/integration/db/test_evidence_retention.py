@@ -105,18 +105,11 @@ async def _seed_pipeline_snapshot_run(engine: AsyncEngine, org_id: uuid.UUID) ->
     account_id, pipeline_id, snapshot_id, run_id = (uuid.uuid4() for _ in range(4))
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {"id": str(account_id), "email": f"ret-{org_id.hex[:8]}@test.local", "name": "Retention"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, "
-                "lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipeline_id), "oid": str(org_id), "name": "retention-pipe", "aid": str(account_id)},
         )
         await conn.execute(
@@ -129,11 +122,7 @@ async def _seed_pipeline_snapshot_run(engine: AsyncEngine, org_id: uuid.UUID) ->
             {"id": str(snapshot_id), "pid": str(pipeline_id), "oid": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, "
-                "run_number, input_hash, langgraph_thread_id) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :ih, :tid)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, status, run_number, input_hash, langgraph_thread_id) VALUES (:id, :oid, :pid, :sid, 'manual', 'complete', 1, :ih, :tid)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -235,9 +224,7 @@ async def test_purge_batches_oldest_first(db_session: AsyncSession, org: uuid.UU
     assert await _org_row_count(db_session, org) == 0
 
 
-async def test_purge_leaves_other_orgs_rows_untouched(
-    db_session: AsyncSession, db_engine: AsyncEngine, org: uuid.UUID
-) -> None:
+async def test_purge_leaves_other_orgs_rows_untouched(db_session: AsyncSession, db_engine: AsyncEngine, org: uuid.UUID) -> None:
     foreign_org = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
@@ -245,10 +232,7 @@ async def test_purge_leaves_other_orgs_rows_untouched(
             {"id": str(foreign_org), "name": "foreign", "slug": f"foreign-{foreign_org.hex[:12]}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO evidence (id, organisation_id, key, subject_type, subject_id, producer_type, created_at) "
-                "VALUES (:id, :oid, :k, 'eval', 's', 'eval', :created)"
-            ),
+            text("INSERT INTO evidence (id, organisation_id, key, subject_type, subject_id, producer_type, created_at) VALUES (:id, :oid, :k, 'eval', 's', 'eval', :created)"),
             {"id": str(uuid.uuid4()), "oid": str(foreign_org), "k": "theirs.old", "created": _utc_days_ago(200)},
         )
     _add_evidence(db_session, org, "mine.old", created_at=_utc_days_ago(200))
@@ -266,9 +250,7 @@ async def test_purge_leaves_other_orgs_rows_untouched(
 # ---------------------------------------------------------------------------
 
 
-async def test_deleting_run_does_not_delete_run_subject_evidence(
-    db_session: AsyncSession, db_engine: AsyncEngine, org: uuid.UUID
-) -> None:
+async def test_deleting_run_does_not_delete_run_subject_evidence(db_session: AsyncSession, db_engine: AsyncEngine, org: uuid.UUID) -> None:
     seeded = await _seed_pipeline_snapshot_run(db_engine, org)
     _add_evidence(
         db_session,
@@ -335,9 +317,7 @@ async def test_second_sweep_while_locked_exits_cleanly_then_restarts(
     k1, k2 = _str_to_lock_keys(_lock_key_for_org(org))
     holder = await db_engine.connect()
     try:
-        grabbed = (
-            await holder.execute(text("SELECT pg_try_advisory_lock(:k1, :k2)"), {"k1": k1, "k2": k2})
-        ).scalar_one()
+        grabbed = (await holder.execute(text("SELECT pg_try_advisory_lock(:k1, :k2)"), {"k1": k1, "k2": k2})).scalar_one()
         assert grabbed is True
 
         with caplog.at_level(logging.WARNING, logger=_RETENTION_LOGGER):
@@ -418,9 +398,7 @@ async def test_concurrent_insert_with_old_created_at_survives_sweep(
 # ---------------------------------------------------------------------------
 
 
-async def test_batch_log_event_carries_policy_fields(
-    db_session: AsyncSession, org: uuid.UUID, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_batch_log_event_carries_policy_fields(db_session: AsyncSession, org: uuid.UUID, caplog: pytest.LogCaptureFixture) -> None:
     old = _utc_days_ago(120)
     for i in range(3):
         _add_evidence(db_session, org, f"row.{i}", created_at=old)

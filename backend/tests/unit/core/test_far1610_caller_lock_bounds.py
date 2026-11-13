@@ -93,9 +93,7 @@ def _make_session(org: Any) -> AsyncMock:
         lowered = str(stmt).lower()
         # FAR-1833: the pre-gate reads the ceiling from the per-org cost-state
         # row; the org row itself is only read for existence.
-        result.scalar_one_or_none = MagicMock(
-            return_value=org if ("organisation_cost_state" in lowered or "organisations" in lowered) else None
-        )
+        result.scalar_one_or_none = MagicMock(return_value=org if ("organisation_cost_state" in lowered or "organisations" in lowered) else None)
         return result
 
     session.execute = AsyncMock(side_effect=_execute)
@@ -149,9 +147,7 @@ async def test_spend_ceiling_gate_bounds_before_the_terminal_write() -> None:
         patch("farna.core.pipeline_engine.executor.update_run_status", new=_update),
         patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
 
     assert order == ["bound", "update"]
     assert halted is run
@@ -179,9 +175,7 @@ async def test_spend_ceiling_gate_lock_timeout_is_fail_open_and_logged(
         patch("farna.core.pipeline_engine.executor.get_run", new=AsyncMock(return_value=run)),
         caplog.at_level("ERROR", logger="farna.core.pipeline_engine.executor"),
     ):
-        halted = await PipelineExecutor._check_spend_ceiling_gate(
-            fake_self, run_id=run.id, org_id=org.id, claim_token=None
-        )
+        halted = await PipelineExecutor._check_spend_ceiling_gate(fake_self, run_id=run.id, org_id=org.id, claim_token=None)
 
     assert halted is None
     assert any("spend_ceiling_gate_failed" in message for message in caplog.messages)
@@ -405,9 +399,7 @@ async def test_check_capacity_reset_cancellation_propagates() -> None:
         (0, "fence_lost", "matched no row"),
     ],
 )
-async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(
-    reset_rowcount: int | None, expected_state: str, expected_fragment: str
-) -> None:
+async def test_check_capacity_second_lock_timeout_defers_with_the_reset_outcome(reset_rowcount: int | None, expected_state: str, expected_fragment: str) -> None:
     """The deferral survives a reset that could not confirm the handback, and
     carries the OUTCOME rather than a bool.
 

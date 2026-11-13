@@ -89,9 +89,7 @@ async def _inventory_draft(session: AsyncSession, org_id: uuid.UUID) -> Any:
         )
     )
     pipelines = list(pipeline_result.scalars())
-    trigger_result = await session.execute(
-        select(Trigger).where(Trigger.organisation_id == org_id, Trigger.deleted_at.is_(None))
-    )
+    trigger_result = await session.execute(select(Trigger).where(Trigger.organisation_id == org_id, Trigger.deleted_at.is_(None)))
     triggers = list(trigger_result.scalars())
     connector_result = await session.execute(
         select(ConnectorInstance).where(
@@ -190,10 +188,7 @@ async def _insert_eval(
     }
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) "
-                "VALUES (:id, :oid, :pid, :name, :type, CAST(:config AS jsonb), :aid)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, name, eval_type, config_json, account_id) VALUES (:id, :oid, :pid, :name, :type, CAST(:config AS jsonb), :aid)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -273,11 +268,7 @@ async def _assert_persisted_draft(db_engine: AsyncEngine, map_id: str) -> dict[s
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT sm.published_revision_id, sr.status, sr.content_json "
-                        "FROM system_maps sm JOIN system_map_revisions sr ON sr.id = sm.published_revision_id "
-                        "WHERE sm.id = :id"
-                    ),
+                    text("SELECT sm.published_revision_id, sr.status, sr.content_json FROM system_maps sm JOIN system_map_revisions sr ON sr.id = sm.published_revision_id WHERE sm.id = :id"),
                     {"id": map_id},
                 )
             )
@@ -289,11 +280,7 @@ async def _assert_persisted_draft(db_engine: AsyncEngine, map_id: str) -> dict[s
         row = (
             (
                 await conn.execute(
-                    text(
-                        "SELECT sm.published_revision_id, sr.status, sr.content_json "
-                        "FROM system_maps sm JOIN system_map_revisions sr ON sr.system_map_id = sm.id "
-                        "WHERE sm.id = :id ORDER BY sr.revision_number DESC LIMIT 1"
-                    ),
+                    text("SELECT sm.published_revision_id, sr.status, sr.content_json FROM system_maps sm JOIN system_map_revisions sr ON sr.system_map_id = sm.id WHERE sm.id = :id ORDER BY sr.revision_number DESC LIMIT 1"),
                     {"id": map_id},
                 )
             )

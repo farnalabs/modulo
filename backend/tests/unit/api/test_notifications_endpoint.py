@@ -72,12 +72,8 @@ def client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -98,12 +94,8 @@ def viewer_client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="viewer", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -509,12 +501,8 @@ def test_notifications_unauthenticated_returns_4xx(client: TestClient) -> None:
     client.app.dependency_overrides.pop(get_current_user, None)
     client.app.dependency_overrides.pop(get_current_tenant_user, None)
     resp = client.get("/api/v1/notifications")
-    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    client.app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="tenant", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     assert resp.status_code in (401, 403)
 
 

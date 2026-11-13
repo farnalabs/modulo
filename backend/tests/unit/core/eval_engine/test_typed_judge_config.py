@@ -205,9 +205,7 @@ class TestChoiceBounds:
     def test_two_to_255_unique_keys_are_accepted(self) -> None:
         validate_typed_judge_config(_config(questions=[_choice()]))
         many = [{"key": f"k{index}"} for index in range(MAX_CHOICE_OPTIONS)]
-        parsed = parse_typed_judge_config(
-            _config(questions=[_choice(options=many, passing_keys=["k0"], option_scores=None)])
-        )
+        parsed = parse_typed_judge_config(_config(questions=[_choice(options=many, passing_keys=["k0"], option_scores=None)]))
 
         assert isinstance(parsed.questions[0], ChoiceQuestion)
         assert len(parsed.questions[0].options) == MAX_CHOICE_OPTIONS

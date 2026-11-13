@@ -211,9 +211,7 @@ class TestSkillLoaderGetSkills:
         skills = await loader.get_user_skills(uuid.uuid4())
         assert skills == []
 
-    async def test_get_skills_unknown_filter_column_is_ignored(
-        self, loader: SkillLoader, mock_session: AsyncMock
-    ) -> None:
+    async def test_get_skills_unknown_filter_column_is_ignored(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
         mock_skill = _mock_skill("code-review")
         scalars_mock = MagicMock()
         scalars_mock.all = MagicMock(return_value=[mock_skill])
@@ -225,9 +223,7 @@ class TestSkillLoaderGetSkills:
         assert len(skills) == 1
         assert skills[0].name == "code-review"
 
-    async def test_get_skills_returns_empty_on_sqlalchemy_error(
-        self, loader: SkillLoader, mock_session: AsyncMock
-    ) -> None:
+    async def test_get_skills_returns_empty_on_sqlalchemy_error(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=SQLAlchemyError("db down"))
 
         skills = await loader.get_org_skills(uuid.uuid4())
@@ -239,9 +235,7 @@ class TestSkillLoaderGetSkills:
         with pytest.raises(asyncio.CancelledError):
             await loader.get_org_skills(uuid.uuid4())
 
-    async def test_get_skills_returns_empty_on_unexpected_error(
-        self, loader: SkillLoader, mock_session: AsyncMock
-    ) -> None:
+    async def test_get_skills_returns_empty_on_unexpected_error(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
         mock_session.execute = AsyncMock(side_effect=RuntimeError("boom"))
 
         skills = await loader.get_org_skills(uuid.uuid4())
@@ -260,9 +254,7 @@ class TestSkillLoaderBuildUserProfile:
         result.scalar_one_or_none = MagicMock(return_value=scalar_value)
         return result
 
-    async def test_builds_full_profile_when_all_relations_present(
-        self, loader: SkillLoader, mock_session: AsyncMock
-    ) -> None:
+    async def test_builds_full_profile_when_all_relations_present(self, loader: SkillLoader, mock_session: AsyncMock) -> None:
         account = MagicMock()
         account.display_name = "Ada Lovelace"
         account.email = "ada@example.com"
@@ -272,9 +264,7 @@ class TestSkillLoaderBuildUserProfile:
         org.name = "Acme"
         org.plan_id = "team"
 
-        mock_session.execute = AsyncMock(
-            side_effect=[self._result(account), self._result(membership), self._result(org)]
-        )
+        mock_session.execute = AsyncMock(side_effect=[self._result(account), self._result(membership), self._result(org)])
 
         profile = await loader._build_user_profile(uuid.uuid4(), uuid.uuid4())
         assert profile is not None
@@ -397,9 +387,7 @@ class TestSkillLoaderBuildSystemPrompt:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(
-            loader, org_id, user_id, config_kwargs={"system_prompt": "You are a helpful assistant."}
-        )
+        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "You are a helpful assistant."})
         assert "You are a helpful assistant." in prompt
         assert "Organisation Skills" not in prompt
         assert "User Skills" not in prompt
@@ -516,9 +504,7 @@ class TestSkillLoaderBuildSystemPrompt:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(
-            loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": "We build Modulo."}
-        )
+        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": "We build Modulo."})
         assert "Product Overview" in prompt
         assert "We build Modulo." in prompt
 
@@ -545,9 +531,7 @@ class TestSkillLoaderBuildSystemPrompt:
         org_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
-        prompt = await self._run(
-            loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": ""}
-        )
+        prompt = await self._run(loader, org_id, user_id, config_kwargs={"system_prompt": "Base.", "product_primer": ""})
         assert "Product Overview" not in prompt
 
     async def test_knowledge_tools_section_includes_tool_sources(

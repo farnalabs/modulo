@@ -410,9 +410,7 @@ class TestPerformCleanup:
         assert resp.status_code == 200
         body = resp.json()
         assert body["deleted_count"] == 0
-        assert body["errors"] == [
-            {"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}
-        ]
+        assert body["errors"] == [{"entity_type": "invalid_org_fk", "error": "Surfaced for triage only — not auto-deleted."}]
         # The triage-only type must never reach the delete path.
         session.delete.assert_not_awaited()
 

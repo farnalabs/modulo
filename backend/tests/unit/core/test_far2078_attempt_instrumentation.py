@@ -252,21 +252,11 @@ async def sqlite_maker(tmp_path: Any) -> Any:
     engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'attempts.db'}")
     async with engine.begin() as conn:
         await conn.exec_driver_sql("CREATE TABLE organisations (id VARCHAR(32) PRIMARY KEY)")
-        await conn.exec_driver_sql(
-            "CREATE TABLE runs ("
-            "id VARCHAR(32) PRIMARY KEY, "
-            "organisation_id VARCHAR(32) NOT NULL, "
-            "status VARCHAR(20) NOT NULL, "
-            "claim_token VARCHAR(64), "
-            "cancellation_requested BOOLEAN NOT NULL DEFAULT 0, "
-            "error_code VARCHAR(255), "
-            "error_detail TEXT)"
-        )
+        await conn.exec_driver_sql("CREATE TABLE runs (id VARCHAR(32) PRIMARY KEY, organisation_id VARCHAR(32) NOT NULL, status VARCHAR(20) NOT NULL, claim_token VARCHAR(64), cancellation_requested BOOLEAN NOT NULL DEFAULT 0, error_code VARCHAR(255), error_detail TEXT)")
         await conn.run_sync(RunAttempt.__table__.create)
         await conn.exec_driver_sql("INSERT INTO organisations (id) VALUES (:org)", {"org": ORG.hex})
         await conn.exec_driver_sql(
-            "INSERT INTO runs (id, organisation_id, status, claim_token, error_code) "
-            "VALUES (:run, :org, 'running', 'tok', 'executor_stalled')",
+            "INSERT INTO runs (id, organisation_id, status, claim_token, error_code) VALUES (:run, :org, 'running', 'tok', 'executor_stalled')",
             {"run": RUN.hex, "org": ORG.hex},
         )
     maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -301,17 +291,12 @@ async def test_a_fenced_reset_retains_the_attempts_reason_and_error_code(
     # the attempt row, which this statement proves on a real database.
     async with sqlite_maker() as session, session.begin():
         await session.execute(
-            text(
-                "UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL "
-                "WHERE id=:rid AND claim_token=:tok AND status='running' AND cancellation_requested = false"
-            ),
+            text("UPDATE runs SET status='pending', error_code=NULL, error_detail=NULL WHERE id=:rid AND claim_token=:tok AND status='running' AND cancellation_requested = false"),
             {"rid": RUN.hex, "tok": "tok"},
         )
 
     async with sqlite_maker() as session, session.begin():
-        run_row = (
-            await session.execute(text("SELECT status, error_code FROM runs WHERE id=:rid"), {"rid": RUN.hex})
-        ).first()
+        run_row = (await session.execute(text("SELECT status, error_code FROM runs WHERE id=:rid"), {"rid": RUN.hex})).first()
     assert run_row is not None
     assert run_row[0] == "pending"
     assert run_row[1] is None, "the reset clears the run-level reason (the bug this table exists for)"
@@ -341,9 +326,7 @@ async def test_close_with_no_open_attempt_is_an_idempotent_no_op(
 # ---------------------------------------------------------------------------
 
 
-async def test_attempt_close_failure_is_swallowed_and_logged(
-    sqlite_maker: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_attempt_close_failure_is_swallowed_and_logged(sqlite_maker: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture) -> None:
     with (
         patch.object(attempt_crud, "close_attempt", AsyncMock(side_effect=RuntimeError("db down"))),
         caplog.at_level("WARNING", logger="farna.core.pipeline_execution"),
@@ -531,9 +514,7 @@ async def test_a_handed_back_worker_loss_closes_the_attempt() -> None:
         ("failed", "executor_heartbeat_lost", ATTEMPT_TERMINAL_REASON_WORKER_LOST),
     ],
 )
-async def test_the_wrapper_closes_the_attempt_for_a_terminal_outcome(
-    status: str, error_code: str | None, expected_reason: str
-) -> None:
+async def test_the_wrapper_closes_the_attempt_for_a_terminal_outcome(status: str, error_code: str | None, expected_reason: str) -> None:
     closer = AsyncMock(return_value=0)
     with patch("farna.core.pipeline_execution.record_attempt_close", closer):
         await pe._record_executor_outcome_attempt(MagicMock(), RUN, ORG, status=status, error_code=error_code)

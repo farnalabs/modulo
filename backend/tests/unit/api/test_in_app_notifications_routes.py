@@ -474,9 +474,7 @@ def test_list_includes_point_in_time_run_metadata(client: tuple[TestClient, _Tes
     harness.stub("count_notifications_for_user", AsyncMock(return_value=1))
     harness.stub(
         "get_linked_run_states",
-        AsyncMock(
-            return_value={row.id: LinkedRunState(run_id=_RUN_ID, status="cancelled", cancel_reason="user_requested")}
-        ),
+        AsyncMock(return_value={row.id: LinkedRunState(run_id=_RUN_ID, status="cancelled", cancel_reason="user_requested")}),
     )
 
     resp = http.get(_BASE)

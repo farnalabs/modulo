@@ -49,9 +49,7 @@ def _oidc_settings(license_key: str = "test-license-key") -> Settings:
 
 
 def _make_id_token(email: str, name: str, sub: str = "abc123") -> str:
-    payload = (
-        base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
-    )
+    payload = base64.urlsafe_b64encode(json.dumps({"email": email, "name": name, "sub": sub}).encode()).rstrip(b"=").decode()
     return f"eyJhbGciOiJSUzI1NiJ9.{payload}.signature"
 
 
@@ -330,9 +328,7 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
     account = returned[0] if isinstance(returned, tuple) else returned
-    assert account.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
-    )
+    assert account.email == ctx.get("expected_email", ""), f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
 
 
 @then(parsers.parse('the error detail mentions "{text}"'))

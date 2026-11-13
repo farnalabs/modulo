@@ -73,9 +73,7 @@ class TestSanitizeSkipSummary:
 
 class TestCreateConnectorInstance:
     async def test_creates_with_all_fields(self, mock_session: AsyncMock) -> None:
-        with patch(
-            "farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
-        ) as mock_ci_cls:
+        with patch("farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()) as mock_ci_cls:
             from farna.db.crud.connector_instance import create_connector_instance
 
             result = await create_connector_instance(
@@ -108,9 +106,7 @@ class TestCreateConnectorInstance:
         assert result is not None
 
     async def test_creates_with_defaults(self, mock_session: AsyncMock) -> None:
-        with patch(
-            "farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()
-        ) as mock_ci_cls:
+        with patch("farna.db.crud.connector_instance.ConnectorInstance", return_value=_make_connector_instance()) as mock_ci_cls:
             from farna.db.crud.connector_instance import create_connector_instance
 
             await create_connector_instance(
@@ -311,9 +307,7 @@ class TestUpdateConnectorInstance:
         ):
             from farna.db.crud.connector_instance import update_connector_instance
 
-            result = await update_connector_instance(
-                mock_session, _CONNECTOR_ID, {"name": "updated", "config_json": {"new": "value"}}
-            )
+            result = await update_connector_instance(mock_session, _CONNECTOR_ID, {"name": "updated", "config_json": {"new": "value"}})
 
         apply_updates.assert_called_once_with(ci, {"name": "updated", "config_json": {"new": "value"}})
         mock_session.flush.assert_awaited_once()

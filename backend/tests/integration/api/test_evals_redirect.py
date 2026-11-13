@@ -67,10 +67,7 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true)"),
             {
                 "id": str(acc_id),
                 "email": f"c3b-{acc_id.hex[:10]}@example.com",
@@ -79,9 +76,7 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"),
             {"id": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -89,21 +84,14 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
 
 async def _account_email(engine: AsyncEngine, account_id: uuid.UUID) -> str:
     async with engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(account_id)})
-        ).scalar_one()
+        return (await conn.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(account_id)})).scalar_one()
 
 
 async def _seed_pipeline(engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipeline_id), "oid": str(org_id), "name": "Chunk3b Pipeline", "uid": str(account_id)},
         )
     return pipeline_id
@@ -126,18 +114,12 @@ async def _seed_snapshot(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uu
     return snapshot_id
 
 
-async def _seed_run(
-    engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID
-) -> uuid.UUID:
+async def _seed_run(engine: AsyncEngine, org_id: uuid.UUID, pipeline_id: uuid.UUID, snapshot_id: uuid.UUID) -> uuid.UUID:
     run_id = uuid.uuid4()
     run_number = int(run_id.int % 10**9) + 1
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'complete')"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'complete')"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -161,12 +143,7 @@ async def _seed_feedback_record(
     record_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO feedback_records (id, organisation_id, run_id, review_id, "
-                "account_id, rejection_reason, rejected_output, producing_node_id, "
-                "feedback_status, eval_gap) "
-                "VALUES (:id, :oid, :rid, 'gate', :aid, 'not right', '{}'::json, :nid, 'pending', true)"
-            ),
+            text("INSERT INTO feedback_records (id, organisation_id, run_id, review_id, account_id, rejection_reason, rejected_output, producing_node_id, feedback_status, eval_gap) VALUES (:id, :oid, :rid, 'gate', :aid, 'not right', '{}'::json, :nid, 'pending', true)"),
             {
                 "id": str(record_id),
                 "oid": str(org_id),
@@ -475,9 +452,7 @@ async def test_w4_rest_update_bumps_version_and_updates_gate(env: Chunk3bEnv, cl
     assert resp.status_code == 201, resp.text
     assert resp.json()["version"] == 1
 
-    await _assert_cutover_shape(
-        env, f"w5-guardrail-{env.org_id.hex[:6]}", eval_type="guardrail", node_id=_NODE_ID_1, wants_gate=False
-    )
+    await _assert_cutover_shape(env, f"w5-guardrail-{env.org_id.hex[:6]}", eval_type="guardrail", node_id=_NODE_ID_1, wants_gate=False)
 
 
 async def test_w6_guardrail_update_still_has_no_gate(env: Chunk3bEnv, client: AsyncClient) -> None:

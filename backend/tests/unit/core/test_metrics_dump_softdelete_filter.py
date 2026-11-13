@@ -57,10 +57,6 @@ async def test_eval_definitions_count_where_clause_contains_deleted_at():
 
     for stmt in eval_def_stmts:
         where_clause = str(stmt.whereclause)
-        assert "deleted_at" in where_clause, (
-            f"Expected 'deleted_at' in the eval-definition WHERE clause but got: {where_clause}"
-        )
+        assert "deleted_at" in where_clause, f"Expected 'deleted_at' in the eval-definition WHERE clause but got: {where_clause}"
         # FAR-1729 source-table pin: the count must never read the frozen table.
-        assert "eval_definitions" not in str(stmt), (
-            f"eval-definition count must read evals, not the frozen table, got: {stmt}"
-        )
+        assert "eval_definitions" not in str(stmt), f"eval-definition count must read evals, not the frozen table, got: {stmt}"

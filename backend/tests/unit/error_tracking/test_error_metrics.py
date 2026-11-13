@@ -27,9 +27,7 @@ def _make_meter() -> MagicMock:
     return meter
 
 
-def _metrics_records(
-    caplog: pytest.LogCaptureFixture, *, needle: str, level: int | None = None
-) -> list[logging.LogRecord]:
+def _metrics_records(caplog: pytest.LogCaptureFixture, *, needle: str, level: int | None = None) -> list[logging.LogRecord]:
     """Captured records from the metrics logger whose INTERPOLATED message
     contains ``needle`` (optionally filtered to a level).
 
@@ -43,13 +41,7 @@ def _metrics_records(
     caller uses ``len(records) == 1`` (or ``not records``) to restore the
     once-only/exact-message observation.
     """
-    return [
-        record
-        for record in caplog.records
-        if record.name == metrics_mod._log.name
-        and needle in record.getMessage()
-        and (level is None or record.levelno == level)
-    ]
+    return [record for record in caplog.records if record.name == metrics_mod._log.name and needle in record.getMessage() and (level is None or record.levelno == level)]
 
 
 # =========================================================================
@@ -128,13 +120,9 @@ class TestInitMetrics:
         assert metrics_mod._error_groups_active is None
         # Restores the pre-#1616 strength: warning-once-with-exact-message plus
         # info-once ("metrics.gauge_not_supported — ..." / "metrics.registered").
-        gauge_unsupported_records = _metrics_records(
-            caplog, needle="metrics.gauge_not_supported", level=logging.WARNING
-        )
+        gauge_unsupported_records = _metrics_records(caplog, needle="metrics.gauge_not_supported", level=logging.WARNING)
         assert len(gauge_unsupported_records) == 1
-        assert gauge_unsupported_records[0].getMessage() == (
-            "metrics.gauge_not_supported — OTel SDK version does not support create_gauge"
-        )
+        assert gauge_unsupported_records[0].getMessage() == ("metrics.gauge_not_supported — OTel SDK version does not support create_gauge")
         registered_records = _metrics_records(caplog, needle="metrics.registered", level=logging.INFO)
         assert len(registered_records) == 1
 
@@ -290,11 +278,7 @@ class TestSampleErrorGroupMetrics:
         engine = create_async_engine("sqlite+aiosqlite://", echo=False)
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(
-                    lambda sync_conn: Base.metadata.create_all(
-                        sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]
-                    )
-                )
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]))
 
             org_id = uuid.uuid4()
             async with async_sessionmaker(engine, expire_on_commit=False)() as session, session.begin():
@@ -381,9 +365,7 @@ class TestInitAlertCounter:
     ],
     ids=["alert", "suppressed", "delivery_failed", "connector_unknown"],
 )
-def test_init_counter_exception_leaves_counter_unset(
-    init_fn: str, attr: str, log_key: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_init_counter_exception_leaves_counter_unset(init_fn: str, attr: str, log_key: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(metrics_mod, attr, None)
     meter = _make_meter()
     meter.create_counter.side_effect = RuntimeError("boom")

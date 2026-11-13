@@ -249,13 +249,7 @@ def test_trigger_event_write_values_are_statically_resolvable() -> None:
     exactly how a drifted value would slip past the membership check below.
     """
     unresolved = [site for site in _collect_write_sites() if site.expression is not None]
-    assert not unresolved, (
-        "TriggerEvent.validation_result write sites whose value could not be "
-        "statically resolved:\n"
-        + _format_sites(unresolved)
-        + "\nUse a string literal or a module-level constant so the vocabulary "
-        "guard can verify the value."
-    )
+    assert not unresolved, "TriggerEvent.validation_result write sites whose value could not be statically resolved:\n" + _format_sites(unresolved) + "\nUse a string literal or a module-level constant so the vocabulary guard can verify the value."
 
 
 def test_trigger_event_write_values_are_in_the_vocabulary() -> None:
@@ -266,8 +260,6 @@ def test_trigger_event_write_values_are_in_the_vocabulary() -> None:
     assert not offenders, (
         "TriggerEvent.validation_result values written but absent from "
         "VALIDATION_RESULT_VALUES (a write raises IntegrityError on every real "
-        "database, so the event never persists):\n"
-        + _format_sites(offenders)
-        + "\nAny new drift is a bug: add the value to VALIDATION_RESULT_VALUES "
+        "database, so the event never persists):\n" + _format_sites(offenders) + "\nAny new drift is a bug: add the value to VALIDATION_RESULT_VALUES "
         "AND a widening migration in the same change."
     )

@@ -77,10 +77,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -169,12 +166,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'pending')"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'pending')"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -197,9 +189,7 @@ async def _run_error_code(engine: AsyncEngine, run_id: uuid.UUID) -> str | None:
 
 async def _run_status(engine: AsyncEngine, run_id: uuid.UUID) -> tuple[str, Any]:
     async with engine.connect() as conn:
-        row = (
-            await conn.execute(text("SELECT status, completed_at FROM runs WHERE id=:rid"), {"rid": str(run_id)})
-        ).fetchone()
+        row = (await conn.execute(text("SELECT status, completed_at FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
     assert row is not None
     return row[0], row[1]
 
@@ -227,11 +217,7 @@ async def _commit_decision(
 ) -> None:
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "UPDATE hitl_claims SET decision=:d, decision_at=now(), "
-                "decision_payload=CAST(:p AS json) "
-                "WHERE organisation_id=:oid AND run_id=:rid AND review_id=:gid"
-            ),
+            text("UPDATE hitl_claims SET decision=:d, decision_at=now(), decision_payload=CAST(:p AS json) WHERE organisation_id=:oid AND run_id=:rid AND review_id=:gid"),
             {
                 "d": decision,
                 "p": json.dumps(decision_payload),
@@ -344,11 +330,7 @@ async def _resume_and_complete(
 
     if outcome.get("status") != expected_status:
         async with db_engine.connect() as conn:
-            row = (
-                await conn.execute(
-                    text("SELECT status, error_code, error_detail FROM runs WHERE id=:rid"), {"rid": str(run_id)}
-                )
-            ).fetchone()
+            row = (await conn.execute(text("SELECT status, error_code, error_detail FROM runs WHERE id=:rid"), {"rid": str(run_id)})).fetchone()
         raise AssertionError(f"resume_run outcome: {outcome}; run row: {tuple(row) if row else None}")
 
 

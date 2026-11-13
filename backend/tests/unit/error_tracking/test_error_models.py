@@ -406,11 +406,7 @@ class TestUpdateErrorGroup:
         engine = create_async_engine("sqlite+aiosqlite://", echo=False)
         try:
             async with engine.begin() as conn:
-                await conn.run_sync(
-                    lambda sync_conn: Base.metadata.create_all(
-                        sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]
-                    )
-                )
+                await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, tables=[ErrorEvent.__table__, ErrorGroup.__table__]))
 
             org_id = uuid.uuid4()
             fingerprint = "fp-sqlite"

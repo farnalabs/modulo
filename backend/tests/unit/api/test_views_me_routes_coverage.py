@@ -150,9 +150,7 @@ class TestAssistantSkillsCoverage:
         assert not resp.json()
 
     def test_list_skills_programming_error(self, client: TestClient) -> None:
-        with patch(
-            "farna.api.routes.me.get_user_skills", side_effect=ProgrammingError("stmt", "params", Exception("orig"))
-        ):
+        with patch("farna.api.routes.me.get_user_skills", side_effect=ProgrammingError("stmt", "params", Exception("orig"))):
             resp = client.get("/api/v1/me/assistant/skills")
         assert resp.status_code == 501
 

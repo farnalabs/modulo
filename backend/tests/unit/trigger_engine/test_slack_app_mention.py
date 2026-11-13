@@ -519,9 +519,7 @@ async def test_handle_app_mention_non_mention_event_skipped() -> None:
         )
 
     mock_create.assert_not_called()
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "event_type_not_accepted" for c in session.add.call_args_list)
 
 
 async def test_handle_app_mention_parse_failure_logs_event() -> None:
@@ -574,9 +572,7 @@ async def test_handle_app_mention_concurrency_queues_anyway() -> None:
 
     assert run is run_mock
     assert te.validation_result == "accepted"
-    assert any(
-        getattr(c[0][0], "validation_result", None) == "concurrency_limit_reached" for c in session.add.call_args_list
-    )
+    assert any(getattr(c[0][0], "validation_result", None) == "concurrency_limit_reached" for c in session.add.call_args_list)
 
 
 async def test_handle_app_mention_rate_limit_exceeded() -> None:

@@ -72,11 +72,7 @@ def test_site_c_graph_validator_composite_valid_types_exclude_guardrail():
     result = ValidationResult()
     GraphValidator()._check_output_validation(
         "node-1",
-        {
-            "eval_definitions": [
-                {"id": "gr", "name": "guardrail-eval", "type": "guardrail", "config": {}, "failure_behaviour": "block"}
-            ]
-        },
+        {"eval_definitions": [{"id": "gr", "name": "guardrail-eval", "type": "guardrail", "config": {}, "failure_behaviour": "block"}]},
         result,
     )
     codes = [issue.code for issue in result.issues]
@@ -105,15 +101,12 @@ def test_site_d_composite_binding_literal_excludes_guardrail():
     assert "custom_function" not in allowed  # pre-existing drift, documented
 
 
-def test_site_e_orm_and_migration_check_include_guardrail():
+def test_site_e_orm_check_includes_guardrail():
+    """The live ORM model's CHECK constraint must include 'guardrail'.
+
+    The historical migration 0110 that originally added this vocabulary was
+    collapsed into the Stage 6 baselines; its source contract is no longer
+    reachable. See RETIRED.md ledger for the migration-level assertion.
+    """
     orm_check = next(c for c in EvalModel.__table_args__ if getattr(c, "name", None) == "ck_evals_type")
     assert "guardrail" in orm_check.sqltext.text
-
-    import pathlib
-
-    migration_dir = pathlib.Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions"
-    migration_file = migration_dir / "0110_schema_pipeline_runtime.py"
-    assert migration_file.exists(), "migration 0110_schema_pipeline_runtime.py missing"
-    content = migration_file.read_text(encoding="utf-8")
-    assert "'guardrail'" in content
-    assert "ck_eval_definitions_type" in content

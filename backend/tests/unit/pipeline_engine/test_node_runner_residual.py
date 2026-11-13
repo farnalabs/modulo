@@ -21,13 +21,7 @@ from farna.core.pipeline_engine.node_runner import (
 _BRIDGE_CMD_PATH = "/home/user/.modulo_bridge_cmd.sh"
 _BRIDGE_HANDOFF_COMMAND = "python3 /home/user/modulo_bridge.py --wrap -- bash /home/user/.modulo_bridge_cmd.sh"
 _SINGLE_LINE_COMMAND = "opencode run --auto --format json < /home/user/prompt.md"
-_MULTI_LINE_COMMAND = (
-    "cat > /home/user/agent_prompt.md <<'FAR664'\n"
-    "heredoc line one\n"
-    "heredoc line two\n"
-    "FAR664\n"
-    "opencode run --auto --format json < /home/user/agent_prompt.md"
-)
+_MULTI_LINE_COMMAND = "cat > /home/user/agent_prompt.md <<'FAR664'\nheredoc line one\nheredoc line two\nFAR664\nopencode run --auto --format json < /home/user/agent_prompt.md"
 
 
 def _run_state() -> dict[str, Any]:

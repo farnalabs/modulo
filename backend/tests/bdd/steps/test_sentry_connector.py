@@ -65,9 +65,7 @@ def sentry_query_issues(ctx: dict) -> None:
     ]
     with respx.mock:
         respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(return_value=httpx.Response(200, json=issues))
-        ctx["query_result"] = asyncio.run(
-            ctx["connector"].query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
-        )
+        ctx["query_result"] = asyncio.run(ctx["connector"].query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"})))
 
 
 @when("the connector queries projects")
@@ -89,9 +87,7 @@ def sentry_write_issue_status(status: str, ctx: dict) -> None:
 
     with respx.mock:
         respx.put(f"{_BASE}/issues/42/").mock(return_value=httpx.Response(200, json={"id": "42", "status": status}))
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="issue_status", data={"issue_id": "42", "status": status}))
-        )
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="issue_status", data={"issue_id": "42", "status": status})))
 
 
 @when(parsers.parse('the connector creates a release with version "{version}"'))
@@ -99,12 +95,8 @@ def sentry_write_release(version: str, ctx: dict) -> None:
     from farna.connectors.base import ConnectorPayload
 
     with respx.mock:
-        respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(
-            return_value=httpx.Response(201, json={"id": "r1", "version": version})
-        )
-        ctx["write_result"] = asyncio.run(
-            ctx["connector"].write(ConnectorPayload(resource="release", data={"version": version}))
-        )
+        respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(return_value=httpx.Response(201, json={"id": "r1", "version": version}))
+        ctx["write_result"] = asyncio.run(ctx["connector"].write(ConnectorPayload(resource="release", data={"version": version})))
 
 
 @then(parsers.parse('the health check returns "{status}"'))

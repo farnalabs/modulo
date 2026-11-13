@@ -129,10 +129,7 @@ def test_no_surface_hand_writes_the_execution_origin_key() -> None:
                 hand_rolled_kwarg = "execution_origin" in kwargs and not _composes_serializer(node)
                 if hand_rolled_kwarg:
                     offenders.append(f"{_rel(path)}:{node.lineno} kwarg of {_dotted(node.func)}()")
-    assert not offenders, (
-        "execution_origin must be supplied ONLY via run_provenance_fields() "
-        "(FAR-1565); these sites hand-roll it:\n  " + "\n  ".join(offenders)
-    )
+    assert not offenders, "execution_origin must be supplied ONLY via run_provenance_fields() (FAR-1565); these sites hand-roll it:\n  " + "\n  ".join(offenders)
 
 
 # ---------------------------------------------------------------------------
@@ -157,26 +154,13 @@ def test_run_shaped_payloads_compose_the_shared_serializer() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Dict):
                 keys = _literal_keys(node)
-                if (
-                    _STATUS_KEY in keys
-                    and keys & _IDENTITY_KEYS
-                    and keys & _RUN_RENDER_MARKERS
-                    and not _composes_serializer(node)
-                ):
+                if _STATUS_KEY in keys and keys & _IDENTITY_KEYS and keys & _RUN_RENDER_MARKERS and not _composes_serializer(node):
                     missing.append(f"{_rel(path)}:{node.lineno} dict literal {sorted(keys)}")
             elif isinstance(node, ast.Call):
                 kwargs = _keyword_names(node)
-                if (
-                    _STATUS_KEY in kwargs
-                    and "run_id" in kwargs
-                    and kwargs & _RUN_RENDER_MARKERS
-                    and not _composes_serializer(node)
-                ):
+                if _STATUS_KEY in kwargs and "run_id" in kwargs and kwargs & _RUN_RENDER_MARKERS and not _composes_serializer(node):
                     missing.append(f"{_rel(path)}:{node.lineno} {_dotted(node.func)}()")
-    assert not missing, (
-        "this run-rendering payload does not compose run_provenance_fields() "
-        "and would ship without execution_origin:\n  " + "\n  ".join(missing)
-    )
+    assert not missing, "this run-rendering payload does not compose run_provenance_fields() and would ship without execution_origin:\n  " + "\n  ".join(missing)
 
 
 def test_the_structural_scan_sees_the_expected_surface_layers() -> None:

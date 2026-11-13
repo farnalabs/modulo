@@ -167,9 +167,7 @@ async def test_write_test_report(connector: CodeClimateConnector) -> None:
             },
         }
     }
-    respx.post(f"{_BASE}/repos/r1/test_reports", json=expected_body).mock(
-        return_value=httpx.Response(201, json={"data": {"id": "tr1"}})
-    )
+    respx.post(f"{_BASE}/repos/r1/test_reports", json=expected_body).mock(return_value=httpx.Response(201, json={"data": {"id": "tr1"}}))
     result = await connector.write(
         ConnectorPayload(
             resource="test_report",
@@ -199,9 +197,7 @@ async def test_write_test_report_with_files(connector: CodeClimateConnector) -> 
             },
         }
     }
-    respx.post(f"{_BASE}/repos/r1/test_reports", json=expected_body).mock(
-        return_value=httpx.Response(201, json={"data": {"id": "tr2"}})
-    )
+    respx.post(f"{_BASE}/repos/r1/test_reports", json=expected_body).mock(return_value=httpx.Response(201, json={"data": {"id": "tr2"}}))
     result = await connector.write(
         ConnectorPayload(
             resource="test_report",
@@ -388,9 +384,7 @@ async def test_snapshots_with_limit(connector: CodeClimateConnector) -> None:
 @respx.mock
 async def test_test_reports_with_limit(connector: CodeClimateConnector) -> None:
     reports = {"data": [{"id": "tr1"}]}
-    respx.get(f"{_BASE}/repos/r1/test_reports", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json=reports)
-    )
+    respx.get(f"{_BASE}/repos/r1/test_reports", params={"limit": 1}).mock(return_value=httpx.Response(200, json=reports))
     result = await connector.query(ConnectorQuery(resource="test_reports", filters={"repo_id": "r1"}, limit=1))
     assert len(result.records) == 1
 

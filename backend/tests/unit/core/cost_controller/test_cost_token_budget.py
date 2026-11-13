@@ -342,9 +342,7 @@ def test_run_model_check_constraint_allows_budget_exceeded() -> None:
     from farna.db.models.run import Run
 
     table_args = Run.__table_args__
-    check_sql = " ".join(
-        arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status"
-    )
+    check_sql = " ".join(arg.sqltext.text for arg in table_args if isinstance(arg, CheckConstraint) and arg.name == "ck_runs_status")
     assert "'budget_exceeded'" in check_sql
 
 

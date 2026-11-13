@@ -41,13 +41,6 @@ def test_fly_toml_dockerfile_references_resolve():
             ref = match.group(1)
             resolved = (toml.parent / ref).resolve()
             if not resolved.exists():
-                failures.append(
-                    f'{toml.relative_to(PRODUCT)}: dockerfile = "{ref}" '
-                    f"does not resolve (looked for {resolved.relative_to(PRODUCT)})"
-                )
+                failures.append(f'{toml.relative_to(PRODUCT)}: dockerfile = "{ref}" does not resolve (looked for {resolved.relative_to(PRODUCT)})')
 
-    assert not failures, (
-        "One or more deploy/fly/*.toml [build] dockerfile references do not "
-        "resolve relative to their own directory (flyctl resolves this path "
-        "relative to the toml file, not the build context):\n" + "\n".join(failures)
-    )
+    assert not failures, "One or more deploy/fly/*.toml [build] dockerfile references do not resolve relative to their own directory (flyctl resolves this path relative to the toml file, not the build context):\n" + "\n".join(failures)

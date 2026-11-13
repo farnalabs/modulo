@@ -29,9 +29,7 @@ async def my_dummy_cron(*_a: object, **_k: object) -> None:  # pragma: no cover 
 
 
 class TestReconcileCronRegistrations:
-    async def test_stale_unique_cron_cleared_and_non_unique_untouched(
-        self, saq_settings_env: str, saq_redis_url: str
-    ) -> None:
+    async def test_stale_unique_cron_cleared_and_non_unique_untouched(self, saq_settings_env: str, saq_redis_url: str) -> None:
         redis_client = aioredis.from_url(saq_redis_url, socket_connect_timeout=10)
         try:
             q = RedisQueue(redis_client, name="system")

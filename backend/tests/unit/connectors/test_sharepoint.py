@@ -206,9 +206,7 @@ async def test_query_drive_subpath(connector):
             {"id": "file3", "name": "subfile.txt"},
         ]
     }
-    respx.get(f"{_API}/sites/site1/drives/drive1/root:/subfolder:/children").mock(
-        return_value=httpx.Response(200, json=children)
-    )
+    respx.get(f"{_API}/sites/site1/drives/drive1/root:/subfolder:/children").mock(return_value=httpx.Response(200, json=children))
     result = await connector.query(
         ConnectorQuery(
             resource="drive",
@@ -232,9 +230,7 @@ async def test_query_drive_missing_filters(connector):
 @respx.mock
 async def test_query_file(connector):
     content = "Hello, SharePoint!"
-    respx.get(f"{_API}/sites/site1/drives/drive1/root:/path/to/file.txt:/content").mock(
-        return_value=httpx.Response(200, text=content)
-    )
+    respx.get(f"{_API}/sites/site1/drives/drive1/root:/path/to/file.txt:/content").mock(return_value=httpx.Response(200, text=content))
     result = await connector.query(
         ConnectorQuery(
             resource="file",
@@ -294,9 +290,7 @@ async def test_write_list_item_missing_data(connector):
 @respx.mock
 async def test_write_file(connector):
     uploaded = {"id": "file-123", "name": "uploaded.txt", "size": 42}
-    respx.put(f"{_API}/sites/site1/drives/drive1/root:/uploaded.txt:/content").mock(
-        return_value=httpx.Response(201, json=uploaded)
-    )
+    respx.put(f"{_API}/sites/site1/drives/drive1/root:/uploaded.txt:/content").mock(return_value=httpx.Response(201, json=uploaded))
     result = await connector.write(
         ConnectorPayload(
             resource="file",

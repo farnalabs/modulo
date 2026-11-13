@@ -429,12 +429,8 @@ def published_and_draft_revisions(system_map_repo: MagicMock) -> None:
 
 @given(parsers.parse("an archived revision with revision number {number:d}"))
 def archived_revision(system_map_repo: MagicMock, number: int) -> None:
-    system_map_repo.get_revision_by_id = AsyncMock(
-        return_value=_revision_row(status="archived", revision_number=number)
-    )
-    system_map_repo.restore_revision_as_new_draft = AsyncMock(
-        return_value=_revision_row(rev_id=_NEW_REV_ID, status="draft", revision_number=number + 1)
-    )
+    system_map_repo.get_revision_by_id = AsyncMock(return_value=_revision_row(status="archived", revision_number=number))
+    system_map_repo.restore_revision_as_new_draft = AsyncMock(return_value=_revision_row(rev_id=_NEW_REV_ID, status="draft", revision_number=number + 1))
 
 
 @given(parsers.parse("a draft revision with revision number {number:d}"))

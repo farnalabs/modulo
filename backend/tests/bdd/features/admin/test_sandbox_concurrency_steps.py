@@ -125,10 +125,7 @@ def _bdd_org_license(request) -> None:
 @when("I request GET /api/v1/admin/org/sandbox-concurrency")
 def _bdd_get_limit(request) -> None:
     org_settings = getattr(request.node, "_org_settings", {})
-    if getattr(request.node, "_viewer_auth", False):
-        resp = _request(request, "viewer", "GET", "/api/v1/admin/org/sandbox-concurrency", org_settings)
-    else:
-        resp = _request(request, "admin", "GET", "/api/v1/admin/org/sandbox-concurrency", org_settings)
+    resp = _request(request, "viewer", "GET", "/api/v1/admin/org/sandbox-concurrency", org_settings) if getattr(request.node, "_viewer_auth", False) else _request(request, "admin", "GET", "/api/v1/admin/org/sandbox-concurrency", org_settings)
     request.node._resp = resp
 
 

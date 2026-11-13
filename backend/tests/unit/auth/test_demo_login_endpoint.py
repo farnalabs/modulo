@@ -159,9 +159,7 @@ def client(mock_session: AsyncMock, app: FastAPI) -> Generator[TestClient, None,
         pytest.param(False, "", "", id="all-unset"),
     ],
 )
-def test_demo_login_kill_switch_answers_plain_404(
-    app: FastAPI, client: TestClient, demo_enabled: bool, demo_user: str, demo_password: str
-) -> None:
+def test_demo_login_kill_switch_answers_plain_404(app: FastAPI, client: TestClient, demo_enabled: bool, demo_user: str, demo_password: str) -> None:
     """Any missing/falsy piece of the demo env trio must 404 without DB access."""
     _override_settings(app, demo_enabled=demo_enabled, demo_user=demo_user, demo_password=demo_password)
     with patch("farna.api.routes.auth.get_account_by_email", new=AsyncMock(return_value=None)) as account_lookup:
@@ -209,9 +207,7 @@ def test_demo_login_sets_session_cookie_with_demo_ttl(client: TestClient) -> Non
         resp = client.post("/api/v1/auth/demo")
     assert resp.status_code == 200
     assert "modulo_session" in resp.cookies
-    session_cookie = next(
-        cookie for cookie in resp.headers.get_list("set-cookie") if cookie.startswith("modulo_session=")
-    )
+    session_cookie = next(cookie for cookie in resp.headers.get_list("set-cookie") if cookie.startswith("modulo_session="))
     assert "Max-Age=1800" in session_cookie
 
 
@@ -232,9 +228,7 @@ def test_demo_login_unknown_env_user_answers_plain_404(app: FastAPI, client: Tes
     assert "modulo_session" not in resp.cookies
 
 
-def test_demo_login_env_password_mismatch_answers_plain_404(
-    app: FastAPI, client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_demo_login_env_password_mismatch_answers_plain_404(app: FastAPI, client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """A real demo account whose stored hash does not match the env password 404s.
 
     Stealth-consistent with every other demo failure (never a 401), and the
@@ -252,9 +246,7 @@ def test_demo_login_env_password_mismatch_answers_plain_404(
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Not Found"
     assert "modulo_session" not in resp.cookies
-    mismatch_records = [
-        record for record in caplog.records if record.getMessage() == "auth.demo_login_credential_mismatch"
-    ]
+    mismatch_records = [record for record in caplog.records if record.getMessage() == "auth.demo_login_credential_mismatch"]
     assert len(mismatch_records) == 1
     assert mismatch_records[0].account_id == str(_DEMO_USER_ID)
     assert mismatch_records[0].configured_user == _DEMO_EMAIL

@@ -74,9 +74,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     community_plan = MagicMock()
     community_plan.feature_enabled.return_value = False
     community_plan.list_enabled_features.return_value = []
@@ -312,9 +310,7 @@ class TestMcpTools:
             patch("farna.db.crud.pipeline.set_earned_autonomy_level", new=set_level),
             patch("farna.core.audit_logger.append_audit_event", new=audit),
         ):
-            result = await demote_pipeline_autonomy(
-                pipeline_id=str(_PIPELINE_ID), level="manual_approval", reason="escape"
-            )
+            result = await demote_pipeline_autonomy(pipeline_id=str(_PIPELINE_ID), level="manual_approval", reason="escape")
 
         assert result["earned_autonomy_level"] == "manual_approval"
         assert result["event_type"] == "pipeline.autonomy_demoted"

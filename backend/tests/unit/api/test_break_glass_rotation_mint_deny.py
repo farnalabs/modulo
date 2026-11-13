@@ -37,7 +37,7 @@ def _make_settings() -> Settings:
         fernet_key=_VALID_32,
         modulo_admin_password="testpass",
         modulo_public_url="http://localhost:8000",
-        farna_control_system_database_url="postgresql+asyncpg://localhost/system",
+        modulo_system_database_url="postgresql+asyncpg://localhost/system",
     )
 
 
@@ -159,7 +159,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
             fernet_key=_VALID_32,
             modulo_admin_password="testpass",
             modulo_public_url="http://localhost:8000",
-            farna_control_system_database_url="",  # system role NOT provisioned
+            modulo_system_database_url="",  # system role NOT provisioned
         )
 
     app.dependency_overrides[get_settings] = _unprovisioned_settings
@@ -173,7 +173,7 @@ def test_rotate_key_refuses_when_system_role_unprovisioned(client: TestClient) -
     finally:
         app.dependency_overrides.pop(get_settings, None)
     assert resp.status_code == 503
-    assert "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
+    assert "MODULO_SYSTEM_DATABASE_URL" in resp.json()["detail"]
     admin_rotation._rotation_owner = None
 
 
@@ -231,7 +231,7 @@ async def test_run_rotation_background_uses_system_factory() -> None:
         patch("farna.api.routes.admin_rotation.append_audit_event", new=AsyncMock()),
         patch(
             "farna.api.routes.admin_rotation.get_settings",
-            return_value=Settings(farna_control_system_database_url="postgresql+asyncpg://localhost/system"),
+            return_value=Settings(modulo_system_database_url="postgresql+asyncpg://localhost/system"),
         ),
     ):
         await admin_rotation._run_rotation_background(

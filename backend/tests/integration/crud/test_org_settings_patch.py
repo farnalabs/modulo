@@ -391,16 +391,12 @@ async def test_two_writers_of_the_same_concern_serialise_to_one_whole_value(db_e
     await session1.close()
 
     settings = await _read_settings(db_engine, org_id)
-    assert settings["block"] == {"from": "seed", "writer": "one"}, (
-        f"same-concern writers must serialise to ONE whole value, got {settings['block']!r}"
-    )
+    assert settings["block"] == {"from": "seed", "writer": "one"}, f"same-concern writers must serialise to ONE whole value, got {settings['block']!r}"
     assert "extra" not in settings["block"], "a per-subkey blend would keep the other writer's key"
     assert settings["sibling"] == 1
 
 
-async def test_config_patch_wait_bounds_against_an_inflight_deletion(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_config_patch_wait_bounds_against_an_inflight_deletion(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """A settings patch issued while a deletion FSM transaction holds the org
     row ``FOR UPDATE`` BLOCKS, then fails at the bounded lock wait — never an
     unbounded hang (R5) — and the blocked write never lands.
@@ -490,9 +486,7 @@ async def test_child_fk_insert_queues_behind_an_inflight_deletion(db_engine: Asy
     await session_b.close()
 
 
-async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the REAL ``DELETE /{org}/license`` handler against Postgres and
     assert both halves of the contract: the writer calls the patch helper's
     ``delete_keys`` form (no whole-column blob), and on the real engine the key
@@ -546,9 +540,7 @@ async def test_licence_clear_path_uses_delete_keys_and_keeps_siblings(
     assert not recorded.get("patch"), f"no whole-column blob may be passed, got {recorded!r}"
 
 
-async def test_licence_set_path_patches_only_license_key(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_licence_set_path_patches_only_license_key(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Drive the REAL ``PUT /{org}/license`` handler against Postgres: the
     write emits ONLY ``license_key`` through the atomic patch, and sibling
     settings survive the real jsonb composition."""
@@ -601,9 +593,7 @@ async def test_licence_set_path_patches_only_license_key(
         org_role="admin",
     )
     async with factory() as handler_session:
-        await admin_set_org_license(
-            org_id, SetOrgLicenseRequest(license_key="new.key"), principal, handler_session, get_settings()
-        )
+        await admin_set_org_license(org_id, SetOrgLicenseRequest(license_key="new.key"), principal, handler_session, get_settings())
 
     settings = await _read_settings(db_engine, org_id)
     assert settings.get("license_key") == "new.key", f"the set must land on a real engine: {settings!r}"
@@ -747,9 +737,7 @@ async def test_otel_missing_org_keeps_the_valueerror_contract(db_engine: AsyncEn
 # ---------------------------------------------------------------------------
 
 
-async def test_product_analytics_concurrent_subfield_writers_both_survive(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_product_analytics_concurrent_subfield_writers_both_survive(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     from farna.api.routes import product_analytics as pa_module
     from farna.api.routes.product_analytics import (
         ConsentRequest,
@@ -803,10 +791,7 @@ async def test_product_analytics_concurrent_subfield_writers_both_survive(
     block = settings["product_analytics"]
     assert block["prompted"] == "dismissed", f"the consent writer's sub-fields must survive: {block!r}"
     assert block["prompted_at"] is not None
-    assert block["level"] == "all", (
-        "the interleaved admin level change must survive the consent writer's patch — "
-        f"pre-fix the whole-block replace clobbered it: {block!r}"
-    )
+    assert block["level"] == "all", f"the interleaved admin level change must survive the consent writer's patch — pre-fix the whole-block replace clobbered it: {block!r}"
     assert block["level_changed_at"] is not None
 
 
@@ -832,17 +817,12 @@ async def _seed_staged_rows(db_engine: AsyncEngine, org_id: uuid.UUID, event_ids
     async with db_engine.connect() as conn, conn.begin():
         for event_id in event_ids:
             await conn.execute(
-                text(
-                    "INSERT INTO metrics_staging (organisation_id, event_id, event_type, payload) "
-                    "VALUES (:oid, :eid, 'pipeline_created', '{}'::jsonb)"
-                ),
+                text("INSERT INTO metrics_staging (organisation_id, event_id, event_type, payload) VALUES (:oid, :eid, 'pipeline_created', '{}'::jsonb)"),
                 {"oid": str(org_id), "eid": event_id},
             )
 
 
-async def test_consent_decline_purges_seeded_staged_rows_end_to_end(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_consent_decline_purges_seeded_staged_rows_end_to_end(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1832 QA F17: seed real ``metrics_staging`` rows, drive the real
     consent handler with ``action="decline"`` (level -> off), and assert the
     SEEDED rows are gone.
@@ -870,9 +850,7 @@ async def test_consent_decline_purges_seeded_staged_rows_end_to_end(
     monkeypatch.setattr(pa_module, "append_audit_event", AsyncMock())
 
     await _seed_staged_rows(db_engine, org_id, ["f17-a", "f17-b"])
-    assert await _staged_row_count(db_engine, org_id) == 2, (
-        "the seed must land before the purge assertion can be non-vacuous"
-    )
+    assert await _staged_row_count(db_engine, org_id) == 2, "the seed must land before the purge assertion can be non-vacuous"
 
     async with factory() as session:
         response = await post_consent(ConsentRequest(action="decline"), principal, session)
@@ -1023,12 +1001,8 @@ async def test_two_concurrent_clears_of_different_flags_both_persist(db_engine: 
     await session1.close()
 
     settings = await _read_settings(db_engine, org_id)
-    assert "flag_a" not in settings["feature_overrides"], (
-        f"the concurrent clear of flag_a was lost: {settings['feature_overrides']!r}"
-    )
-    assert "flag_b" not in settings["feature_overrides"], (
-        f"the second clear of flag_b was lost: {settings['feature_overrides']!r}"
-    )
+    assert "flag_a" not in settings["feature_overrides"], f"the concurrent clear of flag_a was lost: {settings['feature_overrides']!r}"
+    assert "flag_b" not in settings["feature_overrides"], f"the second clear of flag_b was lost: {settings['feature_overrides']!r}"
 
 
 async def test_a_set_racing_a_clear_cannot_lose_the_set(db_engine: AsyncEngine) -> None:
@@ -1064,9 +1038,7 @@ async def test_a_set_racing_a_clear_cannot_lose_the_set(db_engine: AsyncEngine) 
 
     settings = await _read_settings(db_engine, org_id)
     assert "flag_a" not in settings["feature_overrides"]
-    assert settings["feature_overrides"]["flag_b"] is True, (
-        f"the concurrent set of flag_b was lost: {settings['feature_overrides']!r}"
-    )
+    assert settings["feature_overrides"]["flag_b"] is True, f"the concurrent set of flag_b was lost: {settings['feature_overrides']!r}"
 
 
 async def test_parallel_clears_of_different_flags_are_lossless(db_engine: AsyncEngine) -> None:
@@ -1110,9 +1082,7 @@ async def _hold_org_row_lock(factory: Any, org_id: uuid.UUID) -> Any:
     return holder
 
 
-async def test_post_consent_lock_timeout_is_409_not_500(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_post_consent_lock_timeout_is_409_not_500(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Real in-flight lock holder + real consent handler: the bounded wait
     expires (55P03) and the route answers 409 — pre-F2 it collapsed to 500."""
     from types import SimpleNamespace
@@ -1143,9 +1113,7 @@ async def test_post_consent_lock_timeout_is_409_not_500(
     assert not await _read_settings(db_engine, org_id), "the blocked write must not land"
 
 
-async def test_admin_set_org_license_lock_timeout_is_409_not_503(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_admin_set_org_license_lock_timeout_is_409_not_503(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """Real in-flight lock holder + real licence-set handler: 55P03 surfaces
     as 409 — pre-F2 the admin_orgs arm collapsed it to a 503 outage reply."""
     from types import SimpleNamespace
@@ -1184,9 +1152,7 @@ async def test_admin_set_org_license_lock_timeout_is_409_not_503(
     try:
         async with factory() as session:
             with pytest.raises(HTTPException) as exc_info:
-                await admin_set_org_license(
-                    org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
-                )
+                await admin_set_org_license(org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings())
             assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
             assert "another change is in progress" in str(exc_info.value.detail)
     finally:
@@ -1195,9 +1161,7 @@ async def test_admin_set_org_license_lock_timeout_is_409_not_503(
     assert "license_key" not in await _read_settings(db_engine, org_id)
 
 
-async def test_admin_sandbox_concurrency_lock_timeout_is_409(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_admin_sandbox_concurrency_lock_timeout_is_409(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """The admin.py ``_run_admin_rls_txn`` boundary (sandbox concurrency
     writer) answers 409 for the same real-lock shape."""
     from types import SimpleNamespace
@@ -1222,9 +1186,7 @@ async def test_admin_sandbox_concurrency_lock_timeout_is_409(
     try:
         async with factory() as session:
             with pytest.raises(HTTPException) as exc_info:
-                await admin_update_sandbox_concurrency(
-                    UpdateSandboxConcurrencyRequest(sandbox_concurrency_limit=3), principal, session
-                )
+                await admin_update_sandbox_concurrency(UpdateSandboxConcurrencyRequest(sandbox_concurrency_limit=3), principal, session)
             assert exc_info.value.status_code == 409, f"expected 409, got {exc_info.value}"
             assert "another change is in progress" in str(exc_info.value.detail)
     finally:
@@ -1232,9 +1194,7 @@ async def test_admin_sandbox_concurrency_lock_timeout_is_409(
         await holder.close()
 
 
-async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
-    db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(db_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch) -> None:
     """A genuine connection-class failure (NOT 55P03) keeps the pre-existing
     503 on the admin_orgs boundary."""
     from types import SimpleNamespace
@@ -1278,9 +1238,7 @@ async def test_genuine_db_outage_stays_503_on_the_admin_orgs_boundary(
 
         monkeypatch.setattr(session, "execute", _fail_on_patch)
         with pytest.raises(HTTPException) as exc_info:
-            await admin_set_org_license(
-                org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings()
-            )
+            await admin_set_org_license(org_id, SetOrgLicenseRequest(license_key="new.key"), principal, session, get_settings())
         assert exc_info.value.status_code == 503, f"a genuine outage must stay 503, got {exc_info.value}"
 
 
@@ -1306,10 +1264,7 @@ async def test_otel_rotation_preserves_a_concurrent_writer_other_keys(db_engine:
     org_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::jsonb, CAST(:cfg AS jsonb))"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::jsonb, CAST(:cfg AS jsonb))"),
             {
                 "id": str(org_id),
                 "name": "Org otel-rot",
@@ -1339,11 +1294,7 @@ async def test_otel_rotation_preserves_a_concurrent_writer_other_keys(db_engine:
             op_session = factory()
             await op_session.begin()
             await op_session.execute(
-                text(
-                    "UPDATE organisations SET otel_config_json = "
-                    "otel_config_json || '{\"export_interval_seconds\": 12345}'::jsonb "
-                    "WHERE id = :i"
-                ),
+                text("UPDATE organisations SET otel_config_json = otel_config_json || '{\"export_interval_seconds\": 12345}'::jsonb WHERE id = :i"),
                 {"i": str(org_id)},
             )
             await op_session.commit()
@@ -1357,9 +1308,6 @@ async def test_otel_rotation_preserves_a_concurrent_writer_other_keys(db_engine:
 
     assert count == 1, "the org row must have been rotated"
     final = await _read_otel(db_engine, org_id)
-    assert final["export_interval_seconds"] == 12345, (
-        "the concurrent operator save must survive the rotation — pre-F5 the "
-        f"whole-column write clobbered it: {final!r}"
-    )
+    assert final["export_interval_seconds"] == 12345, f"the concurrent operator save must survive the rotation — pre-F5 the whole-column write clobbered it: {final!r}"
     assert final["otlp_endpoint"] == "http://old:4317"
     assert new_fernet.decrypt(final["langsmith_api_key_ciphertext"].encode()) == b"langsmith-secret"

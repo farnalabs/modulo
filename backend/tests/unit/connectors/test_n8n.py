@@ -24,9 +24,7 @@ def test_connector_type(connector: N8NConnector) -> None:
 async def test_auth_uses_n8n_api_key_header(connector: N8NConnector) -> None:
     """The public REST API authenticates via ``X-N8N-API-KEY`` — never a
     ``Bearer`` header (the private /rest UI API is gone)."""
-    route = respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": []})
-    )
+    route = respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": []}))
     result = await connector.health_check()
     assert result.ok is True
     headers = route.calls.last.request.headers
@@ -52,18 +50,14 @@ async def test_query_workflows(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_query_workflows_with_limit(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W1", "name": "Only one"}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": [{"id": "W1", "name": "Only one"}]}))
     result = await connector.query(ConnectorQuery(resource="workflows", limit=1))
     assert len(result.records) == 1
 
 
 @respx.mock
 async def test_query_workflows_with_active_filter(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"active": "true"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W1", "name": "Active WF", "active": True}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows", params={"active": "true"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "W1", "name": "Active WF", "active": True}]}))
     result = await connector.query(ConnectorQuery(resource="workflows", filters={"active": "true"}))
     assert len(result.records) == 1
     assert result.records[0]["active"] is True
@@ -71,18 +65,14 @@ async def test_query_workflows_with_active_filter(connector: N8NConnector) -> No
 
 @respx.mock
 async def test_query_workflows_with_tags_filter(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"tags": "production"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W2", "name": "Prod WF", "tags": ["production"]}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows", params={"tags": "production"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "W2", "name": "Prod WF", "tags": ["production"]}]}))
     result = await connector.query(ConnectorQuery(resource="workflows", filters={"tags": "production"}))
     assert len(result.records) == 1
 
 
 @respx.mock
 async def test_query_workflows_with_cursor(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows", params={"cursor": "next_page"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W3"}], "nextCursor": "page3"})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows", params={"cursor": "next_page"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "W3"}], "nextCursor": "page3"}))
     result = await connector.query(ConnectorQuery(resource="workflows", cursor="next_page"))
     assert len(result.records) == 1
     assert result.next_cursor == "page3"
@@ -91,9 +81,7 @@ async def test_query_workflows_with_cursor(connector: N8NConnector) -> None:
 @respx.mock
 async def test_query_workflows_non_string_cursor_not_emitted(connector: N8NConnector) -> None:
     """A corrupt non-string nextCursor must not be emitted as a pagination cursor."""
-    respx.get(f"{BASE_URL}/api/v1/workflows").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": 123})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows").mock(return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": 123}))
     result = await connector.query(ConnectorQuery(resource="workflows"))
     assert len(result.records) == 1
     assert result.next_cursor is None
@@ -102,9 +90,7 @@ async def test_query_workflows_non_string_cursor_not_emitted(connector: N8NConne
 @respx.mock
 async def test_query_workflows_dict_cursor_not_emitted(connector: N8NConnector) -> None:
     """A dict nextCursor must not crash or leak into the result cursor."""
-    respx.get(f"{BASE_URL}/api/v1/workflows").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": {"page": 2}})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows").mock(return_value=httpx.Response(200, json={"data": [{"id": "W1"}], "nextCursor": {"page": 2}}))
     result = await connector.query(ConnectorQuery(resource="workflows"))
     assert len(result.records) == 1
     assert result.next_cursor is None
@@ -147,9 +133,7 @@ async def test_query_executions_corrupt_body_no_crash(connector: N8NConnector) -
 
 @respx.mock
 async def test_query_workflow_by_id(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/workflows/W1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "name": "Single WF"}})
-    )
+    respx.get(f"{BASE_URL}/api/v1/workflows/W1").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "name": "Single WF"}}))
     result = await connector.query(ConnectorQuery(resource="workflow", filters={"id": "W1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "W1"
@@ -173,9 +157,7 @@ async def test_query_executions(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_query_executions_with_status_filter(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/executions", params={"status": "success"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "E1", "status": "success"}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/executions", params={"status": "success"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "E1", "status": "success"}]}))
     result = await connector.query(ConnectorQuery(resource="executions", filters={"status": "success"}))
     assert len(result.records) == 1
     assert result.records[0]["status"] == "success"
@@ -183,9 +165,7 @@ async def test_query_executions_with_status_filter(connector: N8NConnector) -> N
 
 @respx.mock
 async def test_query_executions_with_workflow_id_filter(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/executions", params={"workflowId": "W1"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "E1", "workflowId": "W1"}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/executions", params={"workflowId": "W1"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "E1", "workflowId": "W1"}]}))
     result = await connector.query(ConnectorQuery(resource="executions", filters={"workflowId": "W1"}))
     assert len(result.records) == 1
     assert result.records[0]["workflowId"] == "W1"
@@ -193,9 +173,7 @@ async def test_query_executions_with_workflow_id_filter(connector: N8NConnector)
 
 @respx.mock
 async def test_query_executions_with_limit(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/executions", params={"limit": 3}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": f"E{i}"} for i in range(3)]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/executions", params={"limit": 3}).mock(return_value=httpx.Response(200, json={"data": [{"id": f"E{i}"} for i in range(3)]}))
     result = await connector.query(ConnectorQuery(resource="executions", limit=3))
     assert len(result.records) == 3
 
@@ -205,9 +183,7 @@ async def test_query_executions_with_limit(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_query_execution_by_id(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/executions/E1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "E1", "status": "success"}})
-    )
+    respx.get(f"{BASE_URL}/api/v1/executions/E1").mock(return_value=httpx.Response(200, json={"data": {"id": "E1", "status": "success"}}))
     result = await connector.query(ConnectorQuery(resource="execution", filters={"id": "E1"}))
     assert len(result.records) == 1
     assert result.records[0]["id"] == "E1"
@@ -247,9 +223,7 @@ async def test_query_credentials(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_query_credential_by_id(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/credentials/C1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "C1", "name": "My Cred"}})
-    )
+    respx.get(f"{BASE_URL}/api/v1/credentials/C1").mock(return_value=httpx.Response(200, json={"data": {"id": "C1", "name": "My Cred"}}))
     result = await connector.query(ConnectorQuery(resource="credential", filters={"id": "C1"}))
     assert len(result.records) == 1
 
@@ -288,9 +262,7 @@ async def test_query_nodes(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_workflow(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/workflows").mock(
-        return_value=httpx.Response(201, json={"data": {"id": "W1", "name": "Test WF", "active": False}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/workflows").mock(return_value=httpx.Response(201, json={"data": {"id": "W1", "name": "Test WF", "active": False}}))
     result = await connector.write(ConnectorPayload(resource="workflow", data={"name": "Test WF"}))
     assert result["id"] == "W1"
     assert result["name"] == "Test WF"
@@ -303,9 +275,7 @@ async def test_write_workflow_missing_name(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_workflow_with_full_data(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/workflows").mock(
-        return_value=httpx.Response(201, json={"data": {"id": "W2", "name": "Full WF", "active": False}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/workflows").mock(return_value=httpx.Response(201, json={"data": {"id": "W2", "name": "Full WF", "active": False}}))
     result = await connector.write(
         ConnectorPayload(
             resource="workflow",
@@ -327,12 +297,8 @@ async def test_write_workflow_with_full_data(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_workflow_update(connector: N8NConnector) -> None:
-    respx.put(f"{BASE_URL}/api/v1/workflows/W1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "name": "Updated WF"}})
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="workflow_update", data={"id": "W1", "name": "Updated WF"})
-    )
+    respx.put(f"{BASE_URL}/api/v1/workflows/W1").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "name": "Updated WF"}}))
+    result = await connector.write(ConnectorPayload(resource="workflow_update", data={"id": "W1", "name": "Updated WF"}))
     assert result["name"] == "Updated WF"
 
 
@@ -346,9 +312,7 @@ async def test_write_workflow_update_missing_id(connector: N8NConnector) -> None
 
 @respx.mock
 async def test_write_workflow_activate(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/workflows/W1/activate").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "active": True}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/workflows/W1/activate").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "active": True}}))
     result = await connector.write(ConnectorPayload(resource="workflow_activate", data={"id": "W1"}))
     assert result["active"] is True
 
@@ -360,9 +324,7 @@ async def test_write_workflow_activate_missing_id(connector: N8NConnector) -> No
 
 @respx.mock
 async def test_write_workflow_deactivate(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/workflows/W1/deactivate").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "active": False}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/workflows/W1/deactivate").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "active": False}}))
     result = await connector.write(ConnectorPayload(resource="workflow_deactivate", data={"id": "W1"}))
     assert result["active"] is False
 
@@ -377,9 +339,7 @@ async def test_write_workflow_deactivate_missing_id(connector: N8NConnector) -> 
 
 @respx.mock
 async def test_write_workflow_delete(connector: N8NConnector) -> None:
-    respx.delete(f"{BASE_URL}/api/v1/workflows/W1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "deleted": True}})
-    )
+    respx.delete(f"{BASE_URL}/api/v1/workflows/W1").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "deleted": True}}))
     result = await connector.write(ConnectorPayload(resource="workflow_delete", data={"id": "W1"}))
     assert result["deleted"] is True
 
@@ -408,9 +368,7 @@ async def test_write_execution_delete(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_execution_delete_200(connector: N8NConnector) -> None:
-    respx.delete(f"{BASE_URL}/api/v1/executions/E1").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "E1", "deleted": True}})
-    )
+    respx.delete(f"{BASE_URL}/api/v1/executions/E1").mock(return_value=httpx.Response(200, json={"data": {"id": "E1", "deleted": True}}))
     result = await connector.write(ConnectorPayload(resource="execution_delete", data={"id": "E1"}))
     assert result["deleted"] is True
 
@@ -425,12 +383,8 @@ async def test_write_execution_delete_missing_id(connector: N8NConnector) -> Non
 
 @respx.mock
 async def test_write_credential(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/credentials").mock(
-        return_value=httpx.Response(201, json={"data": {"id": "C1", "name": "My Cred", "type": "github"}})
-    )
-    result = await connector.write(
-        ConnectorPayload(resource="credential", data={"name": "My Cred", "type": "github", "data": {"token": "abc"}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/credentials").mock(return_value=httpx.Response(201, json={"data": {"id": "C1", "name": "My Cred", "type": "github"}}))
+    result = await connector.write(ConnectorPayload(resource="credential", data={"name": "My Cred", "type": "github", "data": {"token": "abc"}}))
     assert result["id"] == "C1"
     assert result["type"] == "github"
 
@@ -450,9 +404,7 @@ async def test_write_credential_missing_type(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_execution_retry(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/executions/E1/retry").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "E1", "retryOf": "E0", "status": "running"}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/executions/E1/retry").mock(return_value=httpx.Response(200, json={"data": {"id": "E1", "retryOf": "E0", "status": "running"}}))
     result = await connector.write(ConnectorPayload(resource="execution_retry", data={"id": "E1"}))
     assert result["status"] == "running"
 
@@ -499,9 +451,7 @@ async def test_query_workflows_empty_response(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_query_executions_with_limit_and_cursor(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/executions", params={"limit": 10, "cursor": "abc"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "E10"}], "nextCursor": "def"})
-    )
+    respx.get(f"{BASE_URL}/api/v1/executions", params={"limit": 10, "cursor": "abc"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "E10"}], "nextCursor": "def"}))
     result = await connector.query(ConnectorQuery(resource="executions", limit=10, cursor="abc"))
     assert len(result.records) == 1
     assert result.next_cursor == "def"
@@ -509,36 +459,28 @@ async def test_query_executions_with_limit_and_cursor(connector: N8NConnector) -
 
 @respx.mock
 async def test_query_tags_with_limit(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/tags", params={"limit": 2}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "T1"}, {"id": "T2"}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/tags", params={"limit": 2}).mock(return_value=httpx.Response(200, json={"data": [{"id": "T1"}, {"id": "T2"}]}))
     result = await connector.query(ConnectorQuery(resource="tags", limit=2))
     assert len(result.records) == 2
 
 
 @respx.mock
 async def test_query_nodes_with_limit(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/node-types", params={"limit": 1}).mock(
-        return_value=httpx.Response(200, json={"data": [{"name": "n8n-nodes-base.noOp"}]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/node-types", params={"limit": 1}).mock(return_value=httpx.Response(200, json={"data": [{"name": "n8n-nodes-base.noOp"}]}))
     result = await connector.query(ConnectorQuery(resource="nodes", limit=1))
     assert len(result.records) == 1
 
 
 @respx.mock
 async def test_query_webhooks_with_limit(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/webhooks", params={"limit": 5}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": f"WH{i}"} for i in range(5)]})
-    )
+    respx.get(f"{BASE_URL}/api/v1/webhooks", params={"limit": 5}).mock(return_value=httpx.Response(200, json={"data": [{"id": f"WH{i}"} for i in range(5)]}))
     result = await connector.query(ConnectorQuery(resource="webhooks", limit=5))
     assert len(result.records) == 5
 
 
 @respx.mock
 async def test_query_credentials_with_cursor(connector: N8NConnector) -> None:
-    respx.get(f"{BASE_URL}/api/v1/credentials", params={"cursor": "p2"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "C2"}], "nextCursor": None})
-    )
+    respx.get(f"{BASE_URL}/api/v1/credentials", params={"cursor": "p2"}).mock(return_value=httpx.Response(200, json={"data": [{"id": "C2"}], "nextCursor": None}))
     result = await connector.query(ConnectorQuery(resource="credentials", cursor="p2"))
     assert len(result.records) == 1
     assert result.next_cursor is None
@@ -546,18 +488,14 @@ async def test_query_credentials_with_cursor(connector: N8NConnector) -> None:
 
 @respx.mock
 async def test_write_workflow_activate_already_active(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/workflows/W1/activate").mock(
-        return_value=httpx.Response(200, json={"data": {"id": "W1", "active": True}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/workflows/W1/activate").mock(return_value=httpx.Response(200, json={"data": {"id": "W1", "active": True}}))
     result = await connector.write(ConnectorPayload(resource="workflow_activate", data={"id": "W1"}))
     assert result["active"] is True
 
 
 @respx.mock
 async def test_write_credential_with_full_data(connector: N8NConnector) -> None:
-    respx.post(f"{BASE_URL}/api/v1/credentials").mock(
-        return_value=httpx.Response(201, json={"data": {"id": "C2", "name": "Full Cred", "type": "slack"}})
-    )
+    respx.post(f"{BASE_URL}/api/v1/credentials").mock(return_value=httpx.Response(201, json={"data": {"id": "C2", "name": "Full Cred", "type": "slack"}}))
     result = await connector.write(
         ConnectorPayload(
             resource="credential",

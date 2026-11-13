@@ -86,9 +86,7 @@ def _stage_probe(directory: Path, content: str) -> Path:
 def _assert_no_new_source_files(before: set[Path]) -> None:
     """Assert the gate run did not create any Python file under the measured tree."""
     after = set(SRC.rglob("*.py"))
-    assert after == before, (
-        f"a gate test created a file inside the measured source tree: {sorted(str(path) for path in after - before)}"
-    )
+    assert after == before, f"a gate test created a file inside the measured source tree: {sorted(str(path) for path in after - before)}"
 
 
 def _run_gate(extra_targets: list[Path] | None = None) -> subprocess.CompletedProcess[str]:
@@ -138,9 +136,7 @@ def test_gate_blocks_new_dead_function(tmp_path: Path) -> None:
         probe.unlink(missing_ok=True)
 
     _assert_no_new_source_files(source_before)
-    assert result.returncode != 0, (
-        f"vulture gate exited 0 despite a dead function in the scanned probe:\n{result.stdout}"
-    )
+    assert result.returncode != 0, f"vulture gate exited 0 despite a dead function in the scanned probe:\n{result.stdout}"
     assert "_far252_dead_probe" in result.stdout, f"gate output did not name the dead function:\n{result.stdout}"
 
     clean = _run_gate()
@@ -159,9 +155,7 @@ def test_gate_blocks_unused_import_and_unreachable(tmp_path: Path) -> None:
         probe.unlink(missing_ok=True)
 
     _assert_no_new_source_files(source_before)
-    assert result.returncode != 0, (
-        f"vulture gate exited 0 despite a dead import + unreachable code in the scanned probe:\n{result.stdout}"
-    )
+    assert result.returncode != 0, f"vulture gate exited 0 despite a dead import + unreachable code in the scanned probe:\n{result.stdout}"
     assert "ftplib" in result.stdout, f"gate output did not name the unused import:\n{result.stdout}"
 
 
@@ -182,9 +176,7 @@ def test_probe_is_staged_outside_the_measured_source_tree(tmp_path: Path, conten
     """
     probe = _stage_probe(tmp_path, content)
     assert probe.read_text(encoding="utf-8") == content
-    assert SRC.resolve() not in probe.resolve().parents, (
-        f"vulture probe would be staged inside the measured coverage source tree: {probe}"
-    )
+    assert SRC.resolve() not in probe.resolve().parents, f"vulture probe would be staged inside the measured coverage source tree: {probe}"
 
 
 def test_whitelist_exists_and_names_framework_symbols() -> None:

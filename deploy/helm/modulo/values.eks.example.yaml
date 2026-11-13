@@ -108,10 +108,10 @@ backend:
       memory: 2Gi
       ephemeralStorage: 2Gi
   env:
-    MODULO_PUBLIC_URL: "https://modulo.example.com"
-    MODULO_LOG_LEVEL: info
+    FARNA_CONTROL_PUBLIC_URL: "https://modulo.example.com"
+    FARNA_CONTROL_LOG_LEVEL: info
     MODULO_ENV: production
-    MODULO_MAX_LOCAL_CONCURRENCY: "4"
+    FARNA_CONTROL_MAX_LOCAL_CONCURRENCY: "4"
     SAQ_WORKER_CONCURRENCY: "20"
     SAQ_REDIS_POOL_SIZE: "50"
     # REQUIRED: the saq-system worker fail-closes without non-empty values

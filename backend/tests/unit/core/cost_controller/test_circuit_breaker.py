@@ -113,12 +113,8 @@ class TestCheckPipelineCircuitBreaker:
             (Decimal(-5), "non_negative"),
         ],
     )
-    async def test_rejects_invalid_cost(
-        self, mock_session: AsyncMock, cost_usd: Decimal | None, reason_keyword: str
-    ) -> None:
-        approved, reason = await check_pipeline_circuit_breaker(
-            mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=cost_usd
-        )
+    async def test_rejects_invalid_cost(self, mock_session: AsyncMock, cost_usd: Decimal | None, reason_keyword: str) -> None:
+        approved, reason = await check_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=cost_usd)
 
         assert approved is False
         assert reason_keyword in (reason or "").lower()
@@ -128,9 +124,7 @@ class TestCheckPipelineCircuitBreaker:
         pipeline = _make_pipeline(threshold=None)
         mock_session.execute = AsyncMock(return_value=_pipeline_result(pipeline))
 
-        approved, reason = await check_pipeline_circuit_breaker(
-            mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(100)
-        )
+        approved, reason = await check_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(100))
 
         assert approved is True
         assert reason is None
@@ -139,9 +133,7 @@ class TestCheckPipelineCircuitBreaker:
         pipeline = _make_pipeline(threshold=Decimal(1000), tripped=True)
         mock_session.execute = AsyncMock(return_value=_pipeline_result(pipeline))
 
-        approved, reason = await check_pipeline_circuit_breaker(
-            mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(1)
-        )
+        approved, reason = await check_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(1))
 
         assert approved is False
         assert reason == "circuit_breaker_tripped"
@@ -157,9 +149,7 @@ class TestCheckPipelineCircuitBreaker:
         mock_session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result, update_result])
         dispatch_mock = AsyncMock()
         with patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock):
-            approved, reason = await check_pipeline_circuit_breaker(
-                mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(100)
-            )
+            approved, reason = await check_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(100))
 
         assert approved is False
         assert reason == "circuit_breaker_tripped"
@@ -175,9 +165,7 @@ class TestCheckPipelineCircuitBreaker:
         monthly_result.scalar_one.return_value = Decimal("900.00")
         mock_session.execute = AsyncMock(side_effect=[pipeline_result, monthly_result])
 
-        approved, reason = await check_pipeline_circuit_breaker(
-            mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(50)
-        )
+        approved, reason = await check_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=_PIPELINE_ID, cost_usd=Decimal(50))
 
         assert approved is True
         assert reason is None

@@ -1394,10 +1394,7 @@ class RestConnector(ConnectorBase):
         for secret in self._secret_values():
             if not secret:
                 continue
-            if len(secret) >= _SHORT_CREDENTIAL_LEN:
-                pattern = rf"(?<![A-Za-z0-9_]){re.escape(secret)}(?![A-Za-z0-9_])"
-            else:
-                pattern = rf"(?<![A-Za-z0-9_\-.\s]){re.escape(secret)}(?![A-Za-z0-9_\-.\s])"
+            pattern = rf"(?<![A-Za-z0-9_]){re.escape(secret)}(?![A-Za-z0-9_])" if len(secret) >= _SHORT_CREDENTIAL_LEN else rf"(?<![A-Za-z0-9_\-.\s]){re.escape(secret)}(?![A-Za-z0-9_\-.\s])"
             candidate = re.sub(pattern, "***", redacted)
             if candidate != redacted:
                 redacted = candidate

@@ -153,16 +153,11 @@ async def test_load_pipeline_and_edges_serializes_edge_condition() -> None:
 
 
 def test_snapshot_pure_helpers_cover_defaults_and_conflicts() -> None:
-    assert snapshots._ids([None, "00000000-0000-0000-0000-000000000001"]) == {
-        uuid.UUID("00000000-0000-0000-0000-000000000001")
-    }
+    assert snapshots._ids([None, "00000000-0000-0000-0000-000000000001"]) == {uuid.UUID("00000000-0000-0000-0000-000000000001")}
     assert snapshots._collect_parameter_set_ids([{}, {"parameter_set_id": uuid.UUID(int=1)}]) == {uuid.UUID(int=1)}
     assert snapshots._pipeline_lock_keys(uuid.UUID(int=1)) != snapshots._pipeline_lock_keys(uuid.UUID(int=2))
     assert snapshots._masked_snapshot_lock_keys(uuid.UUID(int=1))[0] >= 0
-    assert (
-        snapshots._is_snapshot_version_conflict(IntegrityError("uq_pipeline_snapshot_version", {}, RuntimeError()))
-        is True
-    )
+    assert snapshots._is_snapshot_version_conflict(IntegrityError("uq_pipeline_snapshot_version", {}, RuntimeError())) is True
     assert snapshots._is_snapshot_version_conflict(IntegrityError("other", {}, RuntimeError())) is False
 
 
@@ -189,9 +184,7 @@ def test_snapshot_model_and_policy_pin_helpers() -> None:
     assert node["schema_profile"] == "explicit"
     schema_pins = snapshots._build_schema_pins([agent], {schema_id: SimpleNamespace(abstract_name="Input")})
     assert schema_pins[0]["version"] == "1"
-    prompt_pins, backend_pins = snapshots._build_prompt_and_backend_pins(
-        [agent], {backend_id: SimpleNamespace(model_id="model")}
-    )
+    prompt_pins, backend_pins = snapshots._build_prompt_and_backend_pins([agent], {backend_id: SimpleNamespace(model_id="model")})
     assert prompt_pins[0]["agent_id"] == str(agent_id)
     assert backend_pins[0]["model_id"] == "model"
     gate = SimpleNamespace(

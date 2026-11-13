@@ -68,10 +68,7 @@ async def _seed_account(engine: AsyncEngine, email: str, *, hitl_email_default: 
         preferences = '{"hitl_email": {"default": %s}}' % ("true" if hitl_email_default else "false")
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash, preferences) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash', CAST(:prefs AS json))"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash, preferences) VALUES (:id, :email, :name, 'local', true, 'hash', CAST(:prefs AS json))"),
             {"id": str(account_id), "email": email, "name": f"User {email}", "prefs": preferences},
         )
     return account_id
@@ -80,9 +77,7 @@ async def _seed_account(engine: AsyncEngine, email: str, *, hitl_email_default: 
 async def _seed_membership(engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID, role: str = "admin") -> None:
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, :role)"),
             {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id), "role": role},
         )
 
@@ -130,11 +125,7 @@ async def _seed_run(
     run_number = int(run_id.int % 10**9) + 1
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :status)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :status)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -165,11 +156,7 @@ async def _seed_claim(
     claim_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
-                "expires_at, created_at, account_id, claimed_at, decision) "
-                "VALUES (:id, :oid, :rid, :pid, :review, :expires, :created, :acct, :claimed, :decision)"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, expires_at, created_at, account_id, claimed_at, decision) VALUES (:id, :oid, :rid, :pid, :review, :expires, :created, :acct, :claimed, :decision)"),
             {
                 "id": str(claim_id),
                 "oid": str(org_id),

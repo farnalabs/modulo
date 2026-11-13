@@ -58,9 +58,7 @@ class TestPipelineNodelessWindowMinutes:
         assert ch.pipeline_nodeless_window_minutes(35, max_node_timeout_seconds=60) == 35
 
     def test_window_clamps_to_the_ceiling(self) -> None:
-        assert ch.pipeline_nodeless_window_minutes(35, max_node_timeout_seconds=10_000_000) == (
-            ch.NODELESS_WINDOW_MAX_MINUTES
-        )
+        assert ch.pipeline_nodeless_window_minutes(35, max_node_timeout_seconds=10_000_000) == (ch.NODELESS_WINDOW_MAX_MINUTES)
 
     @pytest.mark.parametrize("node_timeout", [1, 900, 1800, 2400, 3300])
     def test_window_strictly_exceeds_the_max_node_timeout(self, node_timeout: int) -> None:

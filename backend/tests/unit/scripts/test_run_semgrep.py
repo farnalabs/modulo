@@ -61,18 +61,10 @@ _loader.exec_module(mod)
 _REPO_ROOT = script_path.parent.parent
 
 #: The two real skip signatures, verbatim from the pinned semgrep's output.
-_TIMEOUT_WARNING = (
-    "Warning: 1 timeout error(s) in backend/src/farna/api/mcp_server.py when running the following rules: "
-    "[semgrep.split-on-db-url]\n"
-)
-_TIMEOUT_STOPPED = (
-    "Semgrep stopped running rules on backend/src/farna/api/mcp_server.py after 1 timeout error(s). "
-    "See `--timeout-threshold` for more info.\n"
-)
+_TIMEOUT_WARNING = "Warning: 1 timeout error(s) in backend/src/farna/api/mcp_server.py when running the following rules: [semgrep.split-on-db-url]\n"
+_TIMEOUT_STOPPED = "Semgrep stopped running rules on backend/src/farna/api/mcp_server.py after 1 timeout error(s). See `--timeout-threshold` for more info.\n"
 #: A FINDING excerpt that quotes the phrase: must NOT be read as a skip.
-_FINDING_QUOTING_PHRASE = (
-    "backend/src/farna/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
-)
+_FINDING_QUOTING_PHRASE = "backend/src/farna/api/routes/pipelines.py:1617: dispatch.wait_timeout error not surfaced to the caller\n"
 #: The ONE non-fatal parse skip that reproduces per-file on the invocation CI
 #: uses (`uv run --project backend --no-sync semgrep`): the PEP 695 generic
 #: ``async def _run_db_shell[**TOOL_SHELL_P](`` at mcp_server.py:2111, which
@@ -82,14 +74,7 @@ _FINDING_QUOTING_PHRASE = (
 #: per-file scan of node_runner.py reports ``errors: []`` and "• <none>", so no
 #: parse-skip attribution for that file is reproducible here. A line like this
 #: must never be read as a per-rule timeout skip.
-_PARTIAL_PARSING = (
-    "[WARN] Syntax error at line backend/src/farna/api/mcp_server.py:2111:\n"
-    " `[**TOOL_SHELL_P]` was unexpected\n"
-    "\n"
-    "  Partially analyzed due to parsing or internal Semgrep errors\n"
-    "\n"
-    "   • backend/src/farna/api/mcp_server.py (1 lines skipped)\n"
-)
+_PARTIAL_PARSING = "[WARN] Syntax error at line backend/src/farna/api/mcp_server.py:2111:\n `[**TOOL_SHELL_P]` was unexpected\n\n  Partially analyzed due to parsing or internal Semgrep errors\n\n   • backend/src/farna/api/mcp_server.py (1 lines skipped)\n"
 
 #: Real ``errors[]`` entries captured from the pinned semgrep's ``--json-output``
 #: (2026-10-18, against ``backend/src/farna/api/mcp_server.py``). They are
@@ -233,10 +218,7 @@ def test_json_detector_false_for_list_typed_partial_parsing(tmp_path: Path) -> N
                             }
                         ],
                     ],
-                    "message": (
-                        "Syntax error at line backend/src/farna/api/mcp_server.py:2111: "
-                        "`[**TOOL_SHELL_P]` was unexpected"
-                    ),
+                    "message": ("Syntax error at line backend/src/farna/api/mcp_server.py:2111: `[**TOOL_SHELL_P]` was unexpected"),
                 }
             ],
             "results": [],
@@ -512,9 +494,7 @@ def test_run_windows_mixed_real_payload_with_list_partial_parsing_fails(
 def test_run_windows_spawn_failure_fails_open(capsys: pytest.CaptureFixture[str]) -> None:
     with (
         mock.patch.object(mod, "_get_changed_py_files", return_value=(_CHANGED, None)),
-        mock.patch.object(
-            mod.subprocess, "run", return_value=_completed(1, stderr="Failed to spawn: program not found")
-        ),
+        mock.patch.object(mod.subprocess, "run", return_value=_completed(1, stderr="Failed to spawn: program not found")),
     ):
         rc = mod._run_windows()
     captured = capsys.readouterr()
@@ -624,10 +604,7 @@ def _derived_pairs() -> set[tuple[str, str]]:
             else:
                 derived.add((rule_file, fixture))
     if unresolved:
-        raise AssertionError(
-            "semgrep test annotation(s) could not be resolved to a rule file — add each "
-            "pair to the `pairs=` block in .github/workflows/ci.yml: " + "; ".join(sorted(unresolved))
-        )
+        raise AssertionError("semgrep test annotation(s) could not be resolved to a rule file — add each pair to the `pairs=` block in .github/workflows/ci.yml: " + "; ".join(sorted(unresolved)))
     return derived
 
 
@@ -635,8 +612,4 @@ def test_ci_semgrep_pairs_match_the_fixtures_on_disk() -> None:
     """Every annotated fixture is paired in CI, and every pair has a fixture."""
     ci_pairs = _ci_pair_block()
     derived = _derived_pairs()
-    assert derived == ci_pairs, (
-        "the `pairs=` block in .github/workflows/ci.yml and the semgrep fixtures on disk disagree.\n"
-        f"  in pairs= but not derived on disk: {sorted(ci_pairs - derived)}\n"
-        f"  derived on disk but missing from pairs=: {sorted(derived - ci_pairs)}"
-    )
+    assert derived == ci_pairs, f"the `pairs=` block in .github/workflows/ci.yml and the semgrep fixtures on disk disagree.\n  in pairs= but not derived on disk: {sorted(ci_pairs - derived)}\n  derived on disk but missing from pairs=: {sorted(derived - ci_pairs)}"

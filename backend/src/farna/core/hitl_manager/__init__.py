@@ -383,17 +383,7 @@ class HITLManager:
         )
 
         # Generate token — JWT if we have a secret_key, else opaque
-        if self._secret_key:
-            token = _create_claim_jwt(
-                str(claimant_id),
-                self._secret_key,
-                run_id=str(run_id),
-                review_id=review_id,
-                client_id=str(claimant_id),
-                expiry_minutes=expiry_minutes,
-            )
-        else:
-            token = secrets.token_urlsafe(_TOKEN_BYTES)
+        token = _create_claim_jwt(str(claimant_id), self._secret_key, run_id=str(run_id), review_id=review_id, client_id=str(claimant_id), expiry_minutes=expiry_minutes) if self._secret_key else secrets.token_urlsafe(_TOKEN_BYTES)
 
         # FAR-645: the run-status guard is folded INTO the atomic UPDATE via
         # the EXISTS predicate below. The pre-check SELECT above is only a

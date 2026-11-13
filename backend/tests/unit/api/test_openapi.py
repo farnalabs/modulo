@@ -53,9 +53,7 @@ class TestApplyErrorResponseSchemas:
                     "200": {"description": "ok"},
                 }
             ),
-            "components": {
-                "schemas": {"HTTPValidationError": {"type": "object"}, "ValidationError": {"type": "object"}}
-            },
+            "components": {"schemas": {"HTTPValidationError": {"type": "object"}, "ValidationError": {"type": "object"}}},
         }
 
         apply_error_response_schemas(document)
@@ -122,11 +120,7 @@ class TestLiveDocument:
 
     def test_every_declared_422_body_is_problem_details(self) -> None:
         document = _live_document()
-        bodies = [
-            response["content"]["application/json"]["schema"]
-            for response in _documented_responses(document, "422")
-            if "content" in response
-        ]
+        bodies = [response["content"]["application/json"]["schema"] for response in _documented_responses(document, "422") if "content" in response]
         assert bodies, "no 422 response bodies declared — the rewrite did not run"
         assert all(schema == {"$ref": PROBLEM_DETAIL_REF} for schema in bodies)
 

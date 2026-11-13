@@ -34,10 +34,7 @@ def test_valid_llm_node_passes():
 
 def test_valid_jinja_template_passes():
     """A renderable agent_command with {{ }} references passes the gate."""
-    assert (
-        _validate_sandbox_nodes([_sandbox_node(agent_commands=["opencode run --model {{ input.model }} --auto"])])
-        is None
-    )
+    assert _validate_sandbox_nodes([_sandbox_node(agent_commands=["opencode run --model {{ input.model }} --auto"])]) is None
 
 
 def test_broken_jinja_rejected_at_save_time():

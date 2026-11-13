@@ -41,11 +41,7 @@ def _make_valid_license_key(tier: str = "team") -> str:
         "org_id": "test-org",
     }
     sig_hex = sign_primitive(payload, _TEST_PRIV)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -102,11 +98,7 @@ def _make_saml_response(email: str, display_name: str, groups: list[str] | None 
     if groups:
         values = "".join(f"        <saml:AttributeValue>{g}</saml:AttributeValue>" for g in groups)
         groups_xml = f'      <saml:Attribute Name="groups">\n{values}\n      </saml:Attribute>'
-    xml = (
-        _SAML_RESPONSE_XML.replace("__EMAIL__", email)
-        .replace("__DISPLAY_NAME__", display_name)
-        .replace("__GROUPS_XML__", groups_xml)
-    )
+    xml = _SAML_RESPONSE_XML.replace("__EMAIL__", email).replace("__DISPLAY_NAME__", display_name).replace("__GROUPS_XML__", groups_xml)
     return base64.b64encode(xml.encode()).decode()
 
 
@@ -438,9 +430,7 @@ def no_duplicate_account(ctx: dict[str, Any]) -> None:
     mock_jit.assert_awaited_once()
     returned = mock_jit.return_value
     account = returned[0] if isinstance(returned, tuple) else returned
-    assert account.email == ctx.get("expected_email", ""), (
-        f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
-    )
+    assert account.email == ctx.get("expected_email", ""), f"Expected returning user {ctx.get('expected_email')}, got {account.email}"
 
 
 @then(parsers.parse('the user is added to team "{team_id}" with role "{role}"'))

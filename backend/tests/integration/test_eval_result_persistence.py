@@ -43,11 +43,7 @@ async def _setup_org(engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
         )
         acc_id = uuid.uuid4()
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) "
-                "VALUES (:id, :e, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'hash', 'local', true)"),
             {"id": str(acc_id), "e": f"{slug}@test.com", "n": slug},
         )
     return org_id, acc_id
@@ -94,12 +90,7 @@ async def _insert_pipeline(
     pipeline_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, "
-                "node_timeout_seconds, run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :n, :aid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -120,11 +111,7 @@ async def _insert_run(
     run_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "langgraph_thread_id, trigger_type, input_hash, run_number) "
-                "VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, langgraph_thread_id, trigger_type, input_hash, run_number) VALUES (:id, :oid, :pid, :sid, :ltid, 'manual', :ih, 1)"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -185,12 +172,7 @@ class TestC10EvalResultColumnRoundTrip:
 
         async with db_engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results "
-                    "(id, organisation_id, run_id, node_id, eval_id, "
-                    "eval_definition_version, passed, outcome, score, detail) "
-                    "VALUES (:id, :oid, :rid, :nid, :eid, :edv, :p, :o, :s, :d)"
-                ),
+                text("INSERT INTO eval_results (id, organisation_id, run_id, node_id, eval_id, eval_definition_version, passed, outcome, score, detail) VALUES (:id, :oid, :rid, :nid, :eid, :edv, :p, :o, :s, :d)"),
                 {
                     "id": str(eval_result_id),
                     "oid": str(org_id),
@@ -208,11 +190,7 @@ class TestC10EvalResultColumnRoundTrip:
         # Read back
         async with db_engine.connect() as conn:
             result = await conn.execute(
-                text(
-                    "SELECT organisation_id, run_id, node_id, eval_id, "
-                    "eval_definition_version, passed, outcome, score, detail "
-                    "FROM eval_results WHERE id = :id"
-                ),
+                text("SELECT organisation_id, run_id, node_id, eval_id, eval_definition_version, passed, outcome, score, detail FROM eval_results WHERE id = :id"),
                 {"id": str(eval_result_id)},
             )
             row = result.fetchone()
@@ -247,11 +225,7 @@ class TestC10EvalResultColumnRoundTrip:
         eval_result_id = uuid.uuid4()
         async with db_engine.begin() as conn:
             await conn.execute(
-                text(
-                    "INSERT INTO eval_results "
-                    "(id, organisation_id, run_id, eval_id, passed, outcome) "
-                    "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
-                ),
+                text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:id, :oid, :rid, :eid, true, 'pass')"),
                 {
                     "id": str(eval_result_id),
                     "oid": str(org_id),
@@ -291,11 +265,7 @@ class TestC11EvalResultFKEnforcement:
         with pytest.raises(IntegrityError):
             async with db_engine.begin() as conn:
                 await conn.execute(
-                    text(
-                        "INSERT INTO eval_results "
-                        "(id, organisation_id, run_id, eval_id, passed, outcome) "
-                        "VALUES (:id, :oid, :rid, :eid, true, 'pass')"
-                    ),
+                    text("INSERT INTO eval_results (id, organisation_id, run_id, eval_id, passed, outcome) VALUES (:id, :oid, :rid, :eid, true, 'pass')"),
                     {
                         "id": str(uuid.uuid4()),
                         "oid": str(org_id),
@@ -379,9 +349,7 @@ class TestC12BlockingEvalPersistsBeforeHalting:
         assert row[1] is False, f"passed must be False for a failing block eval, got {row[1]}"
 
     @pytest.mark.asyncio
-    async def test_blocking_eval_persists_even_when_subsequent_eval_would_also_block(
-        self, db_engine: AsyncEngine
-    ) -> None:
+    async def test_blocking_eval_persists_even_when_subsequent_eval_would_also_block(self, db_engine: AsyncEngine) -> None:
         """Criterion 12 (two evals): the first blocking eval's result is
         persisted even though the function raises EvalBlockedError on that
         eval — the second eval is never reached."""

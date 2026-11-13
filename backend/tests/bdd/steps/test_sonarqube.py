@@ -76,9 +76,7 @@ def _build_connector(unhealthy: bool = False) -> AsyncMock:
                 raise ValueError("SonarQube issue_status write requires 'issue' and 'transition' in data")
             valid = {"confirm", "resolve", "reopen", "falsepositive", "wontfix"}
             if transition not in valid:
-                raise ValueError(
-                    f"Invalid SonarQube transition {transition!r}. Must be one of: {', '.join(sorted(valid))}"
-                )
+                raise ValueError(f"Invalid SonarQube transition {transition!r}. Must be one of: {', '.join(sorted(valid))}")
             return {"key": issue, "transition": transition}
         if payload.resource == "gate":
             if not payload.data.get("name"):

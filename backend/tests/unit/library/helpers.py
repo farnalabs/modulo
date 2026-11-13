@@ -24,18 +24,10 @@ def kebab(name: str) -> str:
 
 def module_dicts(module: Any) -> dict[str, dict[str, Any]]:
     """Every upper-case dict constant defined by *module*, keyed by constant name."""
-    return {
-        name: getattr(module, name)
-        for name in dir(module)
-        if name.isupper() and isinstance(getattr(module, name), dict)
-    }
+    return {name: getattr(module, name) for name in dir(module) if name.isupper() and isinstance(getattr(module, name), dict)}
 
 
-KNOWN_AGENTS: set[str] = {
-    kebab(entry["name"])
-    for entry in vars(_agent_defs).values()
-    if isinstance(entry, dict) and entry.get("node_type") == "agent"
-} | {kebab(COMPLEXITY_REVIEWER["name"])}
+KNOWN_AGENTS: set[str] = {kebab(entry["name"]) for entry in vars(_agent_defs).values() if isinstance(entry, dict) and entry.get("node_type") == "agent"} | {kebab(COMPLEXITY_REVIEWER["name"])}
 
 # Every workflow primitive exported by the definitions module, keyed by its
 # canonical constant name so parametrized tests can identify failures.
@@ -93,9 +85,7 @@ def assert_step_matches(
     step = step_by_id(workflow, step_id)
     assert step.get("agent") == agent, f"{step_id}: unexpected agent {step.get('agent')!r}"
     assert step.get("depends_on") == depends_on, f"{step_id}: unexpected depends_on {step.get('depends_on')!r}"
-    assert step.get("connector_binding") == connector_binding, (
-        f"{step_id}: unexpected connector_binding {step.get('connector_binding')!r}"
-    )
+    assert step.get("connector_binding") == connector_binding, f"{step_id}: unexpected connector_binding {step.get('connector_binding')!r}"
 
 
 def assert_step_ids(workflow: dict[str, Any], cases: list[tuple[str, dict[str, Any]]]) -> None:
@@ -183,11 +173,7 @@ def enum_bearing_schemas() -> dict[str, dict[str, list[str]]]:
     result: dict[str, dict[str, list[str]]] = {}
     for entry in SCHEMAS:
         definition = cast(dict[str, Any], entry["definition"])
-        enums = {
-            name: prop_schema["enum"]
-            for name, prop_schema in definition.get("properties", {}).items()
-            if "enum" in prop_schema
-        }
+        enums = {name: prop_schema["enum"] for name, prop_schema in definition.get("properties", {}).items() if "enum" in prop_schema}
         if enums:
             result[cast(str, entry["name"])] = enums
     return result

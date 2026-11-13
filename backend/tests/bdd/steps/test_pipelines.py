@@ -449,9 +449,7 @@ def run_trigger_run(client, url: str, request: pytest.FixtureRequest, patches: l
 
     max_concurrent = getattr(request.node, "_max_concurrent", None)
     active_run = getattr(request.node, "_mock_run", None)
-    capacity_deferred = (
-        max_concurrent is not None and active_run is not None and active_run.status in PIPELINE_CAPACITY_STATUSES
-    )
+    capacity_deferred = max_concurrent is not None and active_run is not None and active_run.status in PIPELINE_CAPACITY_STATUSES
 
     # create_run in the runs module. The run is created exactly as production
     # does — ``pending``, with no capacity marker (``create_run`` never parks).
@@ -918,9 +916,7 @@ def check_run_parked_for_capacity(request: pytest.FixtureRequest, marker: str) -
     assert isinstance(body, dict), f"Expected the trigger route to return a run payload, got {type(body).__name__}"
     assert body.get("status") == "pending", f"Expected a parked (pending) run, got status {body.get('status')!r}"
     expected_code = map_legacy_code(marker)
-    assert body.get("error_code") == expected_code, (
-        f"Expected capacity marker {expected_code!r}, got {body.get('error_code')!r}"
-    )
+    assert body.get("error_code") == expected_code, f"Expected capacity marker {expected_code!r}, got {body.get('error_code')!r}"
 
 
 @then("the run has an error_detail")
@@ -952,9 +948,7 @@ def no_further_nodes_execute(request: pytest.FixtureRequest) -> None:
     assert mock_run.status == "cancelled", f"Expected cancelled, got {mock_run.status!r}"
     frozen = getattr(request.node, "_cancelled_at_node_count", 0)
     completed = getattr(request.node, "_completed_nodes", [])
-    assert len(completed) == frozen, (
-        "no node may execute after cancellation — completed nodes grew past the cancellation point"
-    )
+    assert len(completed) == frozen, "no node may execute after cancellation — completed nodes grew past the cancellation point"
 
 
 @then(parsers.parse("node {first:d} completes before node {second:d} starts"))
@@ -978,9 +972,7 @@ def node_completes_before_next_starts(request: pytest.FixtureRequest, first: int
 def check_effective_run_context(request: pytest.FixtureRequest, expected_branch: str) -> None:
     effective = getattr(request.node, "_effective_run_context", None)
     assert effective is not None, "No effective run context stored — the when step must set _effective_run_context"
-    assert effective.get("branch") == expected_branch, (
-        f"Expected run context branch {expected_branch!r}, got {effective.get('branch')!r}"
-    )
+    assert effective.get("branch") == expected_branch, f"Expected run context branch {expected_branch!r}, got {effective.get('branch')!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1632,9 +1624,7 @@ def cron_trigger_with_expression(expression: str, request: pytest.FixtureRequest
 
 
 @when(parsers.parse('I create a cron trigger for pipeline "{pipeline_name}" with expression "{expression}"'))
-def create_cron_trigger(
-    pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any], mock_session
-) -> None:
+def create_cron_trigger(pipeline_name: str, expression: str, client, request: pytest.FixtureRequest, patches: list[Any], mock_session) -> None:
     from tests.bdd.conftest import make_mock_pipeline, stub_no_duplicate_trigger
 
     stub_no_duplicate_trigger(mock_session)
@@ -1804,9 +1794,7 @@ def org_has_pipeline_with_one_snapshot(org: str, name: str, snap_ref: str, reque
 
 
 @given(parsers.parse('org "{org}" has pipeline "{name}" with snapshots "{snap_a}" and "{snap_b}"'))
-def org_has_pipeline_with_two_snapshots(
-    org: str, name: str, snap_a: str, snap_b: str, request: pytest.FixtureRequest
-) -> None:
+def org_has_pipeline_with_two_snapshots(org: str, name: str, snap_a: str, snap_b: str, request: pytest.FixtureRequest) -> None:
     from tests.bdd.conftest import make_mock_pipeline, make_mock_snapshot
 
     pipeline = make_mock_pipeline(name=name)
@@ -1999,10 +1987,7 @@ def delete_snapshot_endpoint(snap_ref: str, client, request, patches):
     is_latest = snap_ref == "snap-2" if snapshots else False
 
     _patch_set_rls(patches)
-    if not is_latest:
-        p = patch("farna.api.routes.pipelines.delete_snapshot", return_value=True)
-    else:
-        p = patch("farna.api.routes.pipelines.delete_snapshot", return_value=False)
+    p = patch("farna.api.routes.pipelines.delete_snapshot", return_value=True) if not is_latest else patch("farna.api.routes.pipelines.delete_snapshot", return_value=False)
     p.start()
     patches.append(p)
 

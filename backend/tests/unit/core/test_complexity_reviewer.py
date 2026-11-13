@@ -162,9 +162,7 @@ class TestContextSetterRole:
                 "run_context": {
                     "model_tier": "tier-2" if token_estimate > 500 else "tier-1",
                     "estimated_tokens": token_estimate,
-                    "complexity_reason": (
-                        f"Input is {token_estimate} tokens, {'complex' if token_estimate > 500 else 'simple'} analysis"
-                    ),
+                    "complexity_reason": (f"Input is {token_estimate} tokens, {'complex' if token_estimate > 500 else 'simple'} analysis"),
                 }
             }
 

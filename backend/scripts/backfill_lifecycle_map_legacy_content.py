@@ -60,13 +60,7 @@ _log = logging.getLogger("backfill_lifecycle_map_legacy_content")
 
 _UPDATE_SQL = text("UPDATE lifecycle_maps SET content_json = :content WHERE id = :map_id")
 _DELETE_JUNCTION_SQL = text("DELETE FROM lifecycle_map_stages WHERE map_id = :map_id")
-_INSERT_JUNCTION_SQL = text(
-    "INSERT INTO lifecycle_map_stages "
-    "(id, map_id, version, stage_id, stage_name, position, stage_type, pipeline_id, "
-    " organisation_id, account_id) "
-    "VALUES (:id, :map_id, :version, :stage_id, :stage_name, :position, :stage_type, "
-    " :pipeline_id, :organisation_id, :account_id)"
-)
+_INSERT_JUNCTION_SQL = text("INSERT INTO lifecycle_map_stages (id, map_id, version, stage_id, stage_name, position, stage_type, pipeline_id,  organisation_id, account_id) VALUES (:id, :map_id, :version, :stage_id, :stage_name, :position, :stage_type,  :pipeline_id, :organisation_id, :account_id)")
 
 
 def _bind_json_param(value: Any, dialect_name: str) -> Any:
@@ -361,8 +355,7 @@ def main() -> None:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Actually write the repaired content_json + junction projection; without this the "
-        "run is a dry-run that writes nothing.",
+        help="Actually write the repaired content_json + junction projection; without this the run is a dry-run that writes nothing.",
     )
     parser.add_argument(
         "--batch-size",

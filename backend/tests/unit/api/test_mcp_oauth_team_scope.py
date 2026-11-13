@@ -204,9 +204,7 @@ class TestOauthTeamFeedsExistingGuard:
         ms._ctx_team_id.set(_TEAM_A)
         try:
             with patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_B)):
-                result = await ms.set_pipeline_owners(
-                    pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None
-                )
+                result = await ms.set_pipeline_owners(pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None)
         finally:
             ms._ctx_team_id.set(None)
         assert result["error"] == "team_boundary_violation"
@@ -222,9 +220,7 @@ class TestOauthTeamFeedsExistingGuard:
                 patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_A)),
                 patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
             ):
-                result = await ms.set_pipeline_owners(
-                    pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None
-                )
+                result = await ms.set_pipeline_owners(pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None)
         finally:
             ms._ctx_team_id.set(None)
         assert result.get("error") != "team_boundary_violation"
@@ -238,7 +234,5 @@ class TestOauthTeamFeedsExistingGuard:
             patch.object(ms, "_pipeline_owner_team_id", new=AsyncMock(return_value=_TEAM_B)),
             patch("farna.db.crud.pipeline.update_pipeline", new=AsyncMock(return_value=pipeline)),
         ):
-            result = await ms.set_pipeline_owners(
-                pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None
-            )
+            result = await ms.set_pipeline_owners(pipeline_id=str(uuid.uuid4()), business_owner_id=None, reliability_owner_id=None)
         assert result.get("error") != "team_boundary_violation"

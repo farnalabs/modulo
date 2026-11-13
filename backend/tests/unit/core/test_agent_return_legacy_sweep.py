@@ -215,19 +215,13 @@ async def test_sql_predicate_matches_shared_row_predicate(
             )
         ).all()
 
-    flagged = {
-        node_id
-        for node_id, outputs_absent, telemetry_absent in rows
-        if stored_row_is_legacy(outputs_present=not outputs_absent, telemetry_present=not telemetry_absent)
-    }
+    flagged = {node_id for node_id, outputs_absent, telemetry_absent in rows if stored_row_is_legacy(outputs_present=not outputs_absent, telemetry_present=not telemetry_absent)}
     assert flagged == {"legacy"}
     assert report.legacy_count == len(flagged)
 
 
 @pytest.mark.asyncio
-async def test_sample_predicate_drift_is_dropped_and_logged(
-    engine: AsyncEngine, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_sample_predicate_drift_is_dropped_and_logged(engine: AsyncEngine, caplog: pytest.LogCaptureFixture) -> None:
     """A sampled row the shared predicate rejects is dropped and logged.
 
     The SQL filter and ``stored_row_is_legacy`` are documented twins, so in

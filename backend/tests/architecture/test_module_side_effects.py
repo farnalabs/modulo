@@ -54,7 +54,4 @@ def test_no_module_level_side_effects():
                         if func.id.startswith(("_validate", "_check", "_init_once")):
                             continue
                         violations.append(f"  {path.relative_to(SRC)}:{node.lineno}  Module-level call '{func.id}()'")
-    assert not violations, (
-        f"Found {len(violations)} module-level function call(s) that execute on import.\n"
-        "Wrap in a lazy function or guard with if __name__ == '__main__'.\n" + "\n".join(violations)
-    )
+    assert not violations, f"Found {len(violations)} module-level function call(s) that execute on import.\nWrap in a lazy function or guard with if __name__ == '__main__'.\n" + "\n".join(violations)

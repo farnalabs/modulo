@@ -135,8 +135,7 @@ async def test_install_round_trip_returns_201_and_persists_registry_row(
     async with db_engine.connect() as conn:
         row = await conn.execute(
             text(
-                "SELECT source, average_rating, review_count, ed25519_signature "
-                "FROM library_primitives WHERE slug = :slug AND version = :version AND deleted_at IS NULL",
+                "SELECT source, average_rating, review_count, ed25519_signature FROM library_primitives WHERE slug = :slug AND version = :version AND deleted_at IS NULL",
             ),
             {"slug": "code-reviewer", "version": "1.0.0"},
         )

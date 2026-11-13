@@ -180,9 +180,7 @@ class TestRuleFor:
         """FAR-535: the demo auto-login resolves to its dedicated 10/hour rule,
         not the 60/min runs rule or the 60/min GET rules."""
         request = make_mock_request(path="/api/v1/auth/demo")
-        assert middleware._rule_for(request) == RateLimitRule(
-            path_prefix="/api/v1/auth/demo", max_requests=10, window_s=3600
-        )
+        assert middleware._rule_for(request) == RateLimitRule(path_prefix="/api/v1/auth/demo", max_requests=10, window_s=3600)
 
 
 class TestManualSubmitSurface:

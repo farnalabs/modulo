@@ -100,9 +100,7 @@ def test_manifest_route_is_gated_by_the_endpoint_permission_not_system_admin() -
     assert entry["required_permissions"] == [_frontend_constant("ORG_LICENSE_MANAGE_PERMISSION")]
     assert not entry.get("system_admin_only")
     group = manifest["sidebar_groups"][entry["sidebar_group"]]
-    assert not group.get("system_admin_only"), (
-        "the licence page cannot live in a system-admin-only group if an org admin must reach it"
-    )
+    assert not group.get("system_admin_only"), "the licence page cannot live in a system-admin-only group if an org admin must reach it"
     # A lapsed licence resolves to the community tier; the page that installs a
     # replacement key must therefore be reachable at the community floor.
     assert entry["required_tier"] == "community"

@@ -207,9 +207,7 @@ def test_needs_review_records_needs_review_state() -> None:
 def test_editing_a_derived_element_produces_a_valid_contract() -> None:
     reviewed = review_proposal(
         make_request(
-            corrected_derived_elements=[
-                DerivedElementEdit(id=_DERIVED_ID, statement="Delivery stage observed", confidence="high")
-            ],
+            corrected_derived_elements=[DerivedElementEdit(id=_DERIVED_ID, statement="Delivery stage observed", confidence="high")],
             acknowledged_assumption_ids=[_ASSUMPTION_ID],
         ),
     )
@@ -219,9 +217,7 @@ def test_editing_a_derived_element_produces_a_valid_contract() -> None:
     assert derived.confidence == "high"
     assert derived.kind == "derived"
     # The corrected contract parses as a full ProposalContract.
-    assert ProposalContract.model_validate(reviewed.proposal.model_dump()).derived_elements[0].statement == (
-        "Delivery stage observed"
-    )
+    assert ProposalContract.model_validate(reviewed.proposal.model_dump()).derived_elements[0].statement == ("Delivery stage observed")
     assert reviewed.corrected_derived_element_ids == [_DERIVED_ID]
 
 
@@ -239,9 +235,7 @@ def test_removing_a_derived_element_produces_a_valid_contract() -> None:
 
 def test_correction_of_an_observed_fact_is_refused() -> None:
     with pytest.raises(ProposalReviewError, match="derived elements"):
-        review_proposal(
-            make_request(corrected_derived_elements=[DerivedElementEdit(id=_OBSERVED_ID, statement="Rewritten")])
-        )
+        review_proposal(make_request(corrected_derived_elements=[DerivedElementEdit(id=_OBSERVED_ID, statement="Rewritten")]))
 
 
 def test_removal_of_an_unknown_id_is_refused() -> None:

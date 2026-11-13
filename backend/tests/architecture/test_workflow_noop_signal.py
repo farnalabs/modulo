@@ -81,11 +81,7 @@ AUDIT_NOT_RUN_STEP = "Record the NOT RUN monitor cycle (FAR-2157)"
 
 def _health_module() -> Any:
     """Load ``deploy_health.py`` so the tests compare its real constants."""
-    path = next(
-        parent / ".github" / "scripts" / "deploy_health.py"
-        for parent in Path(__file__).resolve().parents
-        if (parent / ".github" / "scripts" / "deploy_health.py").exists()
-    )
+    path = next(parent / ".github" / "scripts" / "deploy_health.py" for parent in Path(__file__).resolve().parents if (parent / ".github" / "scripts" / "deploy_health.py").exists())
     loader = SourceFileLoader("deploy_health", str(path))
     # dataclasses resolves the defining module through sys.modules.
     module = module_from_spec(spec_from_loader("deploy_health", loader))
@@ -206,10 +202,7 @@ def test_unknown_tick_marker_name_matches_the_parser_constant() -> None:
     health = _health_module()
     violations: list[str] = []
     if health.UNKNOWN_VERDICT_STEP_NAME != UNKNOWN_TICK_STEP:
-        violations.append(
-            "  deploy_health.UNKNOWN_VERDICT_STEP_NAME is "
-            f"{health.UNKNOWN_VERDICT_STEP_NAME!r}, this suite expects {UNKNOWN_TICK_STEP!r}"
-        )
+        violations.append(f"  deploy_health.UNKNOWN_VERDICT_STEP_NAME is {health.UNKNOWN_VERDICT_STEP_NAME!r}, this suite expects {UNKNOWN_TICK_STEP!r}")
     for path, output in ((DEPLOY_STALENESS_YML, "health"), (DEPLOY_WATCHDOG_YML, "watchdog")):
         step = _step_named(path, health.UNKNOWN_VERDICT_STEP_NAME)
         if f"steps.{output}.outputs.healthy == ''" not in str(step.get("if") or ""):
@@ -260,9 +253,7 @@ def test_deploy_health_consumer_walks_back_past_unmeasured_ticks() -> None:
     elif skip.group(1).startswith("$"):
         sentinel = re.escape(skip.group(1)[1:])
         if not re.search(rf'^{sentinel}="unknown"$', script, re.MULTILINE):
-            violations.append(
-                f'  the walk compares RUN_VERDICT against {skip.group(1)}, which the script never defines as "unknown"'
-            )
+            violations.append(f'  the walk compares RUN_VERDICT against {skip.group(1)}, which the script never defines as "unknown"')
     if "previous-verdict --jobs-json" not in script:
         violations.append("  the walk no longer asks the evaluator for the verdict")
     if "completed[0]" in script:
@@ -294,11 +285,7 @@ def test_pr_conflict_reconcile_api_failure_is_marked() -> None:
 
 def _native_smoke_guard_module() -> Any:
     """Load ``native_smoke_dispatch_guard.py`` so the tests exercise its logic."""
-    path = next(
-        parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py"
-        for parent in Path(__file__).resolve().parents
-        if (parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py").exists()
-    )
+    path = next(parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py" for parent in Path(__file__).resolve().parents if (parent / ".github" / "scripts" / "native_smoke_dispatch_guard.py").exists())
     loader = SourceFileLoader("native_smoke_dispatch_guard", str(path))
     module = module_from_spec(spec_from_loader("native_smoke_dispatch_guard", loader))
     sys.modules["native_smoke_dispatch_guard"] = module
@@ -311,10 +298,7 @@ def _native_smoke_guard_step() -> dict:
     for step in _steps(NATIVE_SMOKE_YML):
         if "native_smoke_dispatch_guard.py" in str(step.get("run") or ""):
             return step
-    raise AssertionError(
-        "native-release-smoke.yml: no step runs .github/scripts/native_smoke_dispatch_guard.py - "
-        "an argument-free manual dispatch would conclude green without verifying anything"
-    )
+    raise AssertionError("native-release-smoke.yml: no step runs .github/scripts/native_smoke_dispatch_guard.py - an argument-free manual dispatch would conclude green without verifying anything")
 
 
 def test_native_release_smoke_rejects_an_argument_free_dispatch(monkeypatch: Any, capsys: Any) -> None:
@@ -376,10 +360,7 @@ def test_native_release_smoke_rejects_an_argument_free_dispatch(monkeypatch: Any
             violations.append("  dispatch-guard is no longer the first job in the workflow")
     for job_id, job in jobs.items():
         if isinstance(job, dict) and "dispatch-guard" in str(job.get("needs") or ""):
-            violations.append(
-                f"  job {job_id!r} now needs dispatch-guard - a skipped needed job would skip the "
-                "scheduled canary and change scheduled behaviour"
-            )
+            violations.append(f"  job {job_id!r} now needs dispatch-guard - a skipped needed job would skip the scheduled canary and change scheduled behaviour")
 
     step = _native_smoke_guard_step()
     env = step.get("env") or {}
@@ -388,9 +369,7 @@ def test_native_release_smoke_rejects_an_argument_free_dispatch(monkeypatch: Any
     if env.get("ROLLBACK_VERSION") != "${{ inputs.rollback_version }}":
         violations.append("  the guard step no longer maps ROLLBACK_VERSION from inputs.rollback_version")
 
-    assert not violations, "an argument-free native-release-smoke dispatch can silently verify nothing:\n" + "\n".join(
-        violations
-    )
+    assert not violations, "an argument-free native-release-smoke dispatch can silently verify nothing:\n" + "\n".join(violations)
 
 
 def test_native_release_smoke_dispatch_paths_keep_their_own_gates() -> None:

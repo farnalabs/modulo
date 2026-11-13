@@ -129,9 +129,7 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 class TestOrphanPredicate:
     """Execute the statement: only an ownerless, node-started run matches."""
 
-    async def test_no_dispatcher_node_started_run_past_the_window_is_terminalised(
-        self, db_session: AsyncSession
-    ) -> None:
+    async def test_no_dispatcher_node_started_run_past_the_window_is_terminalised(self, db_session: AsyncSession) -> None:
         orphan = _seed_run(name="-orphan")
         db_session.add(orphan)
         await db_session.commit()
@@ -312,9 +310,7 @@ class _Engine:
 class TestSweepEntryPoint:
     """The production sweep (not a private helper) reclaims the leaked shape."""
 
-    async def _run_sweep(
-        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[dict[str, Any], AsyncMock, _SqliteBackedConn]:
+    async def _run_sweep(self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], AsyncMock, _SqliteBackedConn]:
         monkeypatch.setattr(
             pe,
             "get_settings",
@@ -332,9 +328,7 @@ class TestSweepEntryPoint:
         result = await stale_run_recovery_sweep(_Engine(conn))  # type: ignore[arg-type]
         return result, advanced, conn
 
-    async def test_sweep_terminalises_the_orphan_and_advances_its_journey(
-        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_sweep_terminalises_the_orphan_and_advances_its_journey(self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         orphan = _seed_run(name="-swept")
         owned = _seed_run(name="-owned", dispatcher="saq", heartbeat_at=NOW - timedelta(seconds=30), run_number=2)
         db_session.add_all([orphan, owned])
@@ -355,9 +349,7 @@ class TestSweepEntryPoint:
         # ``rejected`` supersession).
         assert advanced.await_args_list[0].kwargs.get("status", "failed") == "failed"
 
-    async def test_sweep_defers_to_the_reconcile_resume_arm_for_one_tick(
-        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_sweep_defers_to_the_reconcile_resume_arm_for_one_tick(self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """FAR-2122 precedence: the orphan cutoff extends one dispatcher_reconcile
         tick past the reconcile stale window (2*SAQ_JOB_HEARTBEAT = 600s), so the
         checkpoint-resume arm in ``dispatcher_reconcile`` gets a deterministic
@@ -389,9 +381,7 @@ class TestSweepEntryPoint:
         assert inside_grace.status == "running"
         assert past_grace.status == "failed"
 
-    async def test_sweep_leaves_an_owned_run_running(
-        self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_sweep_leaves_an_owned_run_running(self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         owned = _seed_run(name="-healthy", dispatcher="saq", heartbeat_at=NOW - timedelta(seconds=30))
         db_session.add(owned)
         await db_session.commit()

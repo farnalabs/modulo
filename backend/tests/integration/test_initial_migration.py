@@ -282,9 +282,7 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         return inner[2] in _AUDIT_CHAIN_COLUMNS and inner[3].name in _AUDIT_CHAIN_COLUMNS[inner[2]]
     if kind == "remove_fk":
         # The audit-chain FKs on the trigger-maintained columns — per-table.
-        if inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
-            {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
-        ):
+        if inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool({col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]):
             return True
         # Migration-owned FKs the ORM must not declare — per-(table, constraint).
         # FKs the ORM deliberately leaves to the migration, per-constraint.
@@ -296,9 +294,7 @@ def _is_benign_migration_managed(diff: tuple[Any, ...]) -> bool:
         # far-644 nodes.id KNOWN-GAP wheel was closed with the drift itself; a
         # stale wheel would keep hiding new FK drift).
         # permanent (documented repo divergence)
-        return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool(
-            {col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name]
-        )
+        return inner[1].table.name in _AUDIT_CHAIN_FK_COLUMNS and bool({col.name for col in inner[1].columns} <= _AUDIT_CHAIN_FK_COLUMNS[inner[1].table.name])
     if kind == "remove_constraint":
         # CHECK guards that exist ONLY in migrations (0157/0165/0192) —
         # per-(table, constraint) entries.
@@ -514,16 +510,12 @@ class TestParityIgnoreListClassify:
 
     def test_listed_entries_are_ignored(self) -> None:
         # CHECK that exists only in migrations (0165).
-        assert _is_benign_migration_managed(
-            ("remove_constraint", self._check("suite_runs", "ck_eval_suite_run_total_cases"))
-        )
+        assert _is_benign_migration_managed(("remove_constraint", self._check("suite_runs", "ck_eval_suite_run_total_cases")))
         # Audit-chain FK + column (0108).
         assert _is_benign_migration_managed(("remove_fk", self._fk("agents", "created_by")))
         assert _is_benign_migration_managed(("remove_column", None, "agents", Column("created_by", UUID())))
         # Table with no ORM model (FAR-583 quarantine side table).
-        assert _is_benign_migration_managed(
-            ("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer)))
-        )
+        assert _is_benign_migration_managed(("remove_table", Table("run_node_outputs_quarantine", MetaData(), Column("run_id", Integer))))
         # Table whose ORM model was removed with its feature but which stays in
         # migration history (FAR-2233 saved views).
         assert _is_benign_migration_managed(("remove_table", Table("saved_views", MetaData(), Column("id", UUID()))))
@@ -533,12 +525,8 @@ class TestParityIgnoreListClassify:
         # Strict-twin divergence: ORM CHECK add side (run_node_outputs only —
         # deleted_defaults is now created by migration 0206, so its former
         # wheel must fail like the others).
-        assert _is_benign_migration_managed(
-            ("add_constraint", self._check("run_node_outputs", "ck_run_node_outputs_meta_present"))
-        )
-        assert not _is_benign_migration_managed(
-            ("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty"))
-        )
+        assert _is_benign_migration_managed(("add_constraint", self._check("run_node_outputs", "ck_run_node_outputs_meta_present")))
+        assert not _is_benign_migration_managed(("add_constraint", self._check("deleted_defaults", "ck_deleted_defaults_signal_nonempty")))
         # FAR-1878/FAR-1941 aligned every physical-jsonb column to JSONB_COL, so
         # their entries were removed WITH the conversion: the SAME modify_type
         # diff for them must now be REAL drift, not silently ignored.
@@ -548,61 +536,39 @@ class TestParityIgnoreListClassify:
         # B2b/drop (migration 0215) REMOVED the three runs-blob-column expiry
         # entries; the classifier's hypothetical remove_column case remains
         # valid for exercising the remaining audit-chain convention.
-        assert not _is_benign_migration_managed(("modify_type", None, "runs", "outputs_json", {}, JSONB(), JSON())), (
-            "the B2b expiry for the runs blob columns must NOT persist after 0215"
-        )
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "outputs_json", {}, JSONB(), JSON())), "the B2b expiry for the runs blob columns must NOT persist after 0215"
         # B2b (0215): the runs blob columns are gone from BOTH sides - a
         # remove_column on them is NO LONGER possible and must NOT stay
         # benign: a DB that still has them is a DB-AHEAD-OF-IMAGE condition.
-        assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("outputs_json", JSONB()))), (
-            "the B2b remove_column expiry for the runs blob columns must NOT persist after 0215"
-        )
+        assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("outputs_json", JSONB()))), "the B2b remove_column expiry for the runs blob columns must NOT persist after 0215"
         # Comments/indexes stay blanket-ignored (reasoned in the predicate).
         assert _is_benign_migration_managed(("modify_comment",))
         assert _is_benign_migration_managed(("add_index", None, "t", "ix_something"))
 
     def test_unlisted_check_constraint_is_not_ignored(self) -> None:
-        assert not _is_benign_migration_managed(
-            ("remove_constraint", self._check("brand_new_table", "ck_brand_new_guard"))
-        )
+        assert not _is_benign_migration_managed(("remove_constraint", self._check("brand_new_table", "ck_brand_new_guard")))
         assert not _is_benign_migration_managed(("remove_constraint", self._check("runs", "ck_run_brand_new_guard")))
-        assert not _is_benign_migration_managed(
-            ("remove_constraint", self._check("organisations", "ck_organisations_brand_new_guard"))
-        )
-        assert not _is_benign_migration_managed(
-            ("add_constraint", self._check("brand_new_table", "ck_orm_only_new_guard"))
-        )
+        assert not _is_benign_migration_managed(("remove_constraint", self._check("organisations", "ck_organisations_brand_new_guard")))
+        assert not _is_benign_migration_managed(("add_constraint", self._check("brand_new_table", "ck_orm_only_new_guard")))
 
     def test_unlisted_jsonb_to_json_modify_type_is_not_ignored(self) -> None:
-        assert not _is_benign_migration_managed(
-            ("modify_type", None, "brand_new_table", "config_json", {}, JSONB(), JSON())
-        )
+        assert not _is_benign_migration_managed(("modify_type", None, "brand_new_table", "config_json", {}, JSONB(), JSON()))
         # A listed table's UNLISTED column is still real drift.
-        assert not _is_benign_migration_managed(
-            ("modify_type", None, "runs", "brand_new_json_column", {}, JSONB(), JSON())
-        )
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "brand_new_json_column", {}, JSONB(), JSON()))
         # The reverse direction (JSON in DB, JSONB in ORM) is genuine drift.
-        assert not _is_benign_migration_managed(
-            ("modify_type", None, "runs", "blocked_partial_summary", {}, JSON(), JSONB())
-        )
+        assert not _is_benign_migration_managed(("modify_type", None, "runs", "blocked_partial_summary", {}, JSON(), JSONB()))
 
     def test_unlisted_fk_and_column_drift_is_not_ignored(self) -> None:
         # An unlisted table's audit-like column is real drift.
-        assert not _is_benign_migration_managed(
-            ("remove_column", None, "brand_new_table", Column("created_by", UUID()))
-        )
+        assert not _is_benign_migration_managed(("remove_column", None, "brand_new_table", Column("created_by", UUID())))
         # A listed table's UNLISTED remove_column is real drift (the B2b
         # expiry set is per-column, never per-table).
         assert not _is_benign_migration_managed(("remove_column", None, "runs", Column("brand_new_column", JSONB())))
-        assert not _is_benign_migration_managed(
-            ("remove_column", None, "organisations", Column("brand_new_column", Integer()))
-        )
+        assert not _is_benign_migration_managed(("remove_column", None, "organisations", Column("brand_new_column", Integer())))
         # An unlisted FK (non-audit columns) is real drift.
         assert not _is_benign_migration_managed(("remove_fk", self._fk("agents", "pipeline_id", "pipelines.id")))
         # An unlisted nodes.id FK is real drift.
         assert not _is_benign_migration_managed(("add_fk", self._fk("brand_new_table", "node_id", "nodes.id")))
 
     def test_unlisted_remove_table_is_not_ignored(self) -> None:
-        assert not _is_benign_migration_managed(
-            ("remove_table", Table("brand_new_table", MetaData(), Column("x", Integer)))
-        )
+        assert not _is_benign_migration_managed(("remove_table", Table("brand_new_table", MetaData(), Column("x", Integer))))

@@ -169,9 +169,7 @@ async def test_verify_scopes_no_header(connector):
 @respx.mock
 async def test_verify_scopes_extra_scopes(connector):
     respx.get("https://api.github.com/user").mock(
-        return_value=httpx.Response(
-            200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org, workflow, gist"}
-        ),
+        return_value=httpx.Response(200, json={"login": "octocat"}, headers={"X-OAuth-Scopes": "repo, read:org, workflow, gist"}),
     )
     missing = await connector.verify_scopes()
     assert missing == set()

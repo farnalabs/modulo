@@ -56,9 +56,7 @@ def test_throttle_status_job_exists_and_always_runs() -> None:
 
 def test_throttle_status_keys_off_should_deploy() -> None:
     step = _summary_step()
-    assert step["env"]["SHOULD_DEPLOY"] == _SHOULD_DEPLOY, (
-        f"{_JOB_ID}: annotation must key off needs.deploy-throttle.outputs.should_deploy"
-    )
+    assert step["env"]["SHOULD_DEPLOY"] == _SHOULD_DEPLOY, f"{_JOB_ID}: annotation must key off needs.deploy-throttle.outputs.should_deploy"
     script = step["run"]
     assert 'if [ "$SHOULD_DEPLOY" = "true" ]' in script
     assert "THROTTLED" in script, "the throttled branch must label the run unmistakably"
@@ -77,9 +75,7 @@ def test_deployed_summary_interpolates_short_sha_without_sed_patch() -> None:
     script = _summary_step()["run"]
     assert "<<'EOF'" not in script, "deployed summary must use an unquoted heredoc so ${SHORT_SHA} expands"
     assert "sed -i" not in script, "drop the sed placeholder patch and write the value directly"
-    assert "**Deploying SHA:** ${SHORT_SHA}" in script, (
-        "deployed summary must interpolate the computed short SHA into the heredoc"
-    )
+    assert "**Deploying SHA:** ${SHORT_SHA}" in script, "deployed summary must interpolate the computed short SHA into the heredoc"
 
 
 def test_throttle_job_publishes_skip_reason_and_next_deploy() -> None:
@@ -97,9 +93,7 @@ def test_throttle_job_publishes_skip_reason_and_next_deploy() -> None:
     assert "next_deploy=" in script, "every skip/deploy branch must record when the next deploy is expected"
     # The next-eligibility timestamp must derive from the SAME anchor the skip
     # used - never from `now` - or the summary can disagree with the throttle.
-    assert "NEXT_TS=$((LAST_TS + INTERVAL_HOURS * 3600))" in script, (
-        "next-deploy estimate must be anchor + interval, computed from the skip's own anchor"
-    )
+    assert "NEXT_TS=$((LAST_TS + INTERVAL_HOURS * 3600))" in script, "next-deploy estimate must be anchor + interval, computed from the skip's own anchor"
     # Annotations must state the skip explicitly, not just 'skipping deploy'.
     assert "This run will NOT deploy" in script
 
@@ -112,25 +106,17 @@ def test_status_job_display_name_reflects_throttle_outcome() -> None:
     failing the run, so the dynamic job name is the at-a-glance signal.
     """
     name = _workflow()["jobs"][_JOB_ID]["name"]
-    assert "needs.deploy-throttle.outputs.should_deploy" in name, (
-        "status job name must key off should_deploy so THROTTLED - NO DEPLOY is visible at a glance"
-    )
+    assert "needs.deploy-throttle.outputs.should_deploy" in name, "status job name must key off should_deploy so THROTTLED - NO DEPLOY is visible at a glance"
     assert "THROTTLED - NO DEPLOY" in name
     assert "DEPLOYING" in name
 
 
 def test_status_skip_path_uses_warning_annotation_with_reason_and_next_deploy() -> None:
     step = _summary_step()
-    assert step["env"]["SKIP_REASON"] == "${{ needs.deploy-throttle.outputs.skip_reason }}", (
-        "status job must consume the throttle job's skip_reason, not re-derive the cause"
-    )
-    assert step["env"]["NEXT_DEPLOY"] == "${{ needs.deploy-throttle.outputs.next_deploy }}", (
-        "status job must consume the throttle job's next_deploy, not re-derive the time"
-    )
+    assert step["env"]["SKIP_REASON"] == "${{ needs.deploy-throttle.outputs.skip_reason }}", "status job must consume the throttle job's skip_reason, not re-derive the cause"
+    assert step["env"]["NEXT_DEPLOY"] == "${{ needs.deploy-throttle.outputs.next_deploy }}", "status job must consume the throttle job's next_deploy, not re-derive the time"
     script = step["run"]
-    assert '"::warning::THROTTLED' in script, (
-        "the skip must be a warning-level annotation so it is not lost among notices"
-    )
+    assert '"::warning::THROTTLED' in script, "the skip must be a warning-level annotation so it is not lost among notices"
     assert "Next deploy expected:" in script, "the skip summary must say when the next deploy is expected"
     assert "Another deploy run is already in progress" in script, "in-progress batching must be named as the reason"
     assert "under the throttle interval" in script, "interval throttling must be named as the reason"
@@ -143,9 +129,7 @@ def test_force_deploy_bypass_still_deploys() -> None:
     script = _throttle_check_step()["run"]
     force_idx = script.index('if [ "$FORCE_DEPLOY" = "true" ]')
     in_progress_idx = script.index('if [ -n "$IN_PROGRESS" ]')
-    assert force_idx < in_progress_idx, (
-        "force_deploy must exit before the in-progress/throttle checks - the bypass order is the policy"
-    )
+    assert force_idx < in_progress_idx, "force_deploy must exit before the in-progress/throttle checks - the bypass order is the policy"
     # The bypass must publish should_deploy=true to $GITHUB_OUTPUT. The write
     # may be a single individually-redirected echo, or the writes may be
     # gathered into one redirected group (actionlint SC2129) - both emit the

@@ -62,10 +62,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, Any]:
     run_ids = [uuid.uuid4() for _ in range(_N_RUNS)]
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "FAR-1624 deadlock org", "slug": f"far1624-{org_id.hex[:8]}"},
         )
         # FAR-1833: the cumulative total lives on the cost-state row.
@@ -74,10 +71,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, Any]:
             {"id": str(org_id)},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, 'hash', 'local', true)"),
             {
                 "id": str(account_id),
                 "email": f"far1624-{account_id.hex[:8]}@example.com",
@@ -85,11 +79,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, Any]:
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, "
-                "run_context_defaults, visibility, max_concurrent_runs) "
-                "VALUES (:id, :oid, :aid, :name, '[]'::json, '{}'::json, 'org', 50)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, account_id, name, graph_nodes_json, run_context_defaults, visibility, max_concurrent_runs) VALUES (:id, :oid, :aid, :name, '[]'::json, '{}'::json, 'org', 50)"),
             {
                 "id": str(pipeline_id),
                 "oid": str(org_id),
@@ -109,11 +99,7 @@ async def _seed(engine: AsyncEngine) -> dict[str, Any]:
         )
         for index, run_id in enumerate(run_ids):
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, "
-                    "trigger_type, status, input_hash, langgraph_thread_id, run_number) "
-                    "VALUES (:id, :oid, :pid, :sid, :aid, 'manual', 'complete', 'hash', :thread, :rn)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, account_id, trigger_type, status, input_hash, langgraph_thread_id, run_number) VALUES (:id, :oid, :pid, :sid, :aid, 'manual', 'complete', 'hash', :thread, :rn)"),
                 {
                     "id": str(run_id),
                     "oid": str(org_id),
@@ -152,11 +138,7 @@ async def _finalise_one(
         # the org tuple — exactly what a finalising transaction does when it
         # writes audit/cost rows before the spend-ceiling gate runs.
         await session.execute(
-            text(
-                "INSERT INTO audit_events "
-                "(id, organisation_id, event_type, payload_json, created_at, updated_at) "
-                "VALUES (:id, :oid, 'far1624.finalize_probe', '{}'::jsonb, now(), now())"
-            ),
+            text("INSERT INTO audit_events (id, organisation_id, event_type, payload_json, created_at, updated_at) VALUES (:id, :oid, 'far1624.finalize_probe', '{}'::jsonb, now(), now())"),
             {"id": str(uuid.uuid4()), "oid": str(org_id)},
         )
         # Deterministic reproduction: hold every FOR KEY SHARE before ANY

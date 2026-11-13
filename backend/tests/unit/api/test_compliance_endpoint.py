@@ -90,14 +90,8 @@ class TestPermissionKey:
         assert resolve_required(_CODE_EVIDENCE_INDEX_READ) == "admin"
 
     def test_key_is_not_one_edit_from_an_existing_key(self) -> None:
-        near_misses = [
-            other
-            for other in PERMISSIONS
-            if other != _CODE_EVIDENCE_INDEX_READ and _one_edit_apart(other, _CODE_EVIDENCE_INDEX_READ)
-        ]
-        assert not near_misses, (
-            f"a one-character typo of the compliance key would silently resolve to another key's role: {near_misses}"
-        )
+        near_misses = [other for other in PERMISSIONS if other != _CODE_EVIDENCE_INDEX_READ and _one_edit_apart(other, _CODE_EVIDENCE_INDEX_READ)]
+        assert not near_misses, f"a one-character typo of the compliance key would silently resolve to another key's role: {near_misses}"
 
     def test_dropping_the_namespace_fails_closed(self) -> None:
         with pytest.raises(PermissionConfigurationError):
@@ -516,9 +510,7 @@ class TestStatementTimeoutBound:
 
         assert not fake.executed
 
-    async def test_the_endpoint_applies_the_bound_inside_its_transaction(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_the_endpoint_applies_the_bound_inside_its_transaction(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """Wiring, not just the helper: the endpoint must actually call it.
 
         A helper-only test would still pass if the endpoint stopped calling it,
@@ -569,9 +561,7 @@ class TestStatementTimeoutFailureArm:
     value - so deleting the arm fails these tests.
     """
 
-    async def test_a_statement_timeout_cancel_is_an_actionable_503(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_a_statement_timeout_cancel_is_an_actionable_503(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         org_id, account_id = await _seed_minimal_org(session)
 
         async def _raise_timeout(*_args: object, **_kwargs: object) -> None:
@@ -600,9 +590,7 @@ class TestStatementTimeoutFailureArm:
         assert structured["route"] == _LOG_PREFIX
         assert records[0].levelno == logging.ERROR
 
-    async def test_a_non_timeout_db_error_does_not_get_the_period_remedy(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_a_non_timeout_db_error_does_not_get_the_period_remedy(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
         """A genuine outage keeps the generic path - the arm must discriminate."""
         org_id, account_id = await _seed_minimal_org(session)
 
@@ -623,9 +611,7 @@ class TestStatementTimeoutFailureArm:
         assert len(records) == 1
         assert records[0].service_unavailable["reason"] == "db_transient"
 
-    async def test_a_cancel_without_a_sqlstate_is_not_treated_as_a_timeout(
-        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_a_cancel_without_a_sqlstate_is_not_treated_as_a_timeout(self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
         """No SQLSTATE means no evidence of a cancel - the generic path applies."""
         org_id, account_id = await _seed_minimal_org(session)
 

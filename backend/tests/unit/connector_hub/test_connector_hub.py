@@ -856,9 +856,7 @@ async def test_acl_blocks_write(tmp_path):
     connector = hub.get(ci_id)
 
     with pytest.raises(ConnectorPermissionError):
-        await connector.write(
-            ConnectorPayload(resource="file", data={"content": "secret", "path": str(tmp_path / "acl_test.txt")})
-        )
+        await connector.write(ConnectorPayload(resource="file", data={"content": "secret", "path": str(tmp_path / "acl_test.txt")}))
 
 
 async def test_acl_allows_read(tmp_path):
@@ -1075,9 +1073,7 @@ async def test_initialise_json_dict_ciphertext_used_as_is_for_token_keyed_type()
         ("monday", "monday_key_bare", "_api_key"),
     ],
 )
-async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(
-    connector_type_id, bare_token, expected_attr
-):
+async def test_initialise_bare_token_ciphertext_wraps_under_type_specific_key(connector_type_id, bare_token, expected_attr):
     """FAR-496: types with a non-'token' credential key (slack bot_token,
     asana personal_access_token) and single-'api_key' types (monday) wrap
     bare scalars under their own key — and the healed value actually reaches

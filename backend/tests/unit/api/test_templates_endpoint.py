@@ -403,9 +403,7 @@ def test_create_from_template_with_schemaless_manual_node_returns_422(client: Te
     assert "requires an output schema" in resp.json()["detail"]
 
 
-def test_create_from_template_with_declared_policy_gate_strips_and_warns(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_create_from_template_with_declared_policy_gate_strips_and_warns(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1666: a template declaring a policy_gate block installs with the block stripped.
 
     The from-template path persists ``graph_nodes_json`` directly and cannot

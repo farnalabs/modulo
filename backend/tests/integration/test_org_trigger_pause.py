@@ -91,9 +91,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
             account_id = uuid.uuid4()
             await conn.execute(
                 text(
-                    "INSERT INTO accounts (id, email, display_name, "
-                    "auth_provider, active, password_hash) "
-                    "VALUES (:id, :email, :name, 'local', true, 'hash')",
+                    "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')",
                 ),
                 {"id": str(account_id), "email": email, "name": f"Admin {email}"},
             )
@@ -106,8 +104,7 @@ async def _seed_user(db_engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
         if membership.first() is None:
             await conn.execute(
                 text(
-                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) "
-                    "VALUES (:mid, :aid, :oid, 'admin')",
+                    "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')",
                 ),
                 {"mid": str(uuid.uuid4()), "aid": str(account_id), "oid": str(org_id)},
             )
@@ -175,9 +172,7 @@ async def _seed_webhook_trigger(
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             text(
-                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, "
-                "trigger_type, active, max_concurrent_runs, config_json, account_id) "
-                "VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
+                "INSERT INTO triggers (name, id, organisation_id, pipeline_id, trigger_type, active, max_concurrent_runs, config_json, account_id) VALUES (gen_random_uuid()::text, :id, :oid, :pid, 'webhook', true, 5, (:config)::json, :uid)",
             ),
             {
                 "id": str(trigger_id),
@@ -193,11 +188,7 @@ async def _seed_webhook_trigger(
 async def _set_paused(db_engine: AsyncEngine, org_id: uuid.UUID, paused: bool) -> None:
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "UPDATE organisations SET triggers_paused = :paused, "
-                "triggers_paused_at = CASE WHEN :paused THEN now() ELSE NULL END "
-                "WHERE id = :oid"
-            ),
+            text("UPDATE organisations SET triggers_paused = :paused, triggers_paused_at = CASE WHEN :paused THEN now() ELSE NULL END WHERE id = :oid"),
             {"paused": paused, "oid": str(org_id)},
         )
 
@@ -397,11 +388,7 @@ async def test_paused_replay_returns_202_paused(
     event_id = uuid.uuid4()
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
-                "raw_payload_hash, validation_result) "
-                "VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted')"
-            ),
+            text("INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, raw_payload_hash, validation_result) VALUES (:id, :oid, :tid, 'webhook', :hash, 'accepted')"),
             {"id": str(event_id), "oid": str(org_a), "tid": str(trigger_a), "hash": "0" * 64},
         )
 
@@ -500,19 +487,13 @@ async def test_cross_tenant_paused_a_accepted_b(
 # ===================================================================
 
 
-async def test_validation_result_constraint_accepts_full_vocabulary(
-    db_engine: AsyncEngine, org_a: uuid.UUID, trigger_a: uuid.UUID
-) -> None:
+async def test_validation_result_constraint_accepts_full_vocabulary(db_engine: AsyncEngine, org_a: uuid.UUID, trigger_a: uuid.UUID) -> None:
     from farna.db.models.trigger_event import VALIDATION_RESULT_VALUES
 
     inserted_ids: list[str] = []
     async with db_engine.connect() as conn:
         for value in VALIDATION_RESULT_VALUES:
-            stmt = text(
-                "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
-                "raw_payload_hash, validation_result) "
-                "VALUES (:id, :oid, :tid, 'webhook', :hash, :vr)"
-            )
+            stmt = text("INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, raw_payload_hash, validation_result) VALUES (:id, :oid, :tid, 'webhook', :hash, :vr)")
             event_id = str(uuid.uuid4())
             try:
                 await conn.execute(
@@ -534,26 +515,18 @@ async def test_validation_result_constraint_accepts_full_vocabulary(
     # Every vocabulary value must actually have been accepted and persisted.
     async with db_engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT validation_result FROM trigger_events WHERE id IN :ids ORDER BY validation_result").bindparams(
-                bindparam("ids", expanding=True)
-            ),
+            text("SELECT validation_result FROM trigger_events WHERE id IN :ids ORDER BY validation_result").bindparams(bindparam("ids", expanding=True)),
             {"ids": inserted_ids},
         )
         persisted = {row[0] for row in result.fetchall()}
     assert persisted == set(VALIDATION_RESULT_VALUES)
 
 
-async def test_validation_result_constraint_rejects_bogus(
-    db_engine: AsyncEngine, org_a: uuid.UUID, trigger_a: uuid.UUID
-) -> None:
+async def test_validation_result_constraint_rejects_bogus(db_engine: AsyncEngine, org_a: uuid.UUID, trigger_a: uuid.UUID) -> None:
     async with db_engine.connect() as conn:
         with pytest.raises(IntegrityError):
             await conn.execute(
-                text(
-                    "INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, "
-                    "raw_payload_hash, validation_result) "
-                    "VALUES (:id, :oid, :tid, 'webhook', :hash, 'bogus')"
-                ),
+                text("INSERT INTO trigger_events (id, organisation_id, trigger_id, trigger_type, raw_payload_hash, validation_result) VALUES (:id, :oid, :tid, 'webhook', :hash, 'bogus')"),
                 {
                     "id": str(uuid.uuid4()),
                     "oid": str(org_a),
@@ -618,11 +591,7 @@ async def test_pause_does_not_mutate_running_run(
         )
         run_number = int(run_number_row.scalar_one()) + 1
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, "
-                "trigger_type, run_number, input_hash, langgraph_thread_id, input_payload) "
-                "VALUES (:id, :oid, :pid, :sid, 'running', 'manual', :rn, :hash, :thread, '{}'::json)"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, status, trigger_type, run_number, input_hash, langgraph_thread_id, input_payload) VALUES (:id, :oid, :pid, :sid, 'running', 'manual', :rn, :hash, :thread, '{}'::json)"),
             {
                 "id": str(run_id),
                 "oid": str(org_a),

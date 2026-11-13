@@ -150,9 +150,7 @@ async def _consult_hook(
     node_timeouts: dict[str, int] | None = None,
 ) -> tuple[bool | None, WatchdogRetryOutcome, AsyncMock]:
     """Run the REAL shared hook once with only DB seams mocked."""
-    executor._read_retry_attempt_state = AsyncMock(
-        return_value=(attempt_count, executor._claim_token, attempt_started_at)
-    )
+    executor._read_retry_attempt_state = AsyncMock(return_value=(attempt_count, executor._claim_token, attempt_started_at))
     if node_timeouts is not None:
         executor._node_timeouts = node_timeouts
     executor._fenced_pending_reset = AsyncMock(return_value=reset_rowcount)
@@ -162,9 +160,7 @@ async def _consult_hook(
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        sleep_mock = stack.enter_context(
-            patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
-        )
+        sleep_mock = stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
         dispatched = await wr.watchdog_retry_after_policy(
             aeng=MagicMock(),
             run_id=uuid.uuid4(),
@@ -759,9 +755,7 @@ async def test_deadline_kill_injected_completion_probe_failure_fails_closed_to_t
     probe.assert_awaited_once_with("run-1", "org-1", None)
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
-    assert (
-        "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
-    )
+    assert "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
     assert box.requested is False
     executor._fenced_pending_reset.assert_not_awaited()
     assert any("pipeline_execution.node_deadline_completion_probe_failed" in rec.message for rec in caplog.records)
@@ -807,9 +801,7 @@ async def test_deadline_kill_real_completion_probe_failure_fails_closed_to_termi
 
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
-    assert (
-        "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
-    )
+    assert "No node completed in this attempt; re-dispatch skipped per FAR-2050" in fail.await_args.kwargs["error_detail"]
     assert box.requested is False
     executor._fenced_pending_reset.assert_not_awaited()
     assert any("pipeline_execution.node_deadline_completion_probe_failed" in rec.message for rec in caplog.records)
@@ -893,9 +885,7 @@ async def test_deadline_kill_reset_timeout_defers_without_terminal_fail():
     with contextlib.ExitStack() as stack:
         for seam in seams:
             stack.enter_context(seam)
-        sleep_mock = stack.enter_context(
-            patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
-        )
+        sleep_mock = stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
         stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         stack.enter_context(patch("farna.core.pipeline_execution._record_node_deadline_watchdog_firing", record))
         stack.enter_context(patch("farna.core.pipeline_execution._persist_node_deadline_triage", triage))
@@ -942,9 +932,7 @@ async def test_zombie_watchdog_reset_timeout_defers_without_terminal_fail():
         with contextlib.ExitStack() as stack:
             for seam in seams:
                 stack.enter_context(seam)
-            sleep_mock = stack.enter_context(
-                patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock())
-            )
+            sleep_mock = stack.enter_context(patch("farna.core.pipeline_engine.watchdog_retry.asyncio.sleep", new=AsyncMock()))
             # The zombie call site opts into the FAR-2053 delivery veto, which
             # reads the run's marker rows; an empty record is "not delivered".
             stack.enter_context(
@@ -1386,9 +1374,7 @@ async def test_delivered_then_stalled_run_is_not_redispatched():
     re-dispatched when it stalls — it terminal-fails with the stall path's own
     writer instead, because re-dispatching re-executes the graph from the start
     and would repeat the side effect."""
-    fail, box, executor, marker_reader = await _drive_zombie_stall(
-        {"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS
-    )
+    fail, box, executor, marker_reader = await _drive_zombie_stall({"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS)
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "executor_stalled"
     assert box.requested is False
@@ -1400,9 +1386,7 @@ async def test_undelivered_stall_still_redispatches():
     """FAR-2053 regression arm: with the delivery probe present but recording
     no delivery, the stall re-dispatches EXACTLY as before (fenced reset + the
     outcome box set), so the veto cannot quietly disable stall retries."""
-    fail, box, executor, marker_reader = await _drive_zombie_stall(
-        {"on": ["stall"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS
-    )
+    fail, box, executor, marker_reader = await _drive_zombie_stall({"on": ["stall"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS)
     fail.assert_not_awaited()
     assert box.requested is True
     assert box.final_status == "stalled"
@@ -1415,9 +1399,7 @@ async def test_delivery_probe_failure_vetoes_the_redispatch():
     """FAR-2053 fail direction: an unreadable delivery record must not license
     a re-dispatch. The probe failure is absorbed (it never raises into the
     watchdog path) and the run terminal-fails."""
-    fail, box, executor, _marker_reader = await _drive_zombie_stall(
-        {"on": ["stall"], "max_retries": 2}, read_error=RuntimeError("markers unreadable")
-    )
+    fail, box, executor, _marker_reader = await _drive_zombie_stall({"on": ["stall"], "max_retries": 2}, read_error=RuntimeError("markers unreadable"))
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "executor_stalled"
     assert box.requested is False
@@ -1454,18 +1436,14 @@ async def test_delivery_veto_is_opt_in_per_call_site():
     marker_reader.assert_not_awaited()
 
     # BOTH real call sites opt in: the same delivered markers veto each kill.
-    stall_fail, stall_box, stall_executor, stall_reader = await _drive_zombie_stall(
-        {"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS
-    )
+    stall_fail, stall_box, stall_executor, stall_reader = await _drive_zombie_stall({"on": ["stall"], "max_retries": 2}, markers=_DELIVERED_MARKERS)
     stall_fail.assert_awaited_once()
     assert stall_fail.await_args.kwargs["error_code"] == "executor_stalled"
     assert stall_box.requested is False
     stall_executor._fenced_pending_reset.assert_not_awaited()
     stall_reader.assert_awaited_once()
 
-    deadline_fail, deadline_box, deadline_executor, deadline_reader = await _drive_deadline_kill(
-        {"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS
-    )
+    deadline_fail, deadline_box, deadline_executor, deadline_reader = await _drive_deadline_kill({"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS)
     deadline_fail.assert_awaited_once()
     assert deadline_fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
     assert deadline_box.requested is False
@@ -1481,9 +1459,7 @@ async def test_delivered_run_is_not_redispatched_on_node_deadline():
 
     Fails without the fix: with the veto unset on this path the hook
     re-dispatches the delivered run and never terminal-fails."""
-    fail, box, executor, marker_reader = await _drive_deadline_kill(
-        {"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS
-    )
+    fail, box, executor, marker_reader = await _drive_deadline_kill({"on": ["timeout"], "max_retries": 2}, markers=_DELIVERED_MARKERS)
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
     assert box.requested is False
@@ -1496,9 +1472,7 @@ async def test_undelivered_deadline_kill_still_redispatches():
     delivery, the node-deadline kill re-dispatches EXACTLY as before (fenced
     reset + the outcome box set), so the veto cannot quietly disable
     node-deadline retries."""
-    fail, box, executor, marker_reader = await _drive_deadline_kill(
-        {"on": ["timeout"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS
-    )
+    fail, box, executor, marker_reader = await _drive_deadline_kill({"on": ["timeout"], "max_retries": 2}, markers=_UNDELIVERED_MARKERS)
     fail.assert_not_awaited()
     assert box.requested is True
     assert box.final_status == "failed"
@@ -1513,9 +1487,7 @@ async def test_delivery_probe_failure_vetoes_the_deadline_redispatch(caplog: pyt
     absorbed (it never raises into the watchdog path), is logged, and the run
     terminal-fails."""
     with caplog.at_level(logging.WARNING, logger="farna.core.pipeline_engine.watchdog_retry"):
-        fail, box, executor, _marker_reader = await _drive_deadline_kill(
-            {"on": ["timeout"], "max_retries": 2}, read_error=RuntimeError("markers unreadable")
-        )
+        fail, box, executor, _marker_reader = await _drive_deadline_kill({"on": ["timeout"], "max_retries": 2}, read_error=RuntimeError("markers unreadable"))
     fail.assert_awaited_once()
     assert fail.await_args.kwargs["error_code"] == "node_deadline_exceeded"
     assert box.requested is False
@@ -2268,9 +2240,7 @@ async def _wrapper_outcome(
             stack.enter_context(seam)
         stack.enter_context(patch("farna.core.pipeline_execution.fail_run_terminal", fail))
         stack.enter_context(patch("farna.core.pipeline_execution.heartbeat_loop", AsyncMock()))
-        stack.enter_context(
-            patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status))
-        )
+        stack.enter_context(patch("farna.core.pipeline_execution._read_run_status", AsyncMock(return_value=read_status)))
         stack.enter_context(patch("farna.core.pipeline_execution._salvage_cancelled_run_cost", salvage))
         stack.enter_context(
             patch(

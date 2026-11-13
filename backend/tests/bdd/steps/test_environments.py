@@ -86,12 +86,7 @@ def _stub_provider() -> RuntimeProvider:
 # ============================================================================
 
 
-@given(
-    parsers.parse(
-        'a valid environment profile payload with name "{name}", image "{image}", '
-        'capabilities {caps}, egress "{egress}", and timeout {timeout:d}'
-    )
-)
+@given(parsers.parse('a valid environment profile payload with name "{name}", image "{image}", capabilities {caps}, egress "{egress}", and timeout {timeout:d}'))
 def valid_profile_payload(name: str, image: str, caps: str, egress: str, timeout: int, ctx):
     ctx["payload"] = {
         "name": name,
@@ -139,11 +134,7 @@ def org_has_n_profiles(org: str, count: int, ctx):
 def org_has_profile(org: str, profile_id: str, ctx):
     ctx["profile_id"] = profile_id
     ctx["org"] = org
-    pid = (
-        uuid.UUID(profile_id.replace("profile-", "00000000-0000-0000-0000-00000000000")[:36].ljust(36, "0"))
-        if "-" in profile_id
-        else uuid.uuid4()
-    )
+    pid = uuid.UUID(profile_id.replace("profile-", "00000000-0000-0000-0000-00000000000")[:36].ljust(36, "0")) if "-" in profile_id else uuid.uuid4()
     ctx["profile"] = _fake_profile(id=pid)
 
 
@@ -212,9 +203,7 @@ def profile_for_spec(ctx):
 @given("a LocalRuntimeProvider with an active workspace")
 def provider_with_active_workspace(ctx):
     provider = MagicMock()
-    provider.execute_command = AsyncMock(
-        return_value={"exit_code": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 42}
-    )
+    provider.execute_command = AsyncMock(return_value={"exit_code": 0, "stdout": "hello\n", "stderr": "", "duration_ms": 42})
     ctx["provider"] = provider
     ctx["ws_ref"] = "ws-active-001"
 
@@ -501,9 +490,7 @@ def response_contains_profile_id(profile_id: str, ctx):
 @then(parsers.parse('the profile has provider_type "{expected}"'))
 def profile_has_provider_type(expected: str, ctx):
     data = ctx["response"].json()
-    assert data.get("provider_type") == expected, (
-        f"Expected provider_type {expected!r}, got {data.get('provider_type')!r}"
-    )
+    assert data.get("provider_type") == expected, f"Expected provider_type {expected!r}, got {data.get('provider_type')!r}"
 
 
 @then(parsers.parse('the profile has image_ref "{expected}"'))
@@ -516,25 +503,19 @@ def profile_has_image(expected: str, ctx):
 def profile_has_capabilities(expected: str, ctx):
     data = ctx["response"].json()
     expected_list = json.loads(expected)
-    assert data.get("capabilities") == expected_list, (
-        f"Expected capabilities {expected_list}, got {data.get('capabilities')}"
-    )
+    assert data.get("capabilities") == expected_list, f"Expected capabilities {expected_list}, got {data.get('capabilities')}"
 
 
 @then(parsers.parse('the profile has egress_policy "{expected}"'))
 def profile_has_egress(expected: str, ctx):
     data = ctx["response"].json()
-    assert data.get("egress_policy") == expected, (
-        f"Expected egress_policy {expected!r}, got {data.get('egress_policy')!r}"
-    )
+    assert data.get("egress_policy") == expected, f"Expected egress_policy {expected!r}, got {data.get('egress_policy')!r}"
 
 
 @then(parsers.parse("the profile has timeout_seconds {expected:d}"))
 def profile_has_timeout(expected: int, ctx):
     data = ctx["response"].json()
-    assert data.get("timeout_seconds") == expected, (
-        f"Expected timeout_seconds {expected}, got {data.get('timeout_seconds')}"
-    )
+    assert data.get("timeout_seconds") == expected, f"Expected timeout_seconds {expected}, got {data.get('timeout_seconds')}"
 
 
 @then(parsers.parse('the error indicates "{field}" is required'))
@@ -542,9 +523,7 @@ def error_indicates_required(field: str, ctx):
     data = ctx["response"].json()
     detail = data.get("detail", {})
     if isinstance(detail, list):
-        assert any(field in str(err.get("loc", [])) for err in detail), (
-            f"Expected validation error mentioning {field!r}, got {detail}"
-        )
+        assert any(field in str(err.get("loc", [])) for err in detail), f"Expected validation error mentioning {field!r}, got {detail}"
     else:
         assert field in str(detail), f"Expected {field!r} in error detail: {detail}"
 
@@ -554,9 +533,7 @@ def error_timeout_range(ctx):
     data = ctx["response"].json()
     assert data.get("status_code") == 422 or data.get("status_code") is None, f"Expected 422, got {data}"
     detail = str(data.get("detail", ""))
-    assert any(word in detail.lower() for word in ["timeout", "less than", "greater than", "out of range"]), (
-        f"Expected timeout range error, got {detail}"
-    )
+    assert any(word in detail.lower() for word in ["timeout", "less than", "greater than", "out of range"]), f"Expected timeout range error, got {detail}"
 
 
 @then(parsers.parse('the error indicates "{field}" has an invalid value'))
@@ -564,9 +541,7 @@ def error_invalid_value(field: str, ctx):
     data = ctx["response"].json()
     detail = data.get("detail", {})
     if isinstance(detail, list):
-        assert any(field in str(err.get("loc", [])) for err in detail), (
-            f"Expected validation error on {field!r}, got {detail}"
-        )
+        assert any(field in str(err.get("loc", [])) for err in detail), f"Expected validation error on {field!r}, got {detail}"
     else:
         assert field in str(detail), f"Expected {field!r} in error detail: {detail}"
 

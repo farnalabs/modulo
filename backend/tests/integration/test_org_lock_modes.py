@@ -156,9 +156,7 @@ def _assert_issued_an_update(session: _CapturingSession, column: str, label: str
         sql = _compiled_sql(statement)
         if sql.startswith("UPDATE") and column in sql:
             return
-    raise AssertionError(
-        f"{label}: no UPDATE touching {column} was issued: {[_compiled_sql(s) for s in session.statements]}"
-    )
+    raise AssertionError(f"{label}: no UPDATE touching {column} was issued: {[_compiled_sql(s) for s in session.statements]}")
 
 
 async def test_confirm_org_deletion_org_lock_stays_for_update() -> None:

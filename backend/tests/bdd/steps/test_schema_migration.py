@@ -279,9 +279,7 @@ def step_response_dry_run_flag(request):
 def step_migrated_data_equals_original(request):
     data = request.node._resp.json()
     original = getattr(request.node, "_original_data", {})
-    assert data["migrated_data"] == original, (
-        f"migrated_data changed during dry_run: {data['migrated_data']} != {original}"
-    )
+    assert data["migrated_data"] == original, f"migrated_data changed during dry_run: {data['migrated_data']} != {original}"
 
 
 @then(parsers.parse('the migrated_data still contains "{field}"'))
