@@ -198,9 +198,7 @@ def _scan_environment(
 
 
 class TestRerunHappyPath:
-    def test_rerun_returns_a_new_attempt_and_retains_unchanged_elements(
-        self, client: TestClient, audits: list[dict[str, Any]]
-    ) -> None:
+    def test_rerun_returns_a_new_attempt_and_retains_unchanged_elements(self, client: TestClient, audits: list[dict[str, Any]]) -> None:
         sample = _available_sample()
         prior = build_proposal_contract([sample])
 
@@ -253,9 +251,7 @@ class TestRerunHappyPath:
         assert resp.status_code == 200
         data = resp.json()
         assert data["corrections"]["corrected_derived_element_ids"] == [str(element_id)]
-        assert any(
-            element["statement"] == f"{statement} (confirmed)" for element in data["proposal"]["derived_elements"]
-        )
+        assert any(element["statement"] == f"{statement} (confirmed)" for element in data["proposal"]["derived_elements"])
 
 
 class TestRerunIncompleteness:

@@ -198,9 +198,7 @@ class TestEvalDatasetCrud:
 
         session = _make_session(table="eval_datasets", add_side_effect=_add)
         try:
-            resp = _client(session, _principal(org_role="admin")).post(
-                "/api/v1/eval-datasets", json={"name": "New Dataset"}
-            )
+            resp = _client(session, _principal(org_role="admin")).post("/api/v1/eval-datasets", json={"name": "New Dataset"})
             assert resp.status_code == 201, resp.text
             assert resp.json()["name"] == "New Dataset"
         finally:
@@ -209,9 +207,7 @@ class TestEvalDatasetCrud:
     def test_create_dataset_non_admin_403(self) -> None:
         session = _make_session(table="eval_datasets")
         try:
-            resp = _client(session, _principal(org_role="operator")).post(
-                "/api/v1/eval-datasets", json={"name": "New Dataset"}
-            )
+            resp = _client(session, _principal(org_role="operator")).post("/api/v1/eval-datasets", json={"name": "New Dataset"})
             assert resp.status_code == 403, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -285,9 +281,7 @@ class TestEvalDatasetCrud:
     def test_update_dataset_happy_path_200(self) -> None:
         session = _make_session(table="eval_datasets", obj=_make_dataset_obj(), scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"})
             assert resp.status_code == 200, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -295,9 +289,7 @@ class TestEvalDatasetCrud:
     def test_update_dataset_non_admin_403(self) -> None:
         session = _make_session(table="eval_datasets", obj=_make_dataset_obj(), scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="operator")).patch(
-                f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="operator")).patch(f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"})
             assert resp.status_code == 403, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -305,9 +297,7 @@ class TestEvalDatasetCrud:
     def test_update_dataset_not_found_404(self) -> None:
         session = _make_session(table="eval_datasets", obj=None, scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"})
             assert resp.status_code == 404, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -315,9 +305,7 @@ class TestEvalDatasetCrud:
     def test_update_dataset_integrity_error_409(self) -> None:
         session = _make_session(begin_exc=_INTEGRITY)
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"})
             assert resp.status_code == 409, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -325,9 +313,7 @@ class TestEvalDatasetCrud:
     def test_update_dataset_sqlalchemy_error_503(self) -> None:
         session = _make_session(begin_exc=_SQL)
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-datasets/{_DATASET_ID}", json={"name": "Renamed"})
             assert resp.status_code == 503, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -375,9 +361,7 @@ class TestEvalSuiteCrud:
 
         session = _make_session(table="eval_suites", add_side_effect=_add)
         try:
-            resp = _client(session, _principal(org_role="admin")).post(
-                "/api/v1/eval-suites", json={"name": "New Suite", "description": "d"}
-            )
+            resp = _client(session, _principal(org_role="admin")).post("/api/v1/eval-suites", json={"name": "New Suite", "description": "d"})
             assert resp.status_code == 201, resp.text
             assert resp.json()["name"] == "New Suite"
         finally:
@@ -386,9 +370,7 @@ class TestEvalSuiteCrud:
     def test_create_suite_non_admin_403(self) -> None:
         session = _make_session(table="eval_suites")
         try:
-            resp = _client(session, _principal(org_role="operator")).post(
-                "/api/v1/eval-suites", json={"name": "New Suite"}
-            )
+            resp = _client(session, _principal(org_role="operator")).post("/api/v1/eval-suites", json={"name": "New Suite"})
             assert resp.status_code == 403, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -458,9 +440,7 @@ class TestEvalSuiteCrud:
     def test_update_suite_happy_path_200(self) -> None:
         session = _make_session(table="eval_suites", obj=_make_suite_obj(), scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"})
             assert resp.status_code == 200, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -468,9 +448,7 @@ class TestEvalSuiteCrud:
     def test_update_suite_non_admin_403(self) -> None:
         session = _make_session(table="eval_suites", obj=_make_suite_obj(), scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="operator")).patch(
-                f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="operator")).patch(f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"})
             assert resp.status_code == 403, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -478,9 +456,7 @@ class TestEvalSuiteCrud:
     def test_update_suite_not_found_404(self) -> None:
         session = _make_session(table="eval_suites", obj=None, scope=(None, "org"))
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"})
             assert resp.status_code == 404, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -488,9 +464,7 @@ class TestEvalSuiteCrud:
     def test_update_suite_integrity_error_409(self) -> None:
         session = _make_session(begin_exc=_INTEGRITY)
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"})
             assert resp.status_code == 409, resp.text
         finally:
             app.dependency_overrides.clear()
@@ -498,9 +472,7 @@ class TestEvalSuiteCrud:
     def test_update_suite_sqlalchemy_error_503(self) -> None:
         session = _make_session(begin_exc=_SQL)
         try:
-            resp = _client(session, _principal(org_role="admin")).patch(
-                f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"}
-            )
+            resp = _client(session, _principal(org_role="admin")).patch(f"/api/v1/eval-suites/{_SUITE_ID}", json={"name": "Renamed"})
             assert resp.status_code == 503, resp.text
         finally:
             app.dependency_overrides.clear()

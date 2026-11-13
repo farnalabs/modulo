@@ -334,11 +334,7 @@ def _constant_sequences(tree: ast.Module) -> dict[str, list[str]]:
         value = node.value
         if not isinstance(value, (ast.List, ast.Tuple)):
             continue
-        constants = [
-            element.value
-            for element in value.elts
-            if isinstance(element, ast.Constant) and isinstance(element.value, str)
-        ]
+        constants = [element.value for element in value.elts if isinstance(element, ast.Constant) and isinstance(element.value, str)]
         for target in targets:
             if isinstance(target, ast.Name):
                 sequences[target.id] = constants
@@ -395,9 +391,7 @@ def _offenders(commands: list[PytestCommand]) -> list[PytestCommand]:
 
 def _report(offenders: list[PytestCommand]) -> str:
     """One failure message naming every offending command."""
-    return "pytest commands must carry the unraisable-warning gate:\n\n" + "\n\n".join(
-        offender.problem() for offender in offenders
-    )
+    return "pytest commands must carry the unraisable-warning gate:\n\n" + "\n\n".join(offender.problem() for offender in offenders)
 
 
 def test_every_ci_yaml_pytest_command_carries_the_warning_gate() -> None:
@@ -446,13 +440,7 @@ def test_exemption_list_is_empty() -> None:
 
 def test_parser_joins_continuations_and_ignores_prose_and_comments() -> None:
     """A continuation-joined command is one invocation; echo/comment text is not."""
-    block = (
-        "# pytest tests/unit/ (a comment, not a command)\n"
-        'echo "Running: pytest tests/unit/"\n'
-        "printf 'pytest %s\\n' tests/unit/\n"
-        "uv run pytest tests/unit/ -q \\\n"
-        f'  -W "{ESCALATION}" {DISABLE_WARNINGS}\n'
-    )
+    block = f'# pytest tests/unit/ (a comment, not a command)\necho "Running: pytest tests/unit/"\nprintf \'pytest %s\\n\' tests/unit/\nuv run pytest tests/unit/ -q \\\n  -W "{ESCALATION}" {DISABLE_WARNINGS}\n'
     commands = list(_shell_pytest_commands("synthetic:run", block))
     assert len(commands) == 1
     assert commands[0].ok
@@ -496,13 +484,7 @@ def test_yaml_scan_handles_block_scalars_and_continuations(tmp_path: Path) -> No
     """A ``run: |`` block with a continuation is parsed like the real workflows."""
     workflow = tmp_path / "synthetic.yml"
     workflow.write_text(
-        "jobs:\n"
-        "  test:\n"
-        "    steps:\n"
-        "      - name: run\n"
-        "        run: |\n"
-        "          uv run pytest tests/unit/ -q \\\n"
-        f"            {DISABLE_WARNINGS}\n",
+        f"jobs:\n  test:\n    steps:\n      - name: run\n        run: |\n          uv run pytest tests/unit/ -q \\\n            {DISABLE_WARNINGS}\n",
         encoding="utf-8",
     )
     commands = _yaml_run_pytest_commands(workflow)
@@ -514,8 +496,7 @@ def test_python_scan_resolves_a_starred_shared_flag_tuple(tmp_path: Path) -> Non
     """A refactor into ``SHARED_FLAGS`` keeps the gate detectable."""
     script = tmp_path / "runner.py"
     script.write_text(
-        "SHARED_FLAGS = ['-W', 'error::pytest.PytestUnraisableExceptionWarning', '--disable-warnings']\n"
-        "cmd = ['uv', 'run', 'pytest', 'tests/unit/', *SHARED_FLAGS]\n",
+        "SHARED_FLAGS = ['-W', 'error::pytest.PytestUnraisableExceptionWarning', '--disable-warnings']\ncmd = ['uv', 'run', 'pytest', 'tests/unit/', *SHARED_FLAGS]\n",
         encoding="utf-8",
     )
     commands = _python_argv_pytest_commands(script)

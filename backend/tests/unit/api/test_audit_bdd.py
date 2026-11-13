@@ -298,13 +298,7 @@ class TestFilterCombinations:
             patch("farna.api.routes.audit.set_rls_org"),
         ):
             mock_list.return_value = _build_list_response([])
-            resp = client.get(
-                f"{LIST_URL}?event_type=pipeline.run"
-                f"&user_id={_USER_ID}"
-                f"&from_date=2025-01-01T00:00:00Z"
-                f"&to_date=2025-12-31T23:59:59Z"
-                f"&entity_type=pipeline"
-            )
+            resp = client.get(f"{LIST_URL}?event_type=pipeline.run&user_id={_USER_ID}&from_date=2025-01-01T00:00:00Z&to_date=2025-12-31T23:59:59Z&entity_type=pipeline")
         assert resp.status_code == 200
         _, kwargs = mock_list.call_args
         assert kwargs.get("event_type") == "pipeline.run"

@@ -196,9 +196,7 @@ def test_age_boundary_just_below_ineligible(now: _dt.datetime) -> None:
     assert result["criteria"]["age"]["reason"] == mod.RC_TOO_YOUNG
 
 
-def test_reason_code_surfaced_in_human_output(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reason_code_surfaced_in_human_output(now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     ev = _base_evidence(now)
     ev["private"] = True
 
@@ -211,9 +209,7 @@ def test_reason_code_surfaced_in_human_output(
     assert mod.RC_NOT_PUBLIC in out
 
 
-def test_reason_code_surfaced_in_json_output(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reason_code_surfaced_in_json_output(now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     ev = _base_evidence(now)
     ev["private"] = True
 
@@ -283,9 +279,7 @@ def test_api_failure_is_inconclusive(monkeypatch, now: _dt.datetime) -> None:
     assert "escalation" in result
 
 
-def test_json_output_shape(
-    now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_json_output_shape(now: _dt.datetime, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     ev = _base_evidence(now)
 
     def _fake(target: str) -> dict:
@@ -433,12 +427,7 @@ def test_gh_header_pagination_follows_next(monkeypatch: pytest.MonkeyPatch) -> N
     # Simulate `gh api -i` output (headers + blank line + JSON body) where the
     # first page of tags carries rel="next"; the second page has no Link. The
     # paginator must follow to page 2 and aggregate both pages.
-    page1 = (
-        "HTTP/2 200\n"
-        "content-type: application/json\n"
-        'link: <https://api.github.com/repos/acme/widgets/tags?page=2&per_page=100>; rel="next"\n'
-        "\n" + json.dumps([{"name": "v1.0.0"}, {"name": "v1.1.0"}])
-    )
+    page1 = 'HTTP/2 200\ncontent-type: application/json\nlink: <https://api.github.com/repos/acme/widgets/tags?page=2&per_page=100>; rel="next"\n\n' + json.dumps([{"name": "v1.0.0"}, {"name": "v1.1.0"}])
     page2 = "HTTP/2 200\ncontent-type: application/json\n\n" + json.dumps([{"name": "v2.0.0"}])
 
     def _run(*args, **_kwargs):
@@ -477,9 +466,7 @@ def test_gh_header_pagination_follows_next(monkeypatch: pytest.MonkeyPatch) -> N
 def test_gh_link_header_unparseable_next_is_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
     # G2: a Link header with rel="next" but a truncated/unparseable URL must
     # be INCONCLUSIVE, never a silent "no more pages" undercount.
-    tags_block = 'HTTP/2 200\nlink: <https://api.github.com/repos/acme/widgets/tags?page=2 rel="next"\n\n' + json.dumps(
-        [{"name": "v1.0.0"}]
-    )
+    tags_block = 'HTTP/2 200\nlink: <https://api.github.com/repos/acme/widgets/tags?page=2 rel="next"\n\n' + json.dumps([{"name": "v1.0.0"}])
 
     def _run(*args, **_kwargs):
         cmd = list(args[0])

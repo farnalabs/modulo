@@ -95,9 +95,7 @@ def _seed_fields(slug: str) -> list[dict[str, Any]]:
 
 def test_required_list_matches_seed_required_flags() -> None:
     """Required fields in the seed surface as the definition's required list."""
-    definition = _schema_definition_from_content(
-        {**SCHEMA_SEEDS_BY_SLUG["requirements-output"].content_json, "fields": _seed_fields("requirements-output")}
-    )
+    definition = _schema_definition_from_content({**SCHEMA_SEEDS_BY_SLUG["requirements-output"].content_json, "fields": _seed_fields("requirements-output")})
     assert definition is not None
     seed_required = [f["name"] for f in _seed_fields("requirements-output") if f.get("required", False)]
     assert definition["required"] == seed_required

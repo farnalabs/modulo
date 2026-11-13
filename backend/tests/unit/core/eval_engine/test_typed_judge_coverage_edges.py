@@ -436,9 +436,7 @@ class TestTransportRejections:
         assert seen[1]["properties"]["answer"]["enum"] == [1.0, 3.0]
 
     async def test_a_payload_level_detail_is_preserved(self) -> None:
-        handle = _handle(
-            lambda messages, schema: AIMessage(content=json.dumps({"answer": True, "detail": "payload reason"}))
-        )
+        handle = _handle(lambda messages, schema: AIMessage(content=json.dumps({"answer": True, "detail": "payload reason"})))
 
         verdict = await self._judge(handle, _noul())
 
@@ -594,9 +592,7 @@ class TestLlmJudgeAsyncEdges:
 
         assert exc_info.value.code is JudgeErrorCode.JUDGE_CONFIGURATION
 
-    def test_a_generic_failure_outside_the_judge_runner_is_judge_unavailable(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_generic_failure_outside_the_judge_runner_is_judge_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom(*args: Any, **kwargs: Any) -> Any:
             raise RuntimeError("unexpected")
 
@@ -611,9 +607,7 @@ class TestLlmJudgeAsyncEdges:
     def test_typed_config_questions_tolerates_a_legacy_or_broken_list(self) -> None:
         assert not typed_config_questions({"answer_contract": "typed_questions", "questions": "x"})
         assert not typed_config_questions({"field": "output"})
-        assert typed_config_questions({"answer_contract": "typed_questions", "questions": [{"id": "q"}, "junk"]}) == [
-            {"id": "q"}
-        ]
+        assert typed_config_questions({"answer_contract": "typed_questions", "questions": [{"id": "q"}, "junk"]}) == [{"id": "q"}]
 
 
 class TestEngineAsyncErrors:
@@ -699,9 +693,7 @@ class TestBackendRefEdges:
         assert not _typed_backend_refs({"answer_contract": "typed_questions", "backing": "nope"})
 
     def test_a_decision_model_backing_contributes_no_model_ref(self) -> None:
-        assert not _typed_backend_refs(
-            {"answer_contract": "typed_questions", "backing": {"kind": "decision_model", "vendor": "jev"}}
-        )
+        assert not _typed_backend_refs({"answer_contract": "typed_questions", "backing": {"kind": "decision_model", "vendor": "jev"}})
 
     def test_a_cascade_with_a_non_object_target_contributes_no_ref(self) -> None:
         config = {

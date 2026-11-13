@@ -101,9 +101,7 @@ class TestUpsertRunnerProbeCache:
         session = _make_session()
         session.execute.return_value = _result(scalar=None)
         before = datetime.now(UTC)
-        row = await upsert_runner_probe_cache(
-            session, org_id=_ORG_ID, machine_id="m", engine_reachable=True, images_present=True
-        )
+        row = await upsert_runner_probe_cache(session, org_id=_ORG_ID, machine_id="m", engine_reachable=True, images_present=True)
         assert row.probed_at >= before
 
 

@@ -123,10 +123,7 @@ def test_at_most_one_conftest_first_org_claim(integration_claimants: dict[str, l
     for ``Organisation.created_at ASC LIMIT 1`` is the same collision the
     test-module claimants caused, one layer up."""
     conftest_claims = sorted(rel for rel in integration_claimants if Path(rel).name == "conftest.py")
-    assert len(conftest_claims) <= 1, (
-        "FAR-1098: more than one conftest claims the global first-org slot: "
-        f"{conftest_claims}. Keep exactly one deterministic first-org fixture."
-    )
+    assert len(conftest_claims) <= 1, f"FAR-1098: more than one conftest claims the global first-org slot: {conftest_claims}. Keep exactly one deterministic first-org fixture."
 
 
 def test_legacy_first_org_registry_entries_exist() -> None:
@@ -142,9 +139,7 @@ def test_scanner_detects_org_backdate_but_not_provider_backdate() -> None:
     the org claim shape (single-line and multi-line) and rejects the provider
     claim shape and zero offsets."""
     org_claim = 'org_a_id, slug = await _create_org(db_engine, "a", created_at_offset_seconds=315_360_000)'
-    provider_claim = (
-        "saml_a = await _create_saml_provider(db_engine, org_id=org_a_id, created_at_offset_seconds=315_360_000)"
-    )
+    provider_claim = "saml_a = await _create_saml_provider(db_engine, org_id=org_a_id, created_at_offset_seconds=315_360_000)"
     zero_offset = 'org_b_id, slug = await _create_org(db_engine, "b", created_at_offset_seconds=0)'
     multiline = 'await _create_org(\n    db_engine,\n    "a",\n    created_at_offset_seconds=63_072_000,\n)'
 

@@ -121,9 +121,7 @@ async def test_soft_delete_external_agent_hides_row(session: AsyncSession) -> No
 async def test_team_visibility_requires_owner_team(session: AsyncSession) -> None:
     # Team-private without an owning team violates ck_external_agents_team_owner.
     with pytest.raises(IntegrityError):
-        await create_external_agent(
-            session, org_id=_ORG_A, name="bad", runtime_kind="other", visibility="team", owner_team_id=None
-        )
+        await create_external_agent(session, org_id=_ORG_A, name="bad", runtime_kind="other", visibility="team", owner_team_id=None)
 
 
 async def test_create_external_agent_persists_provenance(session: AsyncSession) -> None:

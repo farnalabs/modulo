@@ -1162,9 +1162,7 @@ def _guardrail_row(node_id, name, *, cap=None):
     row.node_id = node_id
     row.name = name
     row.eval_type = "guardrail"
-    row.config_json = (
-        {"action": "observe", "max_guardrails_per_node": cap} if cap is not None else {"action": "observe"}
-    )
+    row.config_json = {"action": "observe", "max_guardrails_per_node": cap} if cap is not None else {"action": "observe"}
     row.failure_behaviour = "warn"
     row.pass_threshold = None
     row.suite_id = None
@@ -1173,27 +1171,21 @@ def _guardrail_row(node_id, name, *, cap=None):
 
 async def test_guardrail_cap_exceeded_rejected_at_graph_save():
     rows = [_guardrail_row(None, f"g-{i}") for i in range(9)]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert not result.is_valid
     assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
 
 
 async def test_guardrail_cap_within_budget_passes_graph_save():
     rows = [_guardrail_row(None, f"g-{i}") for i in range(8)]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert result.is_valid
     assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in result.issues)
 
 
 async def test_guardrail_cap_feature_off_never_violates():
     rows = [_guardrail_row(None, f"g-{i}", cap=0) for i in range(12)]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert result.is_valid
 
 
@@ -1201,16 +1193,12 @@ async def test_guardrail_cap_configurable_cap_enforced_at_graph_save():
     """A RAISED org cap (not just the default 8) is honoured at graph-save:
     exactly cap rows pass, cap+1 rows reject with GUARDRAIL_CAP_EXCEEDED."""
     under = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(4)]
-    under_result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=under
-    )
+    under_result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=under)
     assert under_result.is_valid
     assert not any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in under_result.issues)
 
     over = [_guardrail_row(None, f"g-{i}", cap=4) for i in range(5)]
-    over_result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=over
-    )
+    over_result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=over)
     assert not over_result.is_valid
     assert any(i.code == "GUARDRAIL_CAP_EXCEEDED" for i in over_result.issues)
 
@@ -1248,9 +1236,7 @@ async def test_redact_correct_hard_blocked_at_graph_save():
     graph-save (exfiltration channel) — matches the runtime
     RedactCorrectBlockedError backstop."""
     rows = [_redact_correction_row(None, "g-redact-correct")]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert not result.is_valid
     assert any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
 
@@ -1258,9 +1244,7 @@ async def test_redact_correct_hard_blocked_at_graph_save():
 async def test_redact_without_correction_passes_graph_save():
     """A plain 'redact'-action guardrail (no correction block) is valid."""
     rows = [_redact_correction_row(None, "g-redact-only", has_correction=False)]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert result.is_valid
     assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
 
@@ -1269,9 +1253,7 @@ async def test_non_redact_correction_passes_graph_save():
     """A correction on a non-redact guardrail is NOT the exfiltration channel
     the hard-block protects — it stays valid at graph-save."""
     rows = [_redact_correction_row(None, "g-block-correct", action="block")]
-    result = await GraphValidator().validate_definition(
-        _SINGLE_NODE, _session_returning([]), guardrail_definitions=rows
-    )
+    result = await GraphValidator().validate_definition(_SINGLE_NODE, _session_returning([]), guardrail_definitions=rows)
     assert result.is_valid
     assert not any(i.code == "REDACT_CORRECT_BLOCKED" for i in result.issues)
 
@@ -1501,13 +1483,7 @@ async def test_sandbox_wallclock_budget_non_int_is_error():
 async def test_sandbox_managed_inputs_valid_config_passes_graph_save():
     """A valid workspace_inputs config passes graph save (FAR-802)."""
     graph = {
-        "nodes": [
-            _sandbox_node(
-                workspace_inputs=[
-                    {"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
-                ]
-            )
-        ],
+        "nodes": [_sandbox_node(workspace_inputs=[{"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}])],
         "edges": [],
     }
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
@@ -1518,13 +1494,7 @@ async def test_sandbox_managed_inputs_valid_config_passes_graph_save():
 async def test_sandbox_managed_inputs_invalid_dest_is_error():
     """An invalid workspace_inputs dest is rejected at save time (FAR-802)."""
     graph = {
-        "nodes": [
-            _sandbox_node(
-                workspace_inputs=[
-                    {"dest": "/tmp/evil", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
-                ]
-            )
-        ],
+        "nodes": [_sandbox_node(workspace_inputs=[{"dest": "/tmp/evil", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}])],
         "edges": [],
     }
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
@@ -1538,9 +1508,7 @@ async def test_sandbox_managed_inputs_git_clone_in_agent_command_is_error():
         "nodes": [
             _sandbox_node(
                 agent_commands=["git clone https://example.com/repo.git && do_stuff"],
-                workspace_inputs=[
-                    {"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}
-                ],
+                workspace_inputs=[{"dest": "/home/user/repo", "url": "https://github.com/org/repo.git", "ref": {"kind": "branch"}}],
             )
         ],
         "edges": [],
@@ -1649,9 +1617,7 @@ async def test_node_send_budget_retries_zero_uses_single_attempt():
 async def test_node_send_budget_absent_keys_no_warning():
     """Nodes bound to a connector without fan_out config (or with no binding) are untouched."""
     graph = {"nodes": [{"id": "plain-node"}], "edges": []}
-    result = await GraphValidator().validate_definition(
-        graph, _session_returning([]), connector_bindings=[], guardrail_definitions=[]
-    )
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), connector_bindings=[], guardrail_definitions=[])
     assert result.is_valid
     assert not any(i.code == "NODE_SEND_BUDGET_OVERSUBSCRIBED" for i in result.issues)
 
@@ -1692,9 +1658,7 @@ async def test_node_send_budget_uses_timeout_seconds_not_flat_keys():
         ],
         "edges": [],
     }
-    result = await GraphValidator().validate_definition(
-        graph, _session_returning([]), connector_bindings=[], guardrail_definitions=[]
-    )
+    result = await GraphValidator().validate_definition(graph, _session_returning([]), connector_bindings=[], guardrail_definitions=[])
     assert result.is_valid
     assert not any(i.code == "NODE_SEND_BUDGET_OVERSUBSCRIBED" for i in result.issues)
 
@@ -1959,13 +1923,7 @@ async def test_single_pr_per_run_true_still_passes_on_sandbox_nodes():
 async def test_single_pr_per_run_false_and_absent_still_pass(value_case: str):
     """``false`` and an absent flag are legal on a sandbox node AND on a plain
     agent node — neither is ever rejected by the FAR-1316 type check."""
-    if value_case == "absent":
-        nodes = [_sandbox_node(), {"id": _UUID_B, "node_type": "agent"}]
-    else:
-        nodes = [
-            _sandbox_node(single_pr_per_run=False),
-            {"id": _UUID_B, "node_type": "agent", "single_pr_per_run": False},
-        ]
+    nodes = [_sandbox_node(), {"id": _UUID_B, "node_type": "agent"}] if value_case == "absent" else [_sandbox_node(single_pr_per_run=False), {"id": _UUID_B, "node_type": "agent", "single_pr_per_run": False}]
     graph = {"nodes": nodes, "edges": []}
     result = await GraphValidator().validate_definition(graph, _session_returning([]), guardrail_definitions=[])
 

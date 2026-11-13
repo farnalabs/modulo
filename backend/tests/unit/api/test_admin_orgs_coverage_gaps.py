@@ -190,9 +190,7 @@ def api() -> Generator[tuple[TestClient, AsyncMock], None, None]:
 # ── POST "" (create org) ──
 
 
-def test_create_org_seed_failure_is_fail_open(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_org_seed_failure_is_fail_open(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation_by_slug", AsyncMock(return_value=None))
     monkeypatch.setattr(admin_orgs, "create_organisation", AsyncMock(return_value=_org()))
@@ -203,9 +201,7 @@ def test_create_org_seed_failure_is_fail_open(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_create_org_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_create_org_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation_by_slug", AsyncMock(return_value=None))
     monkeypatch.setattr(admin_orgs, "create_organisation", AsyncMock(side_effect=exc))
@@ -235,9 +231,7 @@ def test_list_orgs_hides_orphan_org(api: tuple[TestClient, AsyncMock], monkeypat
     assert data[0]["slug"] == "target-org"
 
 
-def test_list_orgs_hides_registry_sentinel_org(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_list_orgs_hides_registry_sentinel_org(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-826: the modulo-library registry sentinel org (shadow rows for
     collection installs) must not appear in the admin org listing, while a
     normal tenant org and the orphan exclusion still pass."""
@@ -255,9 +249,7 @@ def test_list_orgs_hides_registry_sentinel_org(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_list_orgs_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_list_orgs_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "list_organisations", AsyncMock(side_effect=exc))
     resp = client.get("/api/v1/admin/orgs")
@@ -298,9 +290,7 @@ def test_delete_org_delete_falsy_404(api: tuple[TestClient, AsyncMock], monkeypa
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_delete_org_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_delete_org_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(side_effect=exc))
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}")
@@ -315,9 +305,7 @@ def test_delete_org_unexpected_error_500(api: tuple[TestClient, AsyncMock], monk
     assert resp.status_code == 500
 
 
-def test_delete_org_refuses_the_callers_own_org_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_delete_org_refuses_the_callers_own_org_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """A system admin cannot delete the organisation they are signed in to:
     deletion must always be a cross-organisation operation."""
     client, _ = api
@@ -369,9 +357,7 @@ def test_delete_org_refuses_reserved_infrastructure_orgs_404(
 # ── POST /{org_id}/users (extra branches) ──
 
 
-def test_create_org_user_membership_conflict_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_org_user_membership_conflict_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org()))
     monkeypatch.setattr(admin_orgs, "get_account_by_email", AsyncMock(return_value=_account()))
@@ -384,9 +370,7 @@ def test_create_org_user_membership_conflict_409(
     assert "already exists in this organisation" in resp.json()["detail"]
 
 
-def test_create_org_user_cross_tenant_local_account_409(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_org_user_cross_tenant_local_account_409(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     existing = _account(password_hash="$2b$12$hash", auth_provider="local")
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org()))
@@ -400,9 +384,7 @@ def test_create_org_user_cross_tenant_local_account_409(
     assert "EMAIL_ACCOUNT_EXISTS" in resp.json()["detail"]
 
 
-def test_create_org_user_adopts_passwordless_account(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_org_user_adopts_passwordless_account(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     existing = _account(password_hash=None, auth_provider="sso")
     membership = MagicMock()
@@ -432,9 +414,7 @@ def test_create_org_user_weak_password_422(api: tuple[TestClient, AsyncMock]) ->
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_create_org_user_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_create_org_user_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org()))
     monkeypatch.setattr(admin_orgs, "get_account_by_email", AsyncMock(return_value=None))
@@ -446,9 +426,7 @@ def test_create_org_user_error_mapping(
     assert resp.status_code == expected
 
 
-def test_create_org_user_unexpected_error_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_create_org_user_unexpected_error_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org()))
     monkeypatch.setattr(admin_orgs, "get_account_by_email", AsyncMock(return_value=None))
@@ -464,9 +442,7 @@ def test_create_org_user_unexpected_error_500(
 
 
 def _license_data() -> SimpleNamespace:
-    return SimpleNamespace(
-        tier="pro", features=["f1"], expires_at="2026-01-01T00:00:00+00:00", org_id=str(_TARGET_ORG_ID)
-    )
+    return SimpleNamespace(tier="pro", features=["f1"], expires_at="2026-01-01T00:00:00+00:00", org_id=str(_TARGET_ORG_ID))
 
 
 def test_get_org_license_from_org_key(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,9 +460,7 @@ def test_get_org_license_from_org_key(api: tuple[TestClient, AsyncMock], monkeyp
     assert data["tier"] == "pro"
 
 
-def test_get_org_license_falls_back_to_system_license(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_org_license_falls_back_to_system_license(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     org = _org(settings_json={"license_key": "invalid-org-key"})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
@@ -520,9 +494,7 @@ def test_get_org_license_missing_org_404(api: tuple[TestClient, AsyncMock], monk
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_get_org_license_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_get_org_license_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(side_effect=exc))
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
@@ -578,9 +550,7 @@ def test_set_org_license_missing_org_404(api: tuple[TestClient, AsyncMock], monk
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_set_org_license_update_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_set_org_license_update_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
@@ -592,18 +562,14 @@ def test_set_org_license_update_error_mapping(
     assert resp.status_code == expected
 
 
-def test_set_org_license_update_unexpected_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_license_update_unexpected_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=_org(settings_json={})))
     monkeypatch.setattr(
         "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(
-        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom"))
-    )
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license", json={"license_key": "k"})
     assert resp.status_code == 500
 
@@ -637,9 +603,7 @@ def test_remove_org_license_missing_org_404(api: tuple[TestClient, AsyncMock], m
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_remove_org_license_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_remove_org_license_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(side_effect=exc))
     resp = client.delete(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/license")
@@ -670,9 +634,7 @@ def _patch_fake_redis(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
 _STALE_STATUS = '{"has_license": false, "tier": "community", "features": [], "expires_at": null, "org_id": null}'
 
 
-def test_set_org_license_invalidates_org_status_cache(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_license_invalidates_org_status_cache(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1719: an org-level licence rotate busts that org's cached status."""
     client, _ = api
     probe = _patch_fake_redis(monkeypatch)
@@ -682,9 +644,7 @@ def test_set_org_license_invalidates_org_status_cache(
         "farna.core.license.parse_and_verify",
         MagicMock(return_value=SimpleNamespace(valid=True, license_data=_license_data(), error=None)),
     )
-    monkeypatch.setattr(
-        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
-    )
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 
@@ -694,17 +654,13 @@ def test_set_org_license_invalidates_org_status_cache(
     assert probe.get(key) is None
 
 
-def test_remove_org_license_invalidates_org_status_cache(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_remove_org_license_invalidates_org_status_cache(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     """FAR-1719: an org-level licence clear busts that org's cached status."""
     client, _ = api
     probe = _patch_fake_redis(monkeypatch)
     org = _org(settings_json={"license_key": "k", "other": 1})
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
-    monkeypatch.setattr(
-        "farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {})
-    )
+    monkeypatch.setattr("farna.api.routes._org_settings.update_org_settings_patch", AsyncMock(return_value=org.settings_json or {}))
     key = f"license:{_TARGET_ORG_ID}"
     probe.set(key, _STALE_STATUS, ex=60)
 
@@ -764,9 +720,7 @@ def test_set_org_triggers_paused_enable(api: tuple[TestClient, AsyncMock], monke
     assert org.triggers_paused_at is not None
 
 
-def test_set_org_triggers_paused_idempotent_noop(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_triggers_paused_idempotent_noop(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     paused_at = datetime.now(UTC)
     org = _org_mock(triggers_paused=True, triggers_paused_at=paused_at)
@@ -778,9 +732,7 @@ def test_set_org_triggers_paused_idempotent_noop(
     assert data["paused_at"] == paused_at.isoformat()
 
 
-def test_set_org_triggers_paused_audit_failure_is_fail_open(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_triggers_paused_audit_failure_is_fail_open(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     org = _org_mock(triggers_paused=False)
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
@@ -790,9 +742,7 @@ def test_set_org_triggers_paused_audit_failure_is_fail_open(
     assert org.triggers_paused is True
 
 
-def test_set_org_triggers_paused_missing_org_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_triggers_paused_missing_org_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=None))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/triggers/pause", json={"paused": True})
@@ -800,18 +750,14 @@ def test_set_org_triggers_paused_missing_org_404(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_set_org_triggers_paused_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_set_org_triggers_paused_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "set_rls_org", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/triggers/pause", json={"paused": True})
     assert resp.status_code == expected
 
 
-def test_set_org_triggers_paused_unexpected_500(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_triggers_paused_unexpected_500(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "set_rls_org", AsyncMock(side_effect=RuntimeError("boom")))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/triggers/pause", json={"paused": True})
@@ -844,9 +790,7 @@ def test_get_org_guardrails_kill_switch_off(api: tuple[TestClient, AsyncMock], m
     assert data["enabled_at"] is None
 
 
-def test_get_org_guardrails_kill_switch_missing_org_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_get_org_guardrails_kill_switch_missing_org_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=None))
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch")
@@ -854,18 +798,14 @@ def test_get_org_guardrails_kill_switch_missing_org_404(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_get_org_guardrails_kill_switch_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_get_org_guardrails_kill_switch_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "set_rls_org", AsyncMock(side_effect=exc))
     resp = client.get(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch")
     assert resp.status_code == expected
 
 
-def test_set_org_guardrails_kill_switch_enable_notifies(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_guardrails_kill_switch_enable_notifies(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     org = _org_mock(guardrails_kill_switch=False)
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
@@ -880,9 +820,7 @@ def test_set_org_guardrails_kill_switch_enable_notifies(
     assert notify.await_count == 1
 
 
-def test_set_org_guardrails_kill_switch_disable_no_notify(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_guardrails_kill_switch_disable_no_notify(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     org = _org_mock(guardrails_kill_switch=True, guardrails_kill_switch_at=datetime.now(UTC))
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=org))
@@ -897,9 +835,7 @@ def test_set_org_guardrails_kill_switch_disable_no_notify(
     assert notify.await_count == 0
 
 
-def test_set_org_guardrails_kill_switch_idempotent(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_guardrails_kill_switch_idempotent(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     switched_at = datetime.now(UTC)
     org = _org_mock(guardrails_kill_switch=True, guardrails_kill_switch_at=switched_at)
@@ -909,9 +845,7 @@ def test_set_org_guardrails_kill_switch_idempotent(
     assert resp.json()["enabled_at"] == switched_at.isoformat()
 
 
-def test_set_org_guardrails_kill_switch_missing_org_404(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_set_org_guardrails_kill_switch_missing_org_404(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "get_organisation", AsyncMock(return_value=None))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch", json={"enabled": True})
@@ -919,9 +853,7 @@ def test_set_org_guardrails_kill_switch_missing_org_404(
 
 
 @pytest.mark.parametrize(("exc", "expected"), _DB_ERROR_PARAMS)
-def test_set_org_guardrails_kill_switch_error_mapping(
-    api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int
-) -> None:
+def test_set_org_guardrails_kill_switch_error_mapping(api: tuple[TestClient, AsyncMock], monkeypatch: pytest.MonkeyPatch, exc: Exception, expected: int) -> None:
     client, _ = api
     monkeypatch.setattr(admin_orgs, "set_rls_org", AsyncMock(side_effect=exc))
     resp = client.put(f"/api/v1/admin/orgs/{_TARGET_ORG_ID}/guardrails/kill-switch", json={"enabled": True})

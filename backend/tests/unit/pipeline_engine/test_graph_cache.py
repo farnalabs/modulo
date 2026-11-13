@@ -1171,9 +1171,7 @@ def test_dispatch_classifier_gate_edges_match_the_compiled_gates(case_name: str)
     graph_json = _M7_CASES[case_name]
     predicted = _predicted_gate_nodes(graph_json)
     actual = _compiled_gate_nodes(graph_json)
-    assert predicted == actual, (
-        f"{case_name}: classifier predicted {sorted(predicted)}, compiler built {sorted(actual)}"
-    )
+    assert predicted == actual, f"{case_name}: classifier predicted {sorted(predicted)}, compiler built {sorted(actual)}"
 
 
 def test_classifier_pinned_expected_gate_counts_per_branch() -> None:

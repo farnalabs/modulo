@@ -560,7 +560,7 @@ def test_degrade_within_the_upgrade_window_persists_post_upgrade_context(monkeyp
     assert record.get("pre_upgrade_snapshot") == "/backups/pre-upgrade"
     assert "upgrade watch window" in captured.err
     assert "/backups/pre-upgrade" in captured.err
-    assert "farna-control restore" in captured.err
+    assert "modulo restore" in captured.err
 
 
 def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1066,7 +1066,7 @@ def test_post_upgrade_degraded_refusal_carries_snapshot_guidance(monkeypatch: py
     message = str(excinfo.value)
     assert "upgrade watch window" in message
     assert "/backups/pre-upgrade" in message
-    assert "farna-control restore" in message
+    assert "modulo restore" in message
 
 
 def test_clear_degraded_resumes_the_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1300,8 +1300,8 @@ def test_prepare_database_env_with_admin_url() -> None:
 
 
 def test_prepare_database_env_with_system_url() -> None:
-    entry_module._prepare_database_env({"FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
-    assert os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
+    entry_module._prepare_database_env({"FARNA_CONTROL_SYSTEM_DATABASE_URL": "postgresql://sys/db"})
+    assert os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL") == "postgresql://sys/db"
 
 
 def test_prepare_database_env_missing_keys() -> None:

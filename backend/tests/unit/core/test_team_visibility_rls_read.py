@@ -207,9 +207,7 @@ async def test_postgres_read_reports_an_unresolvable_binding_as_a_refusal() -> N
     missing_id = uuid.uuid4()
 
     with pytest.raises(ConnectorBindingMissingError) as excinfo:
-        await find_connector_team_mismatches(
-            session, _ORG_ID, _TEAM_A, [{"node_id": _NODE_ID, "connector_instance_id": str(missing_id)}]
-        )
+        await find_connector_team_mismatches(session, _ORG_ID, _TEAM_A, [{"node_id": _NODE_ID, "connector_instance_id": str(missing_id)}])
 
     assert excinfo.value.missing == [(missing_id, _NODE_ID)]
     detail = str(excinfo.value)

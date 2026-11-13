@@ -104,10 +104,7 @@ async def test_query_projects_corrupt_total_does_not_crash(connector):
     respx.get(f"{API_BASE}/projects/search").mock(
         return_value=httpx.Response(
             200,
-            text=(
-                '{"components": [{"key": "com.example:my-app"}],'
-                ' "paging": {"pageIndex": 1, "pageSize": 100, "total": 1e999}}'
-            ),
+            text=('{"components": [{"key": "com.example:my-app"}], "paging": {"pageIndex": 1, "pageSize": 100, "total": 1e999}}'),
         ),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))
@@ -122,10 +119,7 @@ async def test_query_projects_corrupt_page_index_does_not_crash(connector):
     respx.get(f"{API_BASE}/projects/search").mock(
         return_value=httpx.Response(
             200,
-            text=(
-                '{"components": [{"key": "com.example:my-app"}],'
-                ' "paging": {"pageIndex": 1e999, "pageSize": 100, "total": 5}}'
-            ),
+            text=('{"components": [{"key": "com.example:my-app"}], "paging": {"pageIndex": 1e999, "pageSize": 100, "total": 5}}'),
         ),
     )
     result = await connector.query(ConnectorQuery(resource="projects", limit=100))

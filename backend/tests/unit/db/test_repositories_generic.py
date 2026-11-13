@@ -66,9 +66,7 @@ class TestGenericRepository:
             ([], 0, True),
         ],
     )
-    def test_apply_tenant_filter(
-        self, repo: GenericRepository, column_descriptions: list, where_call_count: int, result_is_stmt: bool
-    ) -> None:
+    def test_apply_tenant_filter(self, repo: GenericRepository, column_descriptions: list, where_call_count: int, result_is_stmt: bool) -> None:
         stmt = MagicMock(spec=Select)
         stmt.column_descriptions = column_descriptions
         where_return = MagicMock(spec=Select)

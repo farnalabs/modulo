@@ -508,9 +508,7 @@ class TestDispatchWebhook:
             patch("farna.core.error_tracking.alert_dispatcher.record_alert_delivery_failed") as failed,
             caplog.at_level("WARNING", logger="farna.core.error_tracking.alert_dispatcher"),
         ):
-            await _dispatch_webhook(
-                make_alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x"
-            )
+            await _dispatch_webhook(make_alert(webhook_url="http://169.254.169.254/latest/meta-data"), "", "/admin/errors/x")
 
         failed.assert_called_once()
         assert any("alert.webhook_url_rejected" in rec.message for rec in caplog.records)

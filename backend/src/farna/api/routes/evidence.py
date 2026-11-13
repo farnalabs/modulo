@@ -179,19 +179,7 @@ async def _load_evidence_rows(
 
     Capped at :data:`_EVIDENCE_LIST_LIMIT` rows.
     """
-    if node_id is None:
-        subject_predicate = and_(
-            Evidence.subject_type == "run",
-            Evidence.subject_id == str(run_id),
-        )
-    else:
-        subject_predicate = or_(
-            and_(Evidence.subject_type == "run", Evidence.subject_id == str(run_id)),
-            and_(
-                Evidence.subject_type == "node_execution",
-                Evidence.subject_id == f"{run_id}:{node_id}",
-            ),
-        )
+    subject_predicate = and_(Evidence.subject_type == "run", Evidence.subject_id == str(run_id)) if node_id is None else or_(and_(Evidence.subject_type == "run", Evidence.subject_id == str(run_id)), and_(Evidence.subject_type == "node_execution", Evidence.subject_id == f"{run_id}:{node_id}"))
 
     stmt = select(Evidence).where(
         Evidence.organisation_id == organisation_id,

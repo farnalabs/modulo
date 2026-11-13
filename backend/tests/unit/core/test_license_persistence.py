@@ -183,9 +183,7 @@ async def test_install_stamps_the_installing_account_on_the_persisted_row(sessio
     await persist_installed_system_license(session, key, parked=False, updated_by=account_id)
 
     async with session.begin():
-        row = (
-            await session.execute(select(SystemConfig).where(SystemConfig.key == license_mod.SYSTEM_LICENSE_CONFIG_KEY))
-        ).scalar_one()
+        row = (await session.execute(select(SystemConfig).where(SystemConfig.key == license_mod.SYSTEM_LICENSE_CONFIG_KEY))).scalar_one()
 
     assert row.updated_by == account_id
 
@@ -385,9 +383,7 @@ async def test_refresh_does_not_clear_a_directly_stored_licence(session: AsyncSe
 # ── 9. Plan resolution refreshes before walking the ladder ──────────────────
 
 
-async def test_plan_resolution_refreshes_the_persisted_licence_first(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_plan_resolution_refreshes_the_persisted_licence_first(session: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[bool] = []
 
     async def _record_refresh(_session: Any, *, force: bool = False) -> bool:

@@ -89,9 +89,7 @@ async def _seed_org(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def _seed_snapshot(
-    session: AsyncSession, snapshot_id: uuid.UUID, graph_json: dict[str, object], *, version: int = 1
-) -> None:
+async def _seed_snapshot(session: AsyncSession, snapshot_id: uuid.UUID, graph_json: dict[str, object], *, version: int = 1) -> None:
     session.add(
         PipelineSnapshot(
             id=snapshot_id,

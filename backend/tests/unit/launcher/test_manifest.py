@@ -105,9 +105,7 @@ def test_signed_manifest_verifies(tmp_path: Path, test_trust_store: dict, test_s
         key_hex=test_signing_keys[_KEY_ID_CURRENT],
         key_id=_KEY_ID_CURRENT,
     )
-    verified = verify_manifest(
-        manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store
-    )
+    verified = verify_manifest(manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store)
     assert verified.release == "bundle-v1.2.0"
     assert verified.components["postgres"] == "16.10.1"
     verify_artifacts(tmp_path, verified)
@@ -123,9 +121,7 @@ def test_next_key_signs_and_verifies(tmp_path: Path, test_trust_store: dict, tes
         key_hex=test_signing_keys[_KEY_ID_NEXT],
         key_id=_KEY_ID_NEXT,
     )
-    verified = verify_manifest(
-        manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store
-    )
+    verified = verify_manifest(manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store)
     assert verified.release == "bundle-v1.2.0"
 
 
@@ -295,9 +291,7 @@ def test_manifest_signature_refusal_matrix(
     ],
     ids=["missing-signature", "extra-field", "non-string-key-id", "non-string-signature"],
 )
-def test_manifest_signature_envelope_rejects_invalid_shapes(
-    signature: Any, pattern: str, test_trust_store: dict
-) -> None:
+def test_manifest_signature_envelope_rejects_invalid_shapes(signature: Any, pattern: str, test_trust_store: dict) -> None:
     payload = json.dumps(_manifest_body(artifact_count=1), indent=2, sort_keys=True).encode("utf-8")
     with pytest.raises(ManifestSecurityError, match=re.escape(pattern)):
         verify_signature(payload, signature, trust_store=test_trust_store)
@@ -337,9 +331,7 @@ def test_missing_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_s
         key_hex=test_signing_keys[_KEY_ID_CURRENT],
         key_id=_KEY_ID_CURRENT,
     )
-    verified = verify_manifest(
-        manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store
-    )
+    verified = verify_manifest(manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store)
     (tmp_path / "runtime-checksums-1.txt").unlink()
     with pytest.raises(ManifestSecurityError, match="missing"):
         verify_artifacts(tmp_path, verified)
@@ -353,9 +345,7 @@ def test_tampered_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_
         key_hex=test_signing_keys[_KEY_ID_CURRENT],
         key_id=_KEY_ID_CURRENT,
     )
-    verified = verify_manifest(
-        manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store
-    )
+    verified = verify_manifest(manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store)
     tampered_path = tmp_path / "runtime-checksums-1.txt"
     tampered_path.write_text("tampered bytes", encoding="utf-8")
     with pytest.raises(ManifestSecurityError, match="MISMATCH"):
@@ -371,9 +361,7 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
         key_hex=test_signing_keys[_KEY_ID_CURRENT],
         key_id=_KEY_ID_CURRENT,
     )
-    verified = verify_manifest(
-        manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store
-    )
+    verified = verify_manifest(manifest_path.read_bytes(), read_signature_file(signature_path), trust_store=test_trust_store)
     with pytest.raises(ManifestSecurityError, match="escapes the bundle root"):
         verify_artifacts(tmp_path, verified)
 
@@ -390,9 +378,7 @@ def test_manifest_artifact_name_escape_refuses(tmp_path: Path, test_trust_store:
         "nested/../artifact.tgz",
     ],
 )
-def test_signed_manifest_rejects_non_bundle_path_shapes(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict, name: str
-) -> None:
+def test_signed_manifest_rejects_non_bundle_path_shapes(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict, name: str) -> None:
     body = _manifest_body(artifact_count=1)
     body["artifacts"][0]["name"] = name
     payload = json.dumps(body, indent=2, sort_keys=True).encode("utf-8")
@@ -400,9 +386,7 @@ def test_signed_manifest_rejects_non_bundle_path_shapes(
     signature_path = tmp_path / manifest_module.SIGNATURE_NAME
     manifest_path.write_bytes(payload)
     signature_path.write_text(
-        json.dumps(
-            sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=test_signing_keys[_KEY_ID_CURRENT])
-        ),
+        json.dumps(sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=test_signing_keys[_KEY_ID_CURRENT])),
         encoding="utf-8",
     )
     with pytest.raises(ManifestSecurityError, match="escapes the bundle root"):
@@ -464,9 +448,7 @@ def test_signed_manifest_rejects_final_symlink_and_nonregular_artifacts(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_verify_release_from_files_verifies_a_named_subset(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
-) -> None:
+def test_verify_release_from_files_verifies_a_named_subset(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     """The pre-extraction tarball check: one named artifact is verified."""
     body = _manifest_body(artifact_count=2)
     manifest_path, signature_path = _write_release_files(
@@ -488,9 +470,7 @@ def test_verify_release_from_files_verifies_a_named_subset(
     assert verified.checksum_for(name) == body["artifacts"][0]["sha256"]
 
 
-def test_verify_release_from_files_tampered_named_artifact_refuses(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
-) -> None:
+def test_verify_release_from_files_tampered_named_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     body = _manifest_body(artifact_count=1)
     manifest_path, signature_path = _write_release_files(
         tmp_path,
@@ -510,9 +490,7 @@ def test_verify_release_from_files_tampered_named_artifact_refuses(
         )
 
 
-def test_verify_release_from_files_uncovered_artifact_refuses(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
-) -> None:
+def test_verify_release_from_files_uncovered_artifact_refuses(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     """An artifact the manifest does not describe is refused outright."""
     body = _manifest_body(artifact_count=1)
     manifest_path, signature_path = _write_release_files(
@@ -531,9 +509,7 @@ def test_verify_release_from_files_uncovered_artifact_refuses(
         )
 
 
-def test_verify_release_from_files_none_verifies_every_artifact(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
-) -> None:
+def test_verify_release_from_files_none_verifies_every_artifact(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     """artifact_names=None verifies every artifact the manifest covers."""
     body = _manifest_body(artifact_count=2)
     manifest_path, signature_path = _write_release_files(
@@ -552,9 +528,7 @@ def test_verify_release_from_files_none_verifies_every_artifact(
     assert verified.release == "bundle-v1.2.0"
 
 
-def test_verify_release_from_files_none_refuses_missing_artifact(
-    tmp_path: Path, test_trust_store: dict, test_signing_keys: dict
-) -> None:
+def test_verify_release_from_files_none_refuses_missing_artifact(tmp_path: Path, test_trust_store: dict, test_signing_keys: dict) -> None:
     """artifact_names=None: a listed artifact missing from disk is a hard failure."""
     body = _manifest_body(artifact_count=2)
     manifest_path, signature_path = _write_release_files(
@@ -586,9 +560,7 @@ def test_shipped_trust_store_has_only_the_provisioned_current_key() -> None:
     label, public_hex = manifest_module._TRUST_ROWS[_KEY_ID_CURRENT]
     assert label == "Modulo production release signing key (2026-A)"
     assert len(public_hex) == 64
-    assert bytes.fromhex(public_hex) == bytes.fromhex(
-        "73f7dd1483fff0c0df45d706ae9ce7a68151942b8e2e8bc715b5d9beb719b5b0"
-    )
+    assert bytes.fromhex(public_hex) == bytes.fromhex("73f7dd1483fff0c0df45d706ae9ce7a68151942b8e2e8bc715b5d9beb719b5b0")
     assert _KEY_ID_NEXT not in manifest_module._TRUST_ROWS
 
 
@@ -600,10 +572,7 @@ def test_shipped_verification_uses_the_provisioned_current_key() -> None:
         pytest.skip("BUNDLE_MANIFEST_SIGNING_KEY is not available in the test environment")
     signature = sign_release_bytes(payload, key_id=_KEY_ID_CURRENT, private_key_hex=private_hex)
     public_hex = manifest_module._TRUST_ROWS[_KEY_ID_CURRENT][1]
-    assert (
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex)).public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
-        == public_hex
-    )
+    assert Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_hex)).public_bytes(Encoding.Raw, PublicFormat.Raw).hex() == public_hex
     assert manifest_module.verify_signature(payload, signature) == _KEY_ID_CURRENT
 
 
@@ -654,10 +623,7 @@ def test_installer_embedded_store_matches_trust_rows() -> None:
         slot = "current" if key_id == _KEY_ID_CURRENT else "next"
         expected_b64 = _public_b64(public_hex)
         assert embedded[slot], f"install.sh slot '{slot}' ({key_id}) must be provisioned"
-        assert embedded[slot] == expected_b64, (
-            f"install.sh's embedded '{slot}' key differs from _TRUST_ROWS[{key_id}] — the two "
-            "trust-store assemblies MUST carry the SAME public keys (both from one provisioning)"
-        )
+        assert embedded[slot] == expected_b64, f"install.sh's embedded '{slot}' key differs from _TRUST_ROWS[{key_id}] — the two trust-store assemblies MUST carry the SAME public keys (both from one provisioning)"
 
 
 def test_install_sh_requires_explicit_key_id_and_signature_shape() -> None:
@@ -667,9 +633,7 @@ def test_install_sh_requires_explicit_key_id_and_signature_shape() -> None:
     assert "duplicate field" in install_source
 
 
-def test_sign_roundtrips_through_installersh_sig_extraction(
-    tmp_path: Path, test_trust_store: dict, sig_factory: Any
-) -> None:
+def test_sign_roundtrips_through_installersh_sig_extraction(tmp_path: Path, test_trust_store: dict, sig_factory: Any) -> None:
     """Cross-artifact: install.sh's .sig extraction patterns (the same sed
     regexes it runs at install time) capture exactly what verify_signature
     accepts, and the signed bytes round-trip through the injected store."""

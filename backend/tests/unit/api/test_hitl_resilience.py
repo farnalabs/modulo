@@ -897,9 +897,7 @@ class TestHumanOnlyRestEnforcement:
         pipeline_nodes: object = None,
         claim_row: object = None,
     ) -> None:
-        mock_session = _hitl_session(
-            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
-        )
+        mock_session = _hitl_session(run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -1148,9 +1146,7 @@ class TestHumanOnlyClaimEnforcement:
         pipeline_nodes: object = None,
         claim_row: object = None,
     ) -> None:
-        mock_session = _hitl_session(
-            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
-        )
+        mock_session = _hitl_session(run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session
@@ -1345,9 +1341,7 @@ class TestHumanOnlyClientKindEnforcement:
         pipeline_nodes: object = None,
         claim_row: object = None,
     ) -> None:
-        mock_session = _hitl_session(
-            run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row
-        )
+        mock_session = _hitl_session(run, snapshot=snapshot, edge=edge, pipeline_nodes=pipeline_nodes, claim_row=claim_row)
 
         async def override_session() -> AsyncGenerator[AsyncMock, None]:
             yield mock_session

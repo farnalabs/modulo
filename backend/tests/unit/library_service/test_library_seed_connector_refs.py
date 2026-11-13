@@ -23,20 +23,10 @@ def test_seeded_agents_were_found() -> None:
 
 
 def test_no_seeded_agent_has_bare_string_connector_ref() -> None:
-    bare = [
-        (label, ref)
-        for label, entry in _seeded_agent_entries()
-        for ref in entry.get("connector_type_refs", [])
-        if not isinstance(ref, dict)
-    ]
+    bare = [(label, ref) for label, entry in _seeded_agent_entries() for ref in entry.get("connector_type_refs", []) if not isinstance(ref, dict)]
     assert not bare, f"bare-string connector_type_refs: {bare}"
 
 
 def test_seeded_agent_refs_have_type_and_capabilities() -> None:
-    bad = [
-        (label, ref)
-        for label, entry in _seeded_agent_entries()
-        for ref in entry.get("connector_type_refs", [])
-        if not (isinstance(ref.get("connector_type"), str) and isinstance(ref.get("capabilities"), list))
-    ]
+    bad = [(label, ref) for label, entry in _seeded_agent_entries() for ref in entry.get("connector_type_refs", []) if not (isinstance(ref.get("connector_type"), str) and isinstance(ref.get("capabilities"), list))]
     assert not bad, f"malformed refs: {bad}"

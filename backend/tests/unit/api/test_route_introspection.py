@@ -310,10 +310,7 @@ def test_every_read_route_is_authorised_or_exempt() -> None:
             continue
         unauthorised.append(f"{key[0]} {key[1]}")
 
-    assert not unauthorised, (
-        "Read routes with no permission tag, no principal dependency, and no "
-        "read-exempt entry:\n" + "\n".join(unauthorised)
-    )
+    assert not unauthorised, "Read routes with no permission tag, no principal dependency, and no read-exempt entry:\n" + "\n".join(unauthorised)
 
 
 def test_read_exempt_allowlist_entries_exist() -> None:
@@ -334,11 +331,7 @@ def test_route_level_permission_gates_are_visible() -> None:
     checked = 0
     invisible = []
     for route in get_all_apiroutes(app):
-        declared = sorted(
-            d.permission
-            for d in (getattr(route, "dependencies", None) or [])
-            if getattr(d, "permission", None) is not None
-        )
+        declared = sorted(d.permission for d in (getattr(route, "dependencies", None) or []) if getattr(d, "permission", None) is not None)
         if not declared:
             continue
         checked += 1
@@ -362,20 +355,14 @@ def test_verification_key_route_level_gate_is_visible() -> None:
     route-dependency read regresses, this fails.
     """
     route = next(
-        (
-            r
-            for r in get_all_apiroutes(app)
-            if r.path == "/api/v1/admin/audit/verification-key" and "GET" in (r.methods or set())
-        ),
+        (r for r in get_all_apiroutes(app) if r.path == "/api/v1/admin/audit/verification-key" and "GET" in (r.methods or set())),
         None,
     )
     assert route is not None, "verification-key route not found — the fixture moved"
     tag = get_permission_tag(route)
     assert tag is not None, "verification-key route-level permission gate is invisible to get_permission_tag"
     tags = tag.get("tags", [tag])
-    assert any(t["permission"] == "audit.manage" and t["permission_kind"] == "tenant" for t in tags), (
-        f"verification-key should carry the route-level audit.manage (tenant) tag; got {tags}"
-    )
+    assert any(t["permission"] == "audit.manage" and t["permission_kind"] == "tenant" for t in tags), f"verification-key should carry the route-level audit.manage (tenant) tag; got {tags}"
 
 
 def test_permission_keys_resolve_in_registry() -> None:
@@ -439,9 +426,7 @@ def test_run_trigger_status_use_any_credential() -> None:
     for route in get_mutating_routes(app):
         tag = get_permission_tag(route)
         if tag and tag["permission"] in ("run.trigger", "run.status") and route.path in api_key_paths:
-            assert tag["permission_kind"] == "tenant_or_api_key", (
-                f"{route.path} should use tenant_or_api_key, got {tag['permission_kind']}"
-            )
+            assert tag["permission_kind"] == "tenant_or_api_key", f"{route.path} should use tenant_or_api_key, got {tag['permission_kind']}"
 
 
 def test_team_membership_gate_present_on_team_pipeline_routes() -> None:
@@ -493,10 +478,7 @@ def test_no_duplicate_route_registrations() -> None:
             else:
                 keys[key] = route.path
 
-    assert not duplicates, (
-        "Routes registered more than once (first registration wins, so any "
-        "error-handling wrapper on the second is dead code):\n" + "\n".join(f"{m} {p}" for m, p in duplicates)
-    )
+    assert not duplicates, "Routes registered more than once (first registration wins, so any error-handling wrapper on the second is dead code):\n" + "\n".join(f"{m} {p}" for m, p in duplicates)
 
 
 def test_handle_db_errors_wrapper_active_on_regexposed_routes() -> None:

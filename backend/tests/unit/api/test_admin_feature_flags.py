@@ -100,11 +100,7 @@ def _settings_with_key(modulo_license_key: str) -> Settings:
 
 def _sign_license_payload(payload: dict[str, Any], private_key: str = _TEST_PRIV) -> str:
     sig_hex = sign_primitive(payload, private_key)
-    payload_b64 = (
-        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode())
-        .decode()
-        .rstrip("=")
-    )
+    payload_b64 = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()).decode().rstrip("=")
     sig_b64 = base64.urlsafe_b64encode(bytes.fromhex(sig_hex)).decode().rstrip("=")
     return f"{payload_b64}.{sig_b64}"
 
@@ -961,9 +957,7 @@ def _org_with_overrides(**overrides: bool) -> MagicMock:
 class TestOrgOverrideCacheInvalidation:
     _ORG_ID = "00000000-0000-0000-0000-000000000001"
 
-    def test_set_retired_internal_override_returns_404_without_writing(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_set_retired_internal_override_returns_404_without_writing(self, ordinary_internal_flag_client: TestClient) -> None:
         """Caller with library.search.in_dev passes internal gate and receives 404 for retired flag."""
         with (
             patch(
@@ -991,13 +985,9 @@ class TestOrgOverrideCacheInvalidation:
         assert response.status_code == 403
         assert response.json()["detail"] == "Permission 'library.search.in_dev' is not granted to this API key"
 
-    def test_set_system_maps_override_is_denied_for_ordinary_caller(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_set_system_maps_override_is_denied_for_ordinary_caller(self, ordinary_internal_flag_client: TestClient) -> None:
         """library.search.in_dev alone does not grant system_maps access."""
-        response = ordinary_internal_flag_client.put(
-            "/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True}
-        )
+        response = ordinary_internal_flag_client.put("/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True})
         assert response.status_code == 403
 
     def test_set_system_maps_override_succeeds_for_internal_caller(self, internal_client: TestClient) -> None:
@@ -1018,9 +1008,7 @@ class TestOrgOverrideCacheInvalidation:
                 return_value=AsyncMock(),
             ),
         ):
-            response = internal_client.put(
-                "/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True}
-            )
+            response = internal_client.put("/api/v1/admin/feature-flags/system_maps/org-override", json={"enabled": True})
         assert response.status_code == 200
         assert response.json()["override"] is True
 
@@ -1103,9 +1091,7 @@ class TestOrgOverrideCacheInvalidation:
 
 
 class TestOrgOverrideRoundTrip:
-    def test_get_system_maps_override_is_denied_for_ordinary_caller(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_get_system_maps_override_is_denied_for_ordinary_caller(self, ordinary_internal_flag_client: TestClient) -> None:
         """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.get("/api/v1/admin/feature-flags/system_maps/org-override")
         assert response.status_code == 403
@@ -1206,9 +1192,7 @@ class TestOrgOverrideRoundTrip:
 
 
 class TestRetiredOrgOverrideAccess:
-    def test_clear_system_maps_override_is_denied_for_ordinary_caller(
-        self, ordinary_internal_flag_client: TestClient
-    ) -> None:
+    def test_clear_system_maps_override_is_denied_for_ordinary_caller(self, ordinary_internal_flag_client: TestClient) -> None:
         """library.search.in_dev alone does not grant system_maps access."""
         response = ordinary_internal_flag_client.delete("/api/v1/admin/feature-flags/system_maps/org-override")
         assert response.status_code == 403
@@ -1970,10 +1954,7 @@ class TestFlagVisibilityHelpers:
         assert admin_feature_flags._flag_visible_to_caller("system_maps", internal_system_maps_access=False) is False
 
     def test_retired_internal_flag_is_hidden(self) -> None:
-        assert (
-            admin_feature_flags._flag_visible_to_caller("lifecycle_map_journeys", internal_system_maps_access=True)
-            is False
-        )
+        assert admin_feature_flags._flag_visible_to_caller("lifecycle_map_journeys", internal_system_maps_access=True) is False
 
     def test_ordinary_flag_is_visible(self) -> None:
         assert admin_feature_flags._flag_visible_to_caller("webhook_trigger", internal_system_maps_access=False) is True

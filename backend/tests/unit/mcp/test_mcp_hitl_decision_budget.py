@@ -67,9 +67,7 @@ class TestHitlDecisionClientKey(_AuthContext):
         from farna.api.mcp_server import _ctx_key_scope
 
         _ctx_key_scope.set("user")
-        assert _hitl_decision_client_key() == (
-            f"hitl_decision:{_PLACEHOLDER_ORG_ID}:api_key:user:{_PLACEHOLDER_USER_ID}"
-        )
+        assert _hitl_decision_client_key() == (f"hitl_decision:{_PLACEHOLDER_ORG_ID}:api_key:user:{_PLACEHOLDER_USER_ID}")
 
     def test_oauth_caller_buckets_by_user(self) -> None:
         from farna.api.mcp_server import _ctx_auth_type

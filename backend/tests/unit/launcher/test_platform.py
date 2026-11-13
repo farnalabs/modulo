@@ -16,9 +16,7 @@ def test_linux_data_dir_preserves_xdg_contract(monkeypatch: pytest.MonkeyPatch, 
     assert platform_module.default_data_dir() == tmp_path / "xdg" / "modulo" / "data"
 
 
-def test_windows_data_dir_uses_programdata_without_importing_windows_modules(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_windows_data_dir_uses_programdata_without_importing_windows_modules(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(platform_module.sys, "platform", "win32")
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path))
 

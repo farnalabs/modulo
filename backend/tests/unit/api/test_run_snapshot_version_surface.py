@@ -337,10 +337,7 @@ async def test_do_list_runs_fetches_snapshot_versions_in_one_query() -> None:
     assert [item["snapshot_version"] for item in items] == [11, 22, 33, None]
 
     snapshot_stmts = _snapshot_statements(session)
-    assert len(snapshot_stmts) == 1, (
-        "the runs list must load snapshot versions for the whole page in ONE "
-        f"statement, not per row; got {len(snapshot_stmts)}: {snapshot_stmts}"
-    )
+    assert len(snapshot_stmts) == 1, f"the runs list must load snapshot versions for the whole page in ONE statement, not per row; got {len(snapshot_stmts)}: {snapshot_stmts}"
     # The single statement must batch the page's ids (an IN over all three),
     # not address any one of them alone. Compile with literal binds so the
     # parameters are visible in the SQL text.

@@ -322,9 +322,7 @@ def _clone_with_outcomes(client: TestClient, outcomes: list[object]) -> list[Res
 def test_clone_pipeline_concurrent_same_name_yields_one_success_one_409(client: TestClient) -> None:
     """Both requests pass the availability check; the unique constraint rejects the
     loser with the *named* conflict 409, not ``handle_db_errors``' generic 409."""
-    violation = IntegrityError(
-        "INSERT INTO pipelines", {}, Exception('duplicate key value violates unique constraint "uq_pipelines_org_name"')
-    )
+    violation = IntegrityError("INSERT INTO pipelines", {}, Exception('duplicate key value violates unique constraint "uq_pipelines_org_name"'))
     winner = _make_pipeline()
     winner.id = uuid.uuid4()
     winner.name = "Dup"

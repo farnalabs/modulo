@@ -190,9 +190,7 @@ async def test_get_or_create_draft_creates_map_when_name_is_free() -> None:
 async def test_get_or_create_draft_translates_lost_insert_race_to_conflict() -> None:
     """The DB guard rejects a concurrent duplicate; report it as the same 409."""
     repository = AsyncMock()
-    repository.create_map = AsyncMock(
-        side_effect=IntegrityError("INSERT", {}, Exception("duplicate key value violates unique constraint"))
-    )
+    repository.create_map = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("duplicate key value violates unique constraint")))
     winner = SystemMap(organisation_id=_ORG_ID, name="Delivery", account_id=_USER_ID, id=_MAP_ID)
     session = _mock_session()
     session.execute.side_effect = [_Result(None), _Result(winner)]
@@ -213,9 +211,7 @@ async def test_get_or_create_draft_translates_lost_insert_race_to_conflict() -> 
 async def test_get_or_create_draft_reraises_integrity_error_without_a_visible_winner() -> None:
     """A non-name integrity failure is not a conflict and must surface unchanged."""
     repository = AsyncMock()
-    repository.create_map = AsyncMock(
-        side_effect=IntegrityError("INSERT", {}, Exception("insert or update violates foreign key constraint"))
-    )
+    repository.create_map = AsyncMock(side_effect=IntegrityError("INSERT", {}, Exception("insert or update violates foreign key constraint")))
     session = _mock_session()
     session.execute.side_effect = [_Result(None), _Result(None)]
 

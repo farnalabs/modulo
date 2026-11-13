@@ -59,9 +59,7 @@ class _FakeSession:
 
     async def execute(self, *args, **kwargs):
         if not self.in_tx:
-            raise InvalidRequestError(
-                "Autobegin is disabled on this Session; please call session.begin() to start a new transaction"
-            )
+            raise InvalidRequestError("Autobegin is disabled on this Session; please call session.begin() to start a new transaction")
         result = MagicMock()
         result.scalars.return_value.all.return_value = []
         return result

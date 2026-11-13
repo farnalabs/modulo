@@ -282,12 +282,8 @@ def test_delete_team_with_owned_resources_returns_409() -> None:
 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_tenant_user] = lambda: TenantPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin@test", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan

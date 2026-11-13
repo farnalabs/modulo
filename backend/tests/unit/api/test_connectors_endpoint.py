@@ -120,9 +120,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -150,9 +148,7 @@ def viewer_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="vieweruser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="viewer")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -1060,9 +1056,7 @@ def test_patch_identity_only_edit_round_trip_reads_new_identity(client: TestClie
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": json.dumps(incoming)})
     assert resp.status_code == 200
-    stored_after = json.loads(
-        Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode()
-    )
+    stored_after = json.loads(Fernet(_FERNET_KEY.encode()).decrypt(captured["updates"]["credentials_ciphertext"]).decode())
     auth = RestConnector._normalise_auth(stored_after)
     assert auth["header_name"] == "X-Key-V2"
     assert auth["api_key"] == "secret123"
@@ -1199,11 +1193,7 @@ def test_patch_rest_masked_secret_on_undecryptable_ciphertext_still_500(client: 
     ):
         resp = client.patch(
             f"/api/v1/connectors/{_CONNECTOR_ID}",
-            json={
-                "credentials": json.dumps(
-                    {"auth_mode": "api_key", "api_key": SENSITIVE_VALUE_MASK, "in": "header", "header_name": "X-Key"}
-                )
-            },
+            json={"credentials": json.dumps({"auth_mode": "api_key", "api_key": SENSITIVE_VALUE_MASK, "in": "header", "header_name": "X-Key"})},
         )
     assert resp.status_code == 500
     assert "could not be decrypted" in resp.json()["detail"]
@@ -1438,9 +1428,7 @@ def test_update_connector_null_credentials_skips_write(client: TestClient) -> No
     ):
         resp = client.patch(f"/api/v1/connectors/{_CONNECTOR_ID}", json={"credentials": None})
     assert resp.status_code == 200
-    assert "credentials_ciphertext" not in captured["updates"], (
-        "Explicit null credentials must NOT wipe the stored secret"
-    )
+    assert "credentials_ciphertext" not in captured["updates"], "Explicit null credentials must NOT wipe the stored secret"
 
 
 def test_connector_response_surfaces_degraded_markers(client: TestClient) -> None:
@@ -1594,9 +1582,7 @@ def test_overlay_masked_or_empty_secret_preserved() -> None:
 def test_overlay_real_new_secret_replaces() -> None:
     """FAR-504 (b): a real (non-empty, non-masked) secret value replaces the stored one."""
     previous = {"auth_mode": "api_key", "api_key": "old-secret", "in": "header", "header_name": "X-Key"}
-    merged = _overlay(
-        previous, {"auth_mode": "api_key", "api_key": "new-secret", "in": "query", "query_param_name": "token"}
-    )
+    merged = _overlay(previous, {"auth_mode": "api_key", "api_key": "new-secret", "in": "query", "query_param_name": "token"})
     assert merged["api_key"] == "new-secret"
     assert merged["in"] == "query"
     assert merged["query_param_name"] == "token"
@@ -1934,9 +1920,7 @@ def test_list_connectors_programming_error_returns_501(client: TestClient) -> No
 
 def test_list_connectors_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
-        patch(
-            "farna.api.routes.connectors.list_connector_instances", side_effect=SQLAlchemyError("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.connectors.list_connector_instances", side_effect=SQLAlchemyError("mock", "mock", "mock")),
         patch("farna.api.routes.connectors.set_rls_org"),
         patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
@@ -1966,9 +1950,7 @@ def test_get_connector_integrity_error_returns_409(client: TestClient) -> None:
 
 def test_get_connector_programming_error_returns_501(client: TestClient) -> None:
     with (
-        patch(
-            "farna.api.routes.connectors.get_connector_instance", side_effect=ProgrammingError("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.connectors.get_connector_instance", side_effect=ProgrammingError("mock", "mock", "mock")),
         patch("farna.api.routes.connectors.set_rls_org"),
         patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
@@ -1978,9 +1960,7 @@ def test_get_connector_programming_error_returns_501(client: TestClient) -> None
 
 def test_get_connector_sqlalchemy_error_returns_503(client: TestClient) -> None:
     with (
-        patch(
-            "farna.api.routes.connectors.get_connector_instance", side_effect=SQLAlchemyError("mock", "mock", "mock")
-        ),
+        patch("farna.api.routes.connectors.get_connector_instance", side_effect=SQLAlchemyError("mock", "mock", "mock")),
         patch("farna.api.routes.connectors.set_rls_org"),
         patch("farna.api.routes.connectors.set_rls_user_context"),
     ):
@@ -2233,9 +2213,7 @@ def test_create_github_without_base_url_verifies_against_default(client: TestCli
     assert seen["base_url"] == "https://api.github.com"
 
 
-def test_create_github_unreachable_instance_is_non_fatal_with_warning_header(
-    client: TestClient, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_create_github_unreachable_instance_is_non_fatal_with_warning_header(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     """FAR-1762: an unreachable instance must NOT block creation, and must NOT
     be silent — the connector is created and the response carries the
     ``X-Modulo-Verification-Warning`` header saying the token was not verified.
@@ -2339,9 +2317,7 @@ async def test_verify_github_token_defensive_missing_payload_raises_500() -> Non
     ``python -O`` and silently pass ``None`` downstream."""
     existing = _make_github_patch_connector()
     with pytest.raises(HTTPException) as exc_info:
-        await connectors_module._verify_github_token_for_update(
-            existing, credentials_updated=True, new_credentials=None
-        )
+        await connectors_module._verify_github_token_for_update(existing, credentials_updated=True, new_credentials=None)
     assert exc_info.value.status_code == 500
     assert "Credential payload missing" in exc_info.value.detail
 
@@ -2574,9 +2550,7 @@ async def test_patch_connector_returns_2xx_persists_row_and_get_reflects_change(
         assert resp.json()["name"] == "Renamed"
 
         async with factory() as verify_session, verify_session.begin():
-            stored = (
-                await verify_session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))
-            ).scalar_one()
+            stored = (await verify_session.execute(select(ConnectorInstance).where(ConnectorInstance.id == connector_id))).scalar_one()
         assert stored.name == "Renamed"
 
         with patch("farna.api.routes.connectors.get_connector_instance", _real_get_connector_instance):

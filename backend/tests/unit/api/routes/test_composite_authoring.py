@@ -109,9 +109,7 @@ def _make_agent_mock() -> MagicMock:
     a.id = _AGENT_ID
     a.organisation_id = _ORG_ID
     a.name = "Test Agent"
-    a.prompt_template = (
-        "Analyze this input and provide {{parameter.tone}} feedback with {{parameter.max_length}} words."
-    )
+    a.prompt_template = "Analyze this input and provide {{parameter.tone}} feedback with {{parameter.max_length}} words."
     return a
 
 
@@ -190,9 +188,7 @@ class TestCompositeEditor:
         )
         with (
             patch("farna.api.routes.composite_templates.get_composite_template", return_value=template),
-            patch(
-                "farna.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)
-            ),
+            patch("farna.api.routes.composite_templates.update_composite_template", new=AsyncMock(return_value=template)),
             patch("farna.api.routes.composite_templates.set_rls_org"),
         ):
             resp = client.put(
@@ -384,9 +380,7 @@ class TestSaveAsComposite:
     def test_save_as_composite_carries_team_scope_gate(self) -> None:
         from tests.unit.api.route_introspection import get_mutating_routes, get_permission_tag
 
-        route = next(
-            r for r in get_mutating_routes(app) if r.path == "/api/v1/pipelines/{pipeline_id}/save-as-composite"
-        )
+        route = next(r for r in get_mutating_routes(app) if r.path == "/api/v1/pipelines/{pipeline_id}/save-as-composite")
         tag = get_permission_tag(route)
         assert tag is not None, "save-as-composite lost its permission tags"
         assert any(t["permission"] == "pipeline.create" for t in tag["tags"])

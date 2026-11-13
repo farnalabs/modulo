@@ -48,19 +48,13 @@ class TestAuditApiHasNoMutatingEndpoints:
     audit_route_path = BACKEND_ROOT / "src" / "farna" / "api" / "routes" / "audit.py"
 
     def test_audit_router_has_no_put(self) -> None:
-        assert "put" not in _collect_mutating_methods(self.audit_route_path), (
-            "Audit router must not expose PUT endpoints"
-        )
+        assert "put" not in _collect_mutating_methods(self.audit_route_path), "Audit router must not expose PUT endpoints"
 
     def test_audit_router_has_no_patch(self) -> None:
-        assert "patch" not in _collect_mutating_methods(self.audit_route_path), (
-            "Audit router must not expose PATCH endpoints"
-        )
+        assert "patch" not in _collect_mutating_methods(self.audit_route_path), "Audit router must not expose PATCH endpoints"
 
     def test_audit_router_has_no_delete(self) -> None:
-        assert "delete" not in _collect_mutating_methods(self.audit_route_path), (
-            "Audit router must not expose DELETE endpoints"
-        )
+        assert "delete" not in _collect_mutating_methods(self.audit_route_path), "Audit router must not expose DELETE endpoints"
 
     def test_audit_router_has_only_get_and_post(self) -> None:
         methods = _collect_mutating_methods(self.audit_route_path)
@@ -82,10 +76,7 @@ class TestAuditOrmImmutability:
 
     async def _seed_org(self, db_session: AsyncSession, org_id: uuid.UUID, suffix: str = "") -> None:
         await db_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": f"Audit Immutability Org{suffix}", "slug": f"audit-imm-{org_id.hex[:8]}"},
         )
         await db_session.commit()
@@ -194,21 +185,14 @@ class TestEveryMutatingRouteEmitsAuditEvent:
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 for deco in node.decorator_list:
-                    if (
-                        isinstance(deco, ast.Call)
-                        and isinstance(deco.func, ast.Attribute)
-                        and deco.func.attr in _MUTATING_METHODS
-                    ):
+                    if isinstance(deco, ast.Call) and isinstance(deco.func, ast.Attribute) and deco.func.attr in _MUTATING_METHODS:
                         has_mutating = True
                         break
 
         if not has_mutating:
             pytest.skip(f"{route_file.name} has no mutating routes")
 
-        assert "append_audit_event" in source, (
-            f"{route_file.name} has mutating HTTP methods but does not "
-            f"reference append_audit_event — every mutation must be audited"
-        )
+        assert "append_audit_event" in source, f"{route_file.name} has mutating HTTP methods but does not reference append_audit_event — every mutation must be audited"
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +240,7 @@ class TestAuditChainIntegrity:
 
         org_id = uuid.uuid4()
         await db_session.execute(
-            text(
-                "INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) "
-                "VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"
-            ),
+            text("INSERT INTO organisations (id, name, slug, settings_json, otel_config_json) VALUES (:id, :name, :slug, '{}'::json, '{}'::json)"),
             {"id": str(org_id), "name": "Chain Test Org", "slug": f"chain-{org_id.hex[:8]}"},
         )
         await db_session.commit()
@@ -302,6 +283,4 @@ class TestAuditChainIntegrity:
         # before the mutation attempt (the tamper is still detected, nothing
         # was corrupted further).
         result_after = await verify_chain(db_session, org_id)
-        assert result_after == result_before_delete, (
-            f"Chain state changed by failed mutation: {result_before_delete} -> {result_after}"
-        )
+        assert result_after == result_before_delete, f"Chain state changed by failed mutation: {result_before_delete} -> {result_after}"

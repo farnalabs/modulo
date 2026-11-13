@@ -395,9 +395,7 @@ class TestRunConcurrencyQueryRateLimit:
             patch.object(svc, "_rate_limited", return_value=True),
             pytest.raises(AnalyticsRateLimitedError, match="Rate limit"),
         ):
-            await run_concurrency_query(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=MagicMock(), settings=_settings()
-            )
+            await run_concurrency_query(org_id=_ORG, params=svc.AnalyticsParams(), factory=MagicMock(), settings=_settings())
 
 
 # ---------------------------------------------------------------------------
@@ -414,9 +412,7 @@ class TestExportFilters:
 
     def test_org_and_date_bounds_always_present(self) -> None:
         from_, to_ = self._bounds()
-        _conditions, bind, _needs_join = _export_filters(
-            org_id=_ORG, params=svc.AnalyticsParams(), effective_from=from_, effective_to=to_
-        )
+        _conditions, bind, _needs_join = _export_filters(org_id=_ORG, params=svc.AnalyticsParams(), effective_from=from_, effective_to=to_)
         assert bind["org_id"] == _ORG
         assert bind["date_from"] == date(2026, 8, 1)
         assert bind["date_to"] == date(2026, 8, 6)
@@ -431,9 +427,7 @@ class TestExportFilters:
             error_code="node_timeout",
             folder_id=uuid.uuid4(),
         )
-        conditions, bind, needs_join = _export_filters(
-            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
-        )
+        conditions, bind, needs_join = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
         assert bind["trigger_type"] == "cron"
         assert bind["status"] == "failed"
         assert bind["pipeline_ids"] == [pid]
@@ -448,25 +442,19 @@ class TestExportFilters:
         from_, to_ = self._bounds()
         membership = uuid.uuid4()
         explicit = uuid.uuid4()
-        conditions, bind, needs_join = _export_filters(
-            org_id=_ORG, params=svc.AnalyticsParams(team_ids=(membership,)), effective_from=from_, effective_to=to_
-        )
+        conditions, bind, needs_join = _export_filters(org_id=_ORG, params=svc.AnalyticsParams(team_ids=(membership,)), effective_from=from_, effective_to=to_)
         assert needs_join is True
         assert bind["scoped_team_ids"] == [membership]
         compiled = str(sa_.select(sa_.text("1")).where(*conditions).compile())
         assert "COALESCE" in compiled.upper()
 
-        _merged_conditions, merged_bind, merged_join = _export_filters(
-            org_id=_ORG, params=svc.AnalyticsParams(team_id=explicit), effective_from=from_, effective_to=to_
-        )
+        _merged_conditions, merged_bind, merged_join = _export_filters(org_id=_ORG, params=svc.AnalyticsParams(team_id=explicit), effective_from=from_, effective_to=to_)
         assert merged_join is True
         assert merged_bind["scoped_team_ids"] == [explicit]
 
     def test_team_boundary_empty_memberships_fail_closed(self) -> None:
         from_, to_ = self._bounds()
-        conditions, bind, needs_join = _export_filters(
-            org_id=_ORG, params=svc.AnalyticsParams(team_ids=()), effective_from=from_, effective_to=to_
-        )
+        conditions, bind, needs_join = _export_filters(org_id=_ORG, params=svc.AnalyticsParams(team_ids=()), effective_from=from_, effective_to=to_)
         assert "scoped_team_ids" not in bind
         compiled = str(sa_.select(sa_.text("1")).where(*conditions).compile())
         assert "IS NULL" in compiled.upper()
@@ -482,9 +470,7 @@ class TestExportFilters:
 
         from_, to_ = self._bounds()
         params = svc.AnalyticsParams(error_code="harness.unknown")
-        conditions, bind, _needs_join = _export_filters(
-            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
-        )
+        conditions, bind, _needs_join = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
         assert bind["error_codes"] == sorted(known_error_codes() - {"harness.unknown"})
         assert "harness.unknown" not in bind["error_codes"]
         assert "task_failure" in bind["error_codes"]
@@ -497,9 +483,7 @@ class TestExportFilters:
         # behaviour on the export surface too — it matches only its own literal.
         from_, to_ = self._bounds()
         params = svc.AnalyticsParams(error_code="SomeMysteryError")
-        conditions, bind, _needs_join = _export_filters(
-            org_id=_ORG, params=params, effective_from=from_, effective_to=to_
-        )
+        conditions, bind, _needs_join = _export_filters(org_id=_ORG, params=params, effective_from=from_, effective_to=to_)
         assert set(bind["error_codes"]) == {"SomeMysteryError", "harness.unknown"}
         cond = conditions[-1]
         compiled = str(cond.compile())
@@ -644,9 +628,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(AnalyticsMigrationRequiredError, match="migrations"),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
     async def test_dbapi_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=DBAPIError("stmt", {}, ConnectionError("down")))
@@ -655,9 +637,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
     async def test_rate_limited_raises(self) -> None:
         with (
@@ -673,9 +653,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(AnalyticsQueryTimeoutError, match="timeout"),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
     async def test_sqlalchemy_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=SQLAlchemyError("boom"))
@@ -684,9 +662,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
     async def test_unexpected_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=RuntimeError("kaboom"))
@@ -695,9 +671,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
     async def test_cancelled_error_propagates_untouched(self) -> None:
         session = _FakeSession(exc=asyncio.CancelledError())
@@ -706,9 +680,7 @@ class TestExportFacts:
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
             pytest.raises(asyncio.CancelledError),
         ):
-            await export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            await export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
 
 
 # ---------------------------------------------------------------------------
@@ -955,9 +927,7 @@ class TestStreamExportFacts:
         return out, mock_rate, mock_rls, mock_user
 
     async def test_streams_every_row_across_keyset_pages(self) -> None:
-        rows = [
-            self._full_row(run_date=date(2026, 8, 1), created_at=datetime(2026, 8, 1, tzinfo=UTC)) for _ in range(5)
-        ]
+        rows = [self._full_row(run_date=date(2026, 8, 1), created_at=datetime(2026, 8, 1, tzinfo=UTC)) for _ in range(5)]
         for i, row in enumerate(rows):
             row.run_date = date(2026, 8, i + 1)
             row.created_at = datetime(2026, 8, i + 1, tzinfo=UTC)
@@ -971,9 +941,7 @@ class TestStreamExportFacts:
 
         # Executes: 2 set_config preamble + 3 data pages. The first data page has
         # NO cursor; pages 2 and 3 must carry the previous page's last-row cursor.
-        non_prelude = [
-            i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))
-        ]
+        non_prelude = [i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))]
         assert len(non_prelude) == 3, "5 rows at page_size=2 must be fetched in exactly 3 pages"
         page1_params = session.executed_params[non_prelude[0]]
         assert "scan_cur_run_id" not in page1_params, "the first page has no cursor"
@@ -991,9 +959,7 @@ class TestStreamExportFacts:
         session = _ScanSession([rows[0:2], rows[2:4], []])
         out, *_ = await self._scan(session, page_size=2)
         assert len(out) == 4
-        non_prelude = [
-            i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))
-        ]
+        non_prelude = [i for i, s in enumerate(session.executed) if not (isinstance(s, type(text("x"))) and "set_config" in str(s))]
         assert len(non_prelude) == 3, "an exactly-full final page issues a confirming short probe"
 
     async def test_empty_org_streams_nothing(self) -> None:
@@ -1003,9 +969,7 @@ class TestStreamExportFacts:
 
     async def test_rate_limited_raises_before_any_query(self) -> None:
         session = _ScanSession([[]])
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=True),
             pytest.raises(AnalyticsRateLimitedError, match="Rate limit"),
@@ -1026,9 +990,7 @@ class TestStreamExportFacts:
 
     async def test_programming_error_maps_to_migration_required(self) -> None:
         session = _FakeSession(exc=ProgrammingError("stmt", {}, "missing"))
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=False),
             pytest.raises(AnalyticsMigrationRequiredError, match="migrations"),
@@ -1037,9 +999,7 @@ class TestStreamExportFacts:
 
     async def test_canceled_dbapi_error_maps_to_query_timeout(self) -> None:
         session = _FakeSession(exc=DBAPIError("stmt", {}, _QueryCanceledError("canceled")))
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=False),
             pytest.raises(AnalyticsQueryTimeoutError, match="timeout"),
@@ -1048,9 +1008,7 @@ class TestStreamExportFacts:
 
     async def test_dbapi_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=DBAPIError("stmt", {}, ConnectionError("down")))
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=False),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
@@ -1059,9 +1017,7 @@ class TestStreamExportFacts:
 
     async def test_sqlalchemy_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=SQLAlchemyError("boom"))
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=False),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
@@ -1070,9 +1026,7 @@ class TestStreamExportFacts:
 
     async def test_unexpected_error_maps_to_database_error(self) -> None:
         session = _FakeSession(exc=RuntimeError("kaboom"))
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with (
             patch.object(svc, "_rate_limited", return_value=False),
             pytest.raises(AnalyticsDatabaseError, match="Database temporarily"),
@@ -1081,9 +1035,7 @@ class TestStreamExportFacts:
 
     async def test_cancelled_error_propagates_untouched(self) -> None:
         session = _FakeSession(exc=asyncio.CancelledError())
-        agen = svc.stream_export_facts(
-            org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-        )
+        agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
         with patch.object(svc, "_rate_limited", return_value=False), pytest.raises(asyncio.CancelledError):
             await agen.__anext__()
 
@@ -1117,9 +1069,7 @@ class TestStreamExportFacts:
             patch.object(svc, "_rate_limited", return_value=False),
             patch.object(svc, "set_rls_org", new_callable=AsyncMock),
         ):
-            agen = svc.stream_export_facts(
-                org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings()
-            )
+            agen = svc.stream_export_facts(org_id=_ORG, params=svc.AnalyticsParams(), factory=_factory(session), settings=_settings())
             out = [item async for item in agen]
         assert len(out) == 1
         non_prelude = [s for s in session.executed if not (isinstance(s, type(text("x"))) and "set_config" in str(s))]

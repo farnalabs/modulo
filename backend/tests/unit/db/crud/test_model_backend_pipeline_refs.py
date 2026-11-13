@@ -211,17 +211,13 @@ async def test_pagination(session: AsyncSession) -> None:
             name=f"pipeline-{i}",
             graph_nodes=[{"id": "n1", "model_backend_id": str(backend.id)}],
         )
-    page1 = await list_pipeline_references_for_backend(
-        session, org_id=_ORG_A, backend_id=backend.id, page=1, page_size=2
-    )
+    page1 = await list_pipeline_references_for_backend(session, org_id=_ORG_A, backend_id=backend.id, page=1, page_size=2)
     assert page1.total == 5
     assert len(page1.items) == 2
     assert page1.page == 1
     assert page1.page_size == 2
 
-    page3 = await list_pipeline_references_for_backend(
-        session, org_id=_ORG_A, backend_id=backend.id, page=3, page_size=2
-    )
+    page3 = await list_pipeline_references_for_backend(session, org_id=_ORG_A, backend_id=backend.id, page=3, page_size=2)
     assert len(page3.items) == 1
 
 

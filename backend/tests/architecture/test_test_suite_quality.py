@@ -2168,12 +2168,9 @@ def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
             if isinstance(other, ast.Constant):
                 continue
             op_name = "in" if isinstance(op, ast.In) else "not in"
-            if element_is_empty:
-                # b"" in x is always True; b"" not in x is always False.
-                verdict = "always PASSES" if isinstance(op, ast.In) else "always FAILS"
-            else:
-                # x in b"" is always False; x not in b"" is always True.
-                verdict = "always FAILS" if isinstance(op, ast.In) else "always PASSES"
+            # b"" in x is always True; b"" not in x is always False.
+            # x in b"" is always False; x not in b"" is always True.
+            verdict = ("always PASSES" if isinstance(op, ast.In) else "always FAILS") if element_is_empty else ("always FAILS" if isinstance(op, ast.In) else "always PASSES")
             found.append(
                 (
                     node.lineno,
@@ -3401,10 +3398,7 @@ def _parametrize_argvalue_lists(tree: ast.AST) -> list[tuple[int, list[ast.expr]
                 continue
             if _decorator_name(dec) != "parametrize":
                 continue
-            if len(dec.args) >= 2:
-                argvalues = dec.args[1]
-            else:
-                argvalues = next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
+            argvalues = dec.args[1] if len(dec.args) >= 2 else next((kw.value for kw in dec.keywords if kw.arg == "argvalues"), None)
             if not isinstance(argvalues, (ast.List, ast.Tuple)):
                 continue
             found.append((dec.lineno, argvalues.elts, dec))
@@ -8199,10 +8193,7 @@ def _dead_container_literal_assert_violations(tree: ast.AST) -> list[tuple[int, 
             continue
         falsy = verdict == "always falsy"
         outcome = "always FAILS" if falsy != negated else "always PASSES"
-        if isinstance(candidate, ast.Call):
-            kind = "a zero-argument builtin call that always returns an empty container"
-        else:
-            kind = "an empty container literal" if falsy else "a non-empty container literal"
+        kind = "a zero-argument builtin call that always returns an empty container" if isinstance(candidate, ast.Call) else "an empty container literal" if falsy else "a non-empty container literal"
         found.append(
             (
                 node.lineno,
@@ -11387,10 +11378,7 @@ def _fresh_value_container_assert_violations(tree: ast.AST) -> list[tuple[int, s
     def _container_direct_fresh_value(container: ast.AST) -> ast.Call | None:
         """Return the first fresh-value call among a container literal's direct
         members (elements, or both keys and values for a dict), else None."""
-        if isinstance(container, ast.Dict):
-            candidates = [k for k in container.keys if k is not None] + list(container.values)
-        else:
-            candidates = list(container.elts)
+        candidates = [k for k in container.keys if k is not None] + list(container.values) if isinstance(container, ast.Dict) else list(container.elts)
         for candidate in candidates:
             if _is_non_deterministic_fresh_call(candidate):
                 return candidate
@@ -12545,20 +12533,11 @@ def _dead_scope_assert_violations(tree: ast.AST) -> list[tuple[int, str]]:
                 found.append((node.lineno, f"assert {ast.unparse(node.test)} is unreachable — {dead}"))
             return
         if isinstance(node, (ast.For, ast.AsyncFor)):
-            if _statically_empty_iterable(node.iter):
-                inner = f"the loop iterates over the statically-empty {ast.unparse(node.iter)} (zero iterations, so its body never runs)"
-            else:
-                inner = dead
+            inner = f"the loop iterates over the statically-empty {ast.unparse(node.iter)} (zero iterations, so its body never runs)" if _statically_empty_iterable(node.iter) else dead
         elif isinstance(node, ast.While):
-            if _always_falsy_condition(node.test):
-                inner = f"the 'while {ast.unparse(node.test)}' condition is statically False (zero iterations, so its body never runs)"
-            else:
-                inner = dead
+            inner = f"the 'while {ast.unparse(node.test)}' condition is statically False (zero iterations, so its body never runs)" if _always_falsy_condition(node.test) else dead
         elif isinstance(node, ast.If):
-            if _always_falsy_condition(node.test):
-                inner = f"the 'if {ast.unparse(node.test)}' guard is statically False (the guarded body never enters)"
-            else:
-                inner = dead
+            inner = f"the 'if {ast.unparse(node.test)}' guard is statically False (the guarded body never enters)" if _always_falsy_condition(node.test) else dead
         else:
             inner = dead
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.If)):

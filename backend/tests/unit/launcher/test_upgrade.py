@@ -1283,11 +1283,11 @@ class TestResolvePgBinDir:
         assert upgrade_module._resolve_pg_bin_dir(explicit) == explicit
 
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR", "/env/bin")
+        monkeypatch.setenv("FARNA_CONTROL_BUNDLED_BIN_DIR", "/env/bin")
         assert upgrade_module._resolve_pg_bin_dir(None) == Path("/env/bin")
 
     def test_default_prefix(self, monkeypatch):
-        monkeypatch.delenv("FARNA_CONTROL_MODULO_BUNDLED_BIN_DIR", raising=False)
+        monkeypatch.delenv("FARNA_CONTROL_BUNDLED_BIN_DIR", raising=False)
         result = upgrade_module._resolve_pg_bin_dir(None)
         assert result == Path(sys.prefix) / "bundled" / "bin"
 

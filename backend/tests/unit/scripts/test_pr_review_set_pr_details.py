@@ -94,10 +94,7 @@ def _render(value: str, overrides: dict[str, str]) -> str:
     def substitute(match: re.Match[str]) -> str:
         expression = match.group(1)
         if expression not in values:
-            raise AssertionError(
-                f"Unmapped GitHub expression {expression!r} in pr-review.yml — add it to "
-                "_DEFAULT_EXPRESSIONS so the step stays executable under test"
-            )
+            raise AssertionError(f"Unmapped GitHub expression {expression!r} in pr-review.yml — add it to _DEFAULT_EXPRESSIONS so the step stays executable under test")
         return values[expression]
 
     return _EXPRESSION.sub(substitute, value)

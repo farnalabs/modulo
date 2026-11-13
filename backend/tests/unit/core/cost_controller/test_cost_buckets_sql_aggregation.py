@@ -221,11 +221,7 @@ def _sql_aggregate_rows(rows: list[dict[str, Any]]) -> list[SimpleNamespace]:
             grouped[key] = grouped.get(key, Decimal(0)) + _sql_amount(elem.get("amount_usd"))
             if _sql_amount_parseable(elem.get("amount_usd")):
                 parse_kept[key] = parse_kept.get(key, 0) + 1
-    return [
-        SimpleNamespace(team_id=team_id, component=name, amount_usd=total)
-        for (team_id, name), total in grouped.items()
-        if parse_kept.get((team_id, name), 0) > 0
-    ]
+    return [SimpleNamespace(team_id=team_id, component=name, amount_usd=total) for (team_id, name), total in grouped.items() if parse_kept.get((team_id, name), 0) > 0]
 
 
 def _sql_legacy_total(rows: list[dict[str, Any]]) -> Decimal:

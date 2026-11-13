@@ -312,9 +312,7 @@ def test_sanitize_is_noop_for_clean_strings():
     """Clean strings pass through verbatim — including the strings pinned by
     the MCP/API tests ("run likely hung", "LLM provider returned 429 ...")."""
     assert sanitize_error_text("run likely hung") == "run likely hung"
-    assert sanitize_error_text("LLM provider returned 429 Too Many Requests") == (
-        "LLM provider returned 429 Too Many Requests"
-    )
+    assert sanitize_error_text("LLM provider returned 429 Too Many Requests") == ("LLM provider returned 429 Too Many Requests")
     assert not sanitize_error_text("")
     assert not sanitize_error_text(None)
 
@@ -706,12 +704,7 @@ def test_model_insufficient_funds_legacy_spelling_canonicalizes():
 
 def test_match_known_fixes_positive_insufficient_funds():
     """The captured HTTP 402 detail surfaces the top-up fix."""
-    detail = (
-        "Sandbox agent produced no parseable output.json (exit code 0)\n"
-        '--- stdout tail ---\n{"type":"error","error":{"name":"APIError",'
-        '"data":{"message":"Upstream request failed: Insufficient account funds",'
-        '"statusCode":402}}}'
-    )
+    detail = 'Sandbox agent produced no parseable output.json (exit code 0)\n--- stdout tail ---\n{"type":"error","error":{"name":"APIError","data":{"message":"Upstream request failed: Insufficient account funds","statusCode":402}}}'
     matches = match_known_fixes(detail)
     fix_ids = {fix.fix_id for fix in matches}
     assert "model_insufficient_funds" in fix_ids
@@ -959,12 +952,7 @@ def test_match_known_fixes_positive_node_deadline_watchdog_detail():
     so a deadline-killed run showed no known-fix panel at all even though
     the remedy (raise ``timeout_seconds`` or shrink the task) was documented.
     """
-    detail = (
-        "Node 'agent-1' did not complete within its configured timeout_seconds "
-        "(3300s) — node-deadline watchdog ended the dispatch. The cause is "
-        "not asserted here; retained deadline_triage evidence is conditional, not "
-        "guaranteed."
-    )
+    detail = "Node 'agent-1' did not complete within its configured timeout_seconds (3300s) — node-deadline watchdog ended the dispatch. The cause is not asserted here; retained deadline_triage evidence is conditional, not guaranteed."
     matches = match_known_fixes(detail)
     assert {fix.fix_id for fix in matches} == {"node_deadline_exceeded"}
     fix = matches[0]

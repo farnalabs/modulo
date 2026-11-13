@@ -69,12 +69,7 @@ def _bash_probe() -> tuple[str | None, str]:
     bash = shutil.which("bash")
     if bash is None:
         return None, "bash is not installed"
-    probe = (
-        "command -v jq >/dev/null 2>&1 "
-        "&& command -v base64 >/dev/null 2>&1 "
-        "&& command -v date >/dev/null 2>&1 "
-        "&& date -u -d 2026-01-01T00:00:00Z +%s >/dev/null 2>&1"
-    )
+    probe = "command -v jq >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 && command -v date >/dev/null 2>&1 && date -u -d 2026-01-01T00:00:00Z +%s >/dev/null 2>&1"
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv; the interpreter is what shutil.which found
             [bash, "--noprofile", "--norc", "-c", probe],
@@ -283,13 +278,7 @@ class Harness:
         }
         step_env.update(extra_env)
         exports = "".join(f"export {name}={shlex.quote(value)}\n" for name, value in step_env.items())
-        runner = (
-            "#!/bin/bash\n"
-            f'export PATH="{self.posix_work}/bin:$PATH"\n'
-            f"{exports}"
-            f"cd {shlex.quote(self.posix_work)} || exit 97\n"
-            "bash --noprofile --norc -eo pipefail fragment.sh\n"
-        )
+        runner = f'#!/bin/bash\nexport PATH="{self.posix_work}/bin:$PATH"\n{exports}cd {shlex.quote(self.posix_work)} || exit 97\nbash --noprofile --norc -eo pipefail fragment.sh\n'
         (self.work / "runner.sh").write_text(runner, encoding="utf-8", newline="\n")
 
         return subprocess.run(  # noqa: S603 - fixed argv; the sandbox script this harness wrote

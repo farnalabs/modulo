@@ -317,9 +317,7 @@ class TestStreamGraphHandlesOutputRejectedError:
     async def test_returns_output_rejected_status(self):
         from farna.core.pipeline_engine.executor import PipelineExecutor
 
-        compiled = self._make_compiled_raising(
-            OutputRejectedError("System prompt override attempt detected (resource: test-file)")
-        )
+        compiled = self._make_compiled_raising(OutputRejectedError("System prompt override attempt detected (resource: test-file)"))
         broker = MagicMock()
         broker.publish = MagicMock()
 

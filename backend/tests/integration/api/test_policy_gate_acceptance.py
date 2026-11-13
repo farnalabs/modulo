@@ -86,10 +86,7 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
     acc_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :email, :name, :hash, 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :name, :hash, 'local', true)"),
             {
                 "id": str(acc_id),
                 "email": f"pg6-{acc_id.hex[:10]}@example.com",
@@ -98,9 +95,7 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:id, :aid, :oid, 'admin')"),
             {"id": str(uuid.uuid4()), "aid": str(acc_id), "oid": str(org_id)},
         )
     return acc_id
@@ -108,21 +103,14 @@ async def _seed_admin(engine: AsyncEngine, org_id: uuid.UUID, password: str) -> 
 
 async def _account_email(engine: AsyncEngine, account_id: uuid.UUID) -> str:
     async with engine.connect() as conn:
-        return (
-            await conn.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(account_id)})
-        ).scalar_one()
+        return (await conn.execute(text("SELECT email FROM accounts WHERE id = :id"), {"id": str(account_id)})).scalar_one()
 
 
 async def _seed_pipeline(engine: AsyncEngine, org_id: uuid.UUID, account_id: uuid.UUID) -> uuid.UUID:
     pipeline_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, "
-                "max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, "
-                "run_context_defaults, graph_nodes_json) "
-                "VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, max_concurrent_runs, lock_wait_timeout_seconds, node_timeout_seconds, run_context_defaults, graph_nodes_json) VALUES (:id, :oid, :name, :uid, 10, 30, 300, '{}'::json, '[]'::json)"),
             {"id": str(pipeline_id), "oid": str(org_id), "name": "PG6 Pipeline", "uid": str(account_id)},
         )
     return pipeline_id
@@ -140,11 +128,7 @@ async def _seed_eval(
     eval_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, "
-                "account_id, eval_type, config_json) "
-                "VALUES (:id, :oid, :pid, :nid, :name, :aid, :etype, '{}'::json)"
-            ),
+            text("INSERT INTO evals (id, organisation_id, pipeline_id, node_id, name, account_id, eval_type, config_json) VALUES (:id, :oid, :pid, :nid, :name, :aid, :etype, '{}'::json)"),
             {
                 "id": str(eval_id),
                 "oid": str(org_id),
@@ -170,10 +154,7 @@ async def _seed_gate(
     gate_id = uuid.uuid4()
     async with engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action) "
-                "VALUES (:id, :oid, :eid, :nid, :action)"
-            ),
+            text("INSERT INTO policy_gates (id, organisation_id, eval_id, node_id, action) VALUES (:id, :oid, :eid, :nid, :action)"),
             {"id": str(gate_id), "oid": str(org_id), "eid": str(eval_id), "nid": str(node_id), "action": action},
         )
     return gate_id
@@ -188,17 +169,9 @@ async def _load_gates(
 ) -> list[tuple]:
     """White-box gate rows; (id, action, version, deleted_at is not null)."""
     if live_only:
-        stmt = text(
-            "SELECT id, action, version, deleted_at FROM policy_gates "
-            "WHERE organisation_id = :oid AND eval_id = :eid AND deleted_at IS NULL "
-            "ORDER BY created_at"
-        )
+        stmt = text("SELECT id, action, version, deleted_at FROM policy_gates WHERE organisation_id = :oid AND eval_id = :eid AND deleted_at IS NULL ORDER BY created_at")
     else:
-        stmt = text(
-            "SELECT id, action, version, deleted_at FROM policy_gates "
-            "WHERE organisation_id = :oid AND eval_id = :eid "
-            "ORDER BY created_at"
-        )
+        stmt = text("SELECT id, action, version, deleted_at FROM policy_gates WHERE organisation_id = :oid AND eval_id = :eid ORDER BY created_at")
     async with engine.connect() as conn:
         rows = (await conn.execute(stmt, {"oid": str(org_id), "eid": str(eval_id)})).all()
     return [(r[0], r[1], r[2], r[3] is not None) for r in rows]
@@ -208,10 +181,7 @@ async def _audit_event_types(engine: AsyncEngine, org_id: uuid.UUID, resource_id
     async with engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT event_type FROM audit_events "
-                    "WHERE organisation_id = :oid AND resource_id = :rid ORDER BY created_at"
-                ),
+                text("SELECT event_type FROM audit_events WHERE organisation_id = :oid AND resource_id = :rid ORDER BY created_at"),
                 {"oid": str(org_id), "rid": str(resource_id)},
             )
         ).all()
@@ -325,9 +295,7 @@ async def test_pg_spec_c5_cross_tenant_eval_is_hidden_with_no_identifier_leakage
     other_headers = await _login(client, db_engine, other_acc_id)
 
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
 
     got = await client.get(f"/api/v1/evals/{eval_id}/policy-gate", headers=other_headers)
     assert got.status_code == 404, f"GET: {got.status_code} {got.text}"
@@ -364,13 +332,9 @@ async def test_pg_spec_c5_cross_tenant_eval_is_hidden_with_no_identifier_leakage
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c6_guardrail_eval_binds_on_create(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c6_guardrail_eval_binds_on_create(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id)
 
     resp = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert resp.status_code == 201, resp.text
@@ -382,14 +346,10 @@ async def test_pg_spec_c6_guardrail_eval_binds_on_create(
     assert gates[0][1] == "warn"
 
 
-async def test_pg_spec_c6_update_variant_guardrail_eval_binds_on_update(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c6_update_variant_guardrail_eval_binds_on_update(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     """PUT variant: a pre-seeded gate on a guardrail eval now accepts the update."""
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="guardrail", node_id=node_id)
     gate_id = await _seed_gate(db_engine, env.org_id, eval_id, node_id, action="warn")
 
     resp = await client.put(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "block"}, headers=env.headers)
@@ -409,9 +369,7 @@ async def test_pg_spec_c6_update_variant_guardrail_eval_binds_on_update(
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c7_suite_scoped_eval_rejected_on_create(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c7_suite_scoped_eval_rejected_on_create(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=None)
 
     resp = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "block"}, headers=env.headers)
@@ -432,13 +390,9 @@ async def test_pg_spec_c7_suite_scoped_eval_rejected_on_create(
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c8_node_id_mismatch_gate_rejected_on_update(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c8_node_id_mismatch_gate_rejected_on_update(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     eval_node = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=eval_node
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=eval_node)
     drifting_node = uuid.uuid4()
     assert drifting_node != eval_node
     await _seed_gate(db_engine, env.org_id, eval_id, drifting_node, action="warn")
@@ -500,13 +454,9 @@ async def test_pg_spec_c9_violation_context_only_in_logs_not_http_body(
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c10_recreate_after_delete_leaves_single_live_gate(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c10_recreate_after_delete_leaves_single_live_gate(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
 
     first = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert first.status_code == 201, first.text
@@ -562,9 +512,7 @@ async def test_pg_spec_c11_concurrent_creates_serialize_via_advisory_lock(db_eng
     from farna.api.routes import evals as evals_module  # local import; avoid app import at module scope
 
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
     principal = _principal(env)
 
     factory = async_sessionmaker(db_engine, expire_on_commit=False)
@@ -605,9 +553,7 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
     from farna.api.routes import evals as evals_module
 
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
     principal = _principal(env)
 
     async def _bypass(_eval_id: uuid.UUID, _session: AsyncSession, fn: object) -> object:
@@ -619,15 +565,11 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
 
     session_a = factory()
     await session_a.begin()
-    await evals_module._create_gate(
-        eval_id, {"action": "warn", "node_id": node_id}, session_a, principal
-    )  # uncommitted
+    await evals_module._create_gate(eval_id, {"action": "warn", "node_id": node_id}, session_a, principal)  # uncommitted
 
     session_b = factory()
     await session_b.begin()
-    task_b = asyncio.create_task(
-        evals_module._create_gate(eval_id, {"action": "warn", "node_id": node_id}, session_b, principal)
-    )
+    task_b = asyncio.create_task(evals_module._create_gate(eval_id, {"action": "warn", "node_id": node_id}, session_b, principal))
     try:
         await asyncio.sleep(0.5)  # writer B is now blocked on A's uncommitted index entry
         await session_a.commit()  # release B's block → writer B raises UNIQUE violation
@@ -650,13 +592,9 @@ async def test_pg_spec_c11_negative_without_lock_second_writer_dies_with_unique_
 # ---------------------------------------------------------------------------
 
 
-async def test_pg_spec_c12_delete_soft_deletes_row_with_audit_trail(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c12_delete_soft_deletes_row_with_audit_trail(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
     created = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert created.status_code == 201, created.text
     gate_id = created.json()["id"]
@@ -671,9 +609,7 @@ async def test_pg_spec_c12_delete_soft_deletes_row_with_audit_trail(
 
     # deleted_by carries the acting admin's account id
     async with db_engine.connect() as conn:
-        deleted_by = (
-            await conn.execute(text("SELECT deleted_by FROM policy_gates WHERE id = :id"), {"id": str(gate_id)})
-        ).scalar_one()
+        deleted_by = (await conn.execute(text("SELECT deleted_by FROM policy_gates WHERE id = :id"), {"id": str(gate_id)})).scalar_one()
     assert str(deleted_by) == str(env.account_id)
 
     # GET now returns the not-found contract
@@ -698,17 +634,12 @@ async def test_pg_spec_c12_fk_restrict_blocks_hard_delete_with_decision_records(
     plain UPDATE-soft-delete cannot trigger).
     """
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
     gate_id = await _seed_gate(db_engine, env.org_id, eval_id, node_id, action="warn")
 
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id, resolved_action) "
-                "VALUES (:id, :oid, :gid, :eid, 'warn')"
-            ),
+            text("INSERT INTO policy_gate_decisions (id, organisation_id, policy_gate_id, eval_id, resolved_action) VALUES (:id, :oid, :gid, :eid, 'warn')"),
             {"id": str(uuid.uuid4()), "oid": str(env.org_id), "gid": str(gate_id), "eid": str(eval_id)},
         )
 
@@ -721,14 +652,10 @@ async def test_pg_spec_c12_fk_restrict_blocks_hard_delete_with_decision_records(
 
     # Both rows survive: the gate AND its decision record
     async with db_engine.connect() as conn:
-        gate_count = (
-            await conn.execute(text("SELECT count(*) FROM policy_gates WHERE id = :id"), {"id": str(gate_id)})
-        ).scalar_one()
+        gate_count = (await conn.execute(text("SELECT count(*) FROM policy_gates WHERE id = :id"), {"id": str(gate_id)})).scalar_one()
         decision_count = (
             await conn.execute(
-                text(
-                    "SELECT count(*) FROM policy_gate_decisions WHERE policy_gate_id = :gid AND organisation_id = :oid"
-                ),
+                text("SELECT count(*) FROM policy_gate_decisions WHERE policy_gate_id = :gid AND organisation_id = :oid"),
                 {"gid": str(gate_id), "oid": str(env.org_id)},
             )
         ).scalar_one()
@@ -761,20 +688,13 @@ def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str,
 
     pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
     model_fields = list(PolicyGateUpdateRequest.model_fields)
-    assert sorted(pinned) == sorted(model_fields), (
-        "PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every "
-        f"mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
-    )
+    assert sorted(pinned) == sorted(model_fields), f"PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
     return {field: pinned[field] for field in model_fields}
 
 
-async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
 
     first = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert first.status_code == 201, first.text
@@ -817,9 +737,7 @@ async def test_pg_spec_c18_versions_bump_monotonically_with_snapshot(
     assert got_missing.json()["detail"] == _MSG_EVAL_NOT_FOUND
 
 
-async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(
-    db_engine: AsyncEngine, client: AsyncClient, env: _Env
-) -> None:
+async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(db_engine: AsyncEngine, client: AsyncClient, env: _Env) -> None:
     """FAR-967 F9 (operator-control acceptance): ``PATCH .../policy-gate/toggle``
     flips ``enabled`` end-to-end against real Postgres — the advisory lock is a
     real ``pg_advisory_xact_lock`` here, the symmetric CHECK invariant holds
@@ -827,9 +745,7 @@ async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(
     untouched (a toggle is state, not an edit), and the
     ``policy_gate.toggled`` audit event lands."""
     node_id = uuid.uuid4()
-    eval_id = await _seed_eval(
-        db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id
-    )
+    eval_id = await _seed_eval(db_engine, env.org_id, env.pipeline_id, env.account_id, eval_type="regex", node_id=node_id)
     created = await client.post(f"/api/v1/evals/{eval_id}/policy-gate", json={"action": "warn"}, headers=env.headers)
     assert created.status_code == 201, created.text
     gate_id = created.json()["id"]
@@ -839,19 +755,14 @@ async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(
         async with db_engine.connect() as conn:
             row = (
                 await conn.execute(
-                    text(
-                        "SELECT enabled, enabled_at, disabled_at, version FROM policy_gates "
-                        "WHERE id = :id AND deleted_at IS NULL"
-                    ),
+                    text("SELECT enabled, enabled_at, disabled_at, version FROM policy_gates WHERE id = :id AND deleted_at IS NULL"),
                     {"id": str(gate_id)},
                 )
             ).one()
         return row[0], row[1], row[2], int(row[3])
 
     # ── disable ────────────────────────────────────────────────────────────
-    disabled = await client.patch(
-        f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": False}, headers=env.headers
-    )
+    disabled = await client.patch(f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": False}, headers=env.headers)
     assert disabled.status_code == 200, disabled.text
     body = disabled.json()
     assert body["id"] == gate_id
@@ -866,9 +777,7 @@ async def test_pg_spec_toggle_gate_disable_reenable_roundtrip(
     assert version == 1, "a toggle must not bump the gate version"
 
     # ── re-enable ──────────────────────────────────────────────────────────
-    reenabled = await client.patch(
-        f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": True}, headers=env.headers
-    )
+    reenabled = await client.patch(f"/api/v1/evals/{eval_id}/policy-gate/toggle", json={"enabled": True}, headers=env.headers)
     assert reenabled.status_code == 200, reenabled.text
     body2 = reenabled.json()
     assert body2["enabled"] is True

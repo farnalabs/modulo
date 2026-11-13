@@ -156,10 +156,7 @@ def _build_infer_prompt(
     display = sanitised[:max_records]
     sample_text = _escape_block_markers(_safe_json_dumps(display))
     rare_fields = flag_rare_fields(sanitised)
-    if rare_fields:
-        rare_note = f"\n\nRarely-used fields (present in fewer than {_RARE_FIELD_THRESHOLD:.0%} of the {len(sanitised)} samples; exclude from the draft by default): {', '.join(rare_fields)}"
-    else:
-        rare_note = ""
+    rare_note = f"\n\nRarely-used fields (present in fewer than {_RARE_FIELD_THRESHOLD:.0%} of the {len(sanitised)} samples; exclude from the draft by default): {', '.join(rare_fields)}" if rare_fields else ""
     message_text = f"Sample data ({len(display)} records):\n{_SAMPLE_BLOCK_START}\n{sample_text}\n{_SAMPLE_BLOCK_END}\nReturn ONLY the JSON Schema object.{rare_note}"
     category = connector_category(connector_type)
     system = system_prompt or _INFERENCE_SYSTEM_PROMPT

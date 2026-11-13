@@ -48,11 +48,7 @@ async def _seed_nodes(
     """
     for nid in node_ids:
         await session.execute(
-            text(
-                "INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) "
-                "VALUES (:id, :oid, :pid, :name, :aid, 300) "
-                "ON CONFLICT (id) DO NOTHING"
-            ),
+            text("INSERT INTO nodes (id, organisation_id, pipeline_id, name, account_id, timeout_seconds) VALUES (:id, :oid, :pid, :name, :aid, 300) ON CONFLICT (id) DO NOTHING"),
             {
                 "id": str(nid),
                 "oid": str(org_id),
@@ -426,9 +422,7 @@ async def test_replace_pipeline_graph_removes_stale_edges(
     assert not loaded[1]
 
 
-async def test_soft_delete_pipeline_stamps_deleted_by(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_soft_delete_pipeline_stamps_deleted_by(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """soft_delete_pipeline must write the deleting account onto ``deleted_by``.
 
     Regression guard for the improve-database audit: ``Pipeline.deleted_by`` is
@@ -462,9 +456,7 @@ async def test_soft_delete_pipeline_stamps_deleted_by(
     assert restored.deleted_by is None
 
 
-async def test_pipeline_check_constraints_reject_non_positive_values(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_pipeline_check_constraints_reject_non_positive_values(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """Migration 0186 CHECK constraints must reject non-positive config values.
 
     Asserts the migration-built schema enforces ``ck_pipelines_*_positive``: a
@@ -478,10 +470,7 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
     pid = uuid.uuid4()
     with pytest.raises(IntegrityError):
         await rls_session.execute(
-            text(
-                "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
-                "max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"
-            ),
+            text("INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, max_duration_seconds) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, 0)"),
             {"id": str(pid), "oid": str(test_org), "name": "bad-duration", "aid": str(test_user)},
         )
 
@@ -489,11 +478,7 @@ async def test_pipeline_check_constraints_reject_non_positive_values(
 
     nullable_pid = uuid.uuid4()
     await rls_session.execute(
-        text(
-            "INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, "
-            "max_steps, token_budget, circuit_breaker_threshold) "
-            "VALUES (:id, :oid, :name, :aid, '{}'::jsonb, NULL, NULL, NULL)"
-        ),
+        text("INSERT INTO pipelines (id, organisation_id, name, account_id, run_context_defaults, max_steps, token_budget, circuit_breaker_threshold) VALUES (:id, :oid, :name, :aid, '{}'::jsonb, NULL, NULL, NULL)"),
         {"id": str(nullable_pid), "oid": str(test_org), "name": "nullable-ok", "aid": str(test_user)},
     )
     await rls_session.flush()

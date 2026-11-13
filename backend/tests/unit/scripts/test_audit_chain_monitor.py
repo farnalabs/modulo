@@ -71,9 +71,7 @@ def _record(run_id: int, *, state: str, escalated: bool = False) -> dict[str, An
 
 
 def _state(run_id: int, *, blind: bool, escalated: bool = False, recovered: bool = False) -> dict[str, Any]:
-    payload = (
-        _blind_jobs(escalated=escalated, recovered=recovered) if blind else _authenticated_jobs(recovered=recovered)
-    )
+    payload = _blind_jobs(escalated=escalated, recovered=recovered) if blind else _authenticated_jobs(recovered=recovered)
     return monitor.describe_run(jobs_payload=payload, run_id=str(run_id), run_url=f"https://example/{run_id}")
 
 
@@ -357,9 +355,7 @@ def test_cli_describe_run_and_evaluate_write_outputs(tmp_path: Path, capsys: Any
     jobs_file = tmp_path / "jobs.json"
     jobs_file.write_text(json.dumps(_blind_jobs()), encoding="utf-8")
 
-    exit_code = monitor.main(
-        ["describe-run", "--jobs-json", str(jobs_file), "--run-id", "7", "--run-url", "https://example/7"]
-    )
+    exit_code = monitor.main(["describe-run", "--jobs-json", str(jobs_file), "--run-id", "7", "--run-url", "https://example/7"])
     described = json.loads(capsys.readouterr().out)
     assert exit_code == 0
     assert described["state"] == monitor.BLIND
@@ -396,9 +392,7 @@ def test_cli_email_ticket_and_notes_render_json(tmp_path: Path, capsys: Any) -> 
     state_file = tmp_path / "state.json"
     state_file.write_text(json.dumps(state.as_dict()), encoding="utf-8")
 
-    email_exit = monitor.main(
-        ["email", "--state-json", str(state_file), "--action", "blind_transition", "--run-url", _RUN_URL]
-    )
+    email_exit = monitor.main(["email", "--state-json", str(state_file), "--action", "blind_transition", "--run-url", _RUN_URL])
     assert email_exit == 0
     email_payload = json.loads(capsys.readouterr().out)
     assert "AUDIT-CHAIN MONITOR BLIND" in email_payload["subject"]

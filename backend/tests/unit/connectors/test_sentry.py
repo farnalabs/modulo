@@ -135,9 +135,7 @@ async def test_write_issue_status_missing_status(connector: SentryConnector) -> 
 
 @respx.mock
 async def test_write_event_comment(connector: SentryConnector) -> None:
-    respx.post(f"{_BASE}/issues/42/comments/").mock(
-        return_value=httpx.Response(201, json={"id": "c1", "text": "Looking into this"})
-    )
+    respx.post(f"{_BASE}/issues/42/comments/").mock(return_value=httpx.Response(201, json={"id": "c1", "text": "Looking into this"}))
     result = await connector.write(
         ConnectorPayload(
             resource="event_comment",
@@ -162,9 +160,7 @@ async def test_write_event_comment_missing_text(connector: SentryConnector) -> N
 
 @respx.mock
 async def test_write_release(connector: SentryConnector) -> None:
-    respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(
-        return_value=httpx.Response(201, json={"id": "r1", "version": "2.0.0"})
-    )
+    respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(return_value=httpx.Response(201, json={"id": "r1", "version": "2.0.0"}))
     result = await connector.write(
         ConnectorPayload(
             resource="release",
@@ -176,9 +172,7 @@ async def test_write_release(connector: SentryConnector) -> None:
 
 @respx.mock
 async def test_write_release_with_optional_fields(connector: SentryConnector) -> None:
-    respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(
-        return_value=httpx.Response(201, json={"id": "r2", "version": "2.1.0", "ref": "main"})
-    )
+    respx.post(f"{_BASE}/organizations/{ORG}/releases/").mock(return_value=httpx.Response(201, json={"id": "r2", "version": "2.1.0", "ref": "main"}))
     result = await connector.write(
         ConnectorPayload(
             resource="release",
@@ -236,27 +230,21 @@ async def test_query_issues_with_cursor(connector: SentryConnector) -> None:
 @respx.mock
 async def test_query_projects_with_cursor(connector: SentryConnector) -> None:
     projects = [{"id": "p3", "slug": "project-gamma"}]
-    respx.get(f"{_BASE}/projects/", params={"cursor": "next-page"}).mock(
-        return_value=httpx.Response(200, json=projects)
-    )
+    respx.get(f"{_BASE}/projects/", params={"cursor": "next-page"}).mock(return_value=httpx.Response(200, json=projects))
     result = await connector.query(ConnectorQuery(resource="projects", cursor="next-page"))
     assert len(result.records) == 1
 
 
 @respx.mock
 async def test_query_http_401(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(
-        return_value=httpx.Response(401, text="Unauthorized")
-    )
+    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(return_value=httpx.Response(401, text="Unauthorized"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
 
 
 @respx.mock
 async def test_query_http_500(connector: SentryConnector) -> None:
-    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
+    respx.get(f"{_BASE}/projects/{ORG}/project-alpha/issues/").mock(return_value=httpx.Response(500, text="Internal Server Error"))
     with pytest.raises(httpx.HTTPStatusError):
         await connector.query(ConnectorQuery(resource="issues", filters={"project": "project-alpha"}))
 
@@ -282,9 +270,7 @@ async def test_query_issues_non_list_body_no_crash(connector: SentryConnector) -
 @respx.mock
 async def test_query_projects_list_with_non_dict_entries(connector: SentryConnector) -> None:
     """Non-dict entries within a list must be dropped rather than crash the query."""
-    respx.get(f"{_BASE}/projects/").mock(
-        return_value=httpx.Response(200, json=[{"id": "p1", "slug": "project-alpha"}, "corrupt", 42])
-    )
+    respx.get(f"{_BASE}/projects/").mock(return_value=httpx.Response(200, json=[{"id": "p1", "slug": "project-alpha"}, "corrupt", 42]))
     result = await connector.query(ConnectorQuery(resource="projects"))
     assert len(result.records) == 1
     assert result.records[0]["slug"] == "project-alpha"

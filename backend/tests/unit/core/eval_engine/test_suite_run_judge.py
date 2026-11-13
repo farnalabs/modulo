@@ -436,9 +436,7 @@ async def test_maybe_wire_no_judge_defs_builds_no_hub(session, monkeypatch) -> N
     suite, dataset, backend = await _seed_suite(session, org)
     await _add_regex_def(session, org, suite)
     await _add_case(session, org, dataset, {"category": "billing"})
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
     calls: list[uuid.UUID] = []
 
@@ -464,9 +462,7 @@ async def test_maybe_wire_judge_def_sets_callable_and_returns_hub(session, monke
     suite, dataset, backend = await _seed_suite(session, org)
     await _add_judge_def(session, org, suite, {"field": "output", "model_backend_id": str(uuid.uuid4())})
     await _add_case(session, org, dataset, {"text": "hello"})
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
     sentinel = object()
 
@@ -491,9 +487,7 @@ async def test_maybe_wire_no_active_backend_leaves_kwargs_untouched(session, mon
     suite, dataset, backend = await _seed_suite(session, org, subject_status="inactive")
     await _add_judge_def(session, org, suite, {"field": "output", "model_backend_id": str(uuid.uuid4())})
     await _add_case(session, org, dataset, {"text": "hello"})
-    run = await build_suite_run(
-        session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-    )
+    run = await build_suite_run(session, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
 
     async def _none(session_: Any, org_: uuid.UUID) -> Any:
         return None
@@ -525,9 +519,7 @@ async def test_saq_job_runs_judge_end_to_end_and_tears_down_hub(monkeypatch) -> 
         suite, dataset, backend = await _seed_suite(s, org)
         await _add_judge_def(s, org, suite, {"field": "output", "model_backend_id": str(judge_backend_id)})
         await _add_case(s, org, dataset, {"text": "hello"})
-        run = await build_suite_run(
-            s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        run = await build_suite_run(s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
         rid, oid = str(run.id), str(org)
 
     adapter = _FixedJudgeAdapter('{"passed": true, "score": 0.77, "detail": "judged"}')
@@ -581,9 +573,7 @@ async def test_saq_job_missing_backend_id_persists_error_and_fails_run(monkeypat
         # No model_backend_id at all in the judge config.
         await _add_judge_def(s, org, suite, {"field": "output"})
         await _add_case(s, org, dataset, {"text": "hello"})
-        run = await build_suite_run(
-            s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        run = await build_suite_run(s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
         rid, oid = str(run.id), str(org)
 
     # A hub IS built (an active backend exists); the callable itself fails the
@@ -638,9 +628,7 @@ async def test_saq_job_logs_and_continues_when_hub_teardown_fails(monkeypatch) -
         # dereferencing the (stub) hub, so only teardown remains to exercise.
         await _add_judge_def(s, org, suite, {"field": "output"})
         await _add_case(s, org, dataset, {"text": "hello"})
-        run = await build_suite_run(
-            s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        run = await build_suite_run(s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
         rid, oid = str(run.id), str(org)
 
     class _RaisingTeardownHub:
@@ -674,9 +662,7 @@ async def test_saq_job_judge_suite_without_active_backend_records_errors(monkeyp
         suite, dataset, backend = await _seed_suite(s, org, subject_status="inactive")
         await _add_judge_def(s, org, suite, {"field": "output", "model_backend_id": str(uuid.uuid4())})
         await _add_case(s, org, dataset, {"text": "hello"})
-        run = await build_suite_run(
-            s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id
-        )
+        run = await build_suite_run(s, org_id=org, suite_id=suite.id, dataset_id=dataset.id, model_backend_id=backend.id)
         rid, oid = str(run.id), str(org)
 
     class _FakeIngestionService:

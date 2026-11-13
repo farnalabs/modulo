@@ -504,9 +504,7 @@ class TestCommitDeferredDelivery:
         session.begin_nested().rollback()  # inner savepoint rollback
         assert session.info.get(listeners._PENDING_KEY) is not None, "inner savepoint rollback must keep pending events"
         session.rollback()  # outermost rollback -> fires the hook again
-        assert session.info.get(listeners._PENDING_KEY) is None, (
-            "outermost rollback must drop pending events (rollback-no-phantom)"
-        )
+        assert session.info.get(listeners._PENDING_KEY) is None, "outermost rollback must drop pending events (rollback-no-phantom)"
 
 
 class TestNotificationListenerPayload:

@@ -100,9 +100,7 @@ def client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="admin", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -142,9 +140,7 @@ def operator_client() -> Generator[TestClient, None, None]:
 
     app.dependency_overrides[get_settings] = override_settings
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="operator", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="operator", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="operator")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -166,9 +162,7 @@ class TestListTriggerEvents:
             count_result.scalar = MagicMock(return_value=1)
             authz_result = MagicMock()
             authz_result.scalar_one_or_none = MagicMock(return_value=True)
-            session.execute = AsyncMock(
-                side_effect=[authz_result, event_result, count_result, _counts_result([("backpressure_skipped", 2, 1)])]
-            )
+            session.execute = AsyncMock(side_effect=[authz_result, event_result, count_result, _counts_result([("backpressure_skipped", 2, 1)])])
 
             async def override_session() -> AsyncGenerator[AsyncMock, None]:
                 yield session

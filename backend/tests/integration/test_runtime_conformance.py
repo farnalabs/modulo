@@ -57,10 +57,7 @@ async def _seed_account(engine: AsyncEngine, org_id: uuid.UUID, email: str) -> u
     account_id = uuid.uuid4()
     async with engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": email, "name": f"Admin {email}"},
         )
     return account_id
@@ -144,12 +141,7 @@ async def _seed_run(
     async with engine.connect() as conn, conn.begin():
         if claim_token is None:
             await conn.execute(
-                text(
-                    "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                    "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                    "run_number, status, heartbeat_at, completed_at) "
-                    "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb, :ca)"
-                ),
+                text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status, heartbeat_at, completed_at) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, :st, :hb, :ca)"),
                 base_params,
             )
         else:
@@ -465,10 +457,7 @@ async def test_conformance_terminal_run_cannot_be_heartbeated(
 # ---------------------------------------------------------------------------
 
 
-_MARKER_ACQUIRE_SQL = (
-    "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid "
-    "WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' RETURNING id"
-)
+_MARKER_ACQUIRE_SQL = "UPDATE runs SET sandbox_dispatch_state='dispatching', sandbox_id=:sid WHERE id=:rid AND organisation_id=:oid AND claim_token=:tok AND status='running' RETURNING id"
 
 
 async def test_conformance_no_double_sandbox(

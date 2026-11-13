@@ -147,9 +147,7 @@ class TestFetchEntryContentExceptionNarrowing:
     @pytest.mark.asyncio
     @patch("farna.api.routes.community_library.get_settings")
     @patch("farna.api.routes.community_library.LibraryClient")
-    async def test_raising_close_logged_and_swallowed(
-        self, mock_client_cls: MagicMock, mock_settings: MagicMock, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    async def test_raising_close_logged_and_swallowed(self, mock_client_cls: MagicMock, mock_settings: MagicMock, caplog: pytest.LogCaptureFixture) -> None:
         """A ``close()`` that raises never escapes ``_fetch_entry_content``.
 
         The teardown sits in ``finally`` AFTER the ``except ValueError`` arm,
@@ -190,9 +188,7 @@ class TestFetchEntryContentExceptionNarrowing:
     @pytest.mark.asyncio
     @patch("farna.api.routes.community_library.get_settings")
     @patch("farna.api.routes.community_library.LibraryClient")
-    async def test_raising_close_does_not_displace_body_exception(
-        self, mock_client_cls: MagicMock, mock_settings: MagicMock
-    ) -> None:
+    async def test_raising_close_does_not_displace_body_exception(self, mock_client_cls: MagicMock, mock_settings: MagicMock) -> None:
         """Body exception + failing teardown: the BODY's error wins.
 
         Without the teardown guard the ``finally``'s exception replaces the

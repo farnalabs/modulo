@@ -95,9 +95,7 @@ def test_row_missed_period_returns_period_when_fired_long_ago() -> None:
     ],
     ids=["polling_missing_interval", "polling_zero_interval", "cron_missing_expression"],
 )
-def test_trigger_period_seconds_uncomputable_returns_none(
-    trigger_type: str, config_json: dict[str, Any] | None, cron_expression: str | None
-) -> None:
+def test_trigger_period_seconds_uncomputable_returns_none(trigger_type: str, config_json: dict[str, Any] | None, cron_expression: str | None) -> None:
     assert _trigger_period_seconds(trigger_type, cron_expression, None, config_json, _NOW) is None
 
 

@@ -28,9 +28,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "branch-fixer.yml"
 WEBHOOK_STEP = "- name: Send webhook to Modulo Branch Fixer"
-BASE_OBJECT = (
-    "{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}"
-)
+BASE_OBJECT = "{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}"
 
 
 def _raw() -> str:
@@ -82,9 +80,7 @@ def test_task_kind_is_added_only_when_set_so_absent_is_unchanged() -> None:
     silent default change."""
     block = _webhook_block()
     assert BASE_OBJECT in block, "the always-sent payload shape changed"
-    assert 'if $taskKind == "" then {} else {taskKind: $taskKind} end' in block, (
-        "taskKind must be added conditionally, so an absent value sends the old payload"
-    )
+    assert 'if $taskKind == "" then {} else {taskKind: $taskKind} end' in block, "taskKind must be added conditionally, so an absent value sends the old payload"
     assert block.count("taskKind: $taskKind") == 1, "taskKind must be added once, inside the conditional"
 
 

@@ -103,11 +103,7 @@ async def _insert_connector(
     connector_id = uuid.uuid4()
     async with db_engine.begin() as conn:
         await conn.execute(
-            text(
-                "INSERT INTO connector_instances (id, organisation_id, name, connector_type_id, "
-                "account_id, credentials_ciphertext, config_json, allowed_operations) "
-                "VALUES (:id, :oid, :name, 'github', :aid, :cred, '{}'::json, '[]'::json)"
-            ),
+            text("INSERT INTO connector_instances (id, organisation_id, name, connector_type_id, account_id, credentials_ciphertext, config_json, allowed_operations) VALUES (:id, :oid, :name, 'github', :aid, :cred, '{}'::json, '[]'::json)"),
             {
                 "id": str(connector_id),
                 "oid": str(org_id),
@@ -124,10 +120,7 @@ async def _snapshot_rows(db_engine: AsyncEngine, pipeline_id: uuid.UUID) -> list
     async with db_engine.connect() as conn:
         rows = (
             await conn.execute(
-                text(
-                    "SELECT snapshot_version, version_kind, account_id FROM pipeline_snapshots "
-                    "WHERE pipeline_id = :pid ORDER BY snapshot_version"
-                ),
+                text("SELECT snapshot_version, version_kind, account_id FROM pipeline_snapshots WHERE pipeline_id = :pid ORDER BY snapshot_version"),
                 {"pid": str(pipeline_id)},
             )
         ).all()
@@ -258,10 +251,7 @@ async def test_bind_records_edit_snapshot_then_suppresses_identical_rebind(
         prev_second, post_second, unchanged_second = observed[1]
         assert len(prev_first) == 1, prev_first
         assert len(post_first) == 1, post_first
-        assert prev_first[0] is not post_first[0], (
-            "the pre-bind capture must be a deep copy — an alias of the mutated node makes "
-            "the comparison self-referential and suppresses every snapshot"
-        )
+        assert prev_first[0] is not post_first[0], "the pre-bind capture must be a deep copy — an alias of the mutated node makes the comparison self-referential and suppresses every snapshot"
         # The captured pre-state really PREDATES the mutation: the first bind
         # starts from a node with no binding at all.
         assert "connector_binding" not in prev_first[0], prev_first[0]
@@ -379,9 +369,7 @@ async def test_bind_snapshot_actor_ladder_records_honestly_unattributed_write(
         rows = await _snapshot_rows(db_engine, pipeline_id)
         assert [(v, k) for v, k, _ in rows] == [(1, "edit")], rows
         assert rows[0][2] is None, "an unresolvable actor must be recorded as NULL, never a bogus id"
-        assert any("unattributed_write" in r.getMessage() for r in caplog.records), (
-            f"the ladder must LOG the unattributed write; records={[r.getMessage() for r in caplog.records]}"
-        )
+        assert any("unattributed_write" in r.getMessage() for r in caplog.records), f"the ladder must LOG the unattributed write; records={[r.getMessage() for r in caplog.records]}"
     finally:
         await _cleanup(db_engine, pipeline_id, connector_id)
 
@@ -391,9 +379,7 @@ async def _snapshot_graph(db_engine: AsyncEngine, pipeline_id: uuid.UUID, versio
     async with db_engine.connect() as conn:
         value = (
             await conn.execute(
-                text(
-                    "SELECT graph_json FROM pipeline_snapshots WHERE pipeline_id = :pid AND snapshot_version = :version"
-                ),
+                text("SELECT graph_json FROM pipeline_snapshots WHERE pipeline_id = :pid AND snapshot_version = :version"),
                 {"pid": str(pipeline_id), "version": version},
             )
         ).scalar_one()

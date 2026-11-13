@@ -99,12 +99,8 @@ async def test_query_item_missing_item(connector: OnePasswordConnector) -> None:
 @respx.mock
 async def test_query_item_by_title(connector: OnePasswordConnector) -> None:
     items = [{"id": "i1", "title": "My Login"}]
-    respx.get(f"{BASE_URL}/v1/vaults/v1/items", params={"filter[title]": "My Login"}).mock(
-        return_value=httpx.Response(200, json=items)
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="item_by_title", filters={"vault_id": "v1", "title": "My Login"})
-    )
+    respx.get(f"{BASE_URL}/v1/vaults/v1/items", params={"filter[title]": "My Login"}).mock(return_value=httpx.Response(200, json=items))
+    result = await connector.query(ConnectorQuery(resource="item_by_title", filters={"vault_id": "v1", "title": "My Login"}))
     assert len(result.records) == 1
 
 
@@ -142,12 +138,8 @@ async def test_query_files_missing_item(connector: OnePasswordConnector) -> None
 
 @respx.mock
 async def test_query_file_content(connector: OnePasswordConnector) -> None:
-    respx.get(f"{BASE_URL}/v1/vaults/v1/items/i1/files/f1/content").mock(
-        return_value=httpx.Response(200, text="file content here")
-    )
-    result = await connector.query(
-        ConnectorQuery(resource="file", filters={"vault_id": "v1", "item_id": "i1", "file_id": "f1"})
-    )
+    respx.get(f"{BASE_URL}/v1/vaults/v1/items/i1/files/f1/content").mock(return_value=httpx.Response(200, text="file content here"))
+    result = await connector.query(ConnectorQuery(resource="file", filters={"vault_id": "v1", "item_id": "i1", "file_id": "f1"}))
     assert len(result.records) == 1
     assert result.records[0]["content"] == "file content here"
 
@@ -236,9 +228,7 @@ async def test_write_delete_item_missing_item(connector: OnePasswordConnector) -
 
 @respx.mock
 async def test_write_archive_item(connector: OnePasswordConnector) -> None:
-    respx.patch(f"{BASE_URL}/v1/vaults/v1/items/i1", json={"state": "archived"}).mock(
-        return_value=httpx.Response(200, json={"state": "archived"})
-    )
+    respx.patch(f"{BASE_URL}/v1/vaults/v1/items/i1", json={"state": "archived"}).mock(return_value=httpx.Response(200, json={"state": "archived"}))
     result = await connector.write(ConnectorPayload(resource="item_archive", data={"vault_id": "v1", "item_id": "i1"}))
     assert result["status"] == "archived"
 

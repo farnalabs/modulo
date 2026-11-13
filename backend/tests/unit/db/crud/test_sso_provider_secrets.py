@@ -126,7 +126,7 @@ async def test_create_provider_uses_system_session_for_global_slug() -> None:
     with (
         patch(
             "farna.db.crud.sso_provider.get_settings",
-            return_value=SimpleNamespace(farna_control_system_database_url="postgresql+asyncpg://system/test"),
+            return_value=SimpleNamespace(modulo_system_database_url="postgresql+asyncpg://system/test"),
         ),
         patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
@@ -167,7 +167,7 @@ async def test_create_provider_global_dedupe_two_orgs_same_name() -> None:
     with (
         patch(
             "farna.db.crud.sso_provider.get_settings",
-            return_value=SimpleNamespace(farna_control_system_database_url="postgresql+asyncpg://system/test"),
+            return_value=SimpleNamespace(modulo_system_database_url="postgresql+asyncpg://system/test"),
         ),
         patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
@@ -240,7 +240,7 @@ async def test_create_provider_global_dedupe_real_system_session() -> None:
     with (
         patch(
             "farna.db.crud.sso_provider.get_settings",
-            return_value=SimpleNamespace(farna_control_system_database_url="sqlite+aiosqlite:///system"),
+            return_value=SimpleNamespace(modulo_system_database_url="sqlite+aiosqlite:///system"),
         ),
         patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):
@@ -280,7 +280,7 @@ async def test_create_provider_falls_back_to_app_session_scan() -> None:
     with (
         patch(
             "farna.db.crud.sso_provider.get_settings",
-            return_value=SimpleNamespace(farna_control_system_database_url=""),
+            return_value=SimpleNamespace(modulo_system_database_url=""),
         ),
         patch("farna.db.crud.sso_provider.append_audit_event", new_callable=AsyncMock),
     ):

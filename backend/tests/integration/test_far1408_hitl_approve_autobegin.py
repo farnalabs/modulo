@@ -142,10 +142,7 @@ async def _seed_claimed_choice_gate(engine: AsyncEngine) -> _SeededGate:
             {"id": str(org_id), "name": "Far1408", "slug": f"far1408-{org_id.hex[:8]}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) "
-                "VALUES (:id, :email, :name, 'local', true, 'hash')"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, auth_provider, active, password_hash) VALUES (:id, :email, :name, 'local', true, 'hash')"),
             {"id": str(account_id), "email": f"far1408-{org_id.hex[:8]}@test.local", "name": "FAR-1408 Approver"},
         )
         await conn.execute(
@@ -175,12 +172,7 @@ async def _seed_claimed_choice_gate(engine: AsyncEngine) -> _SeededGate:
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, "
-                "trigger_type, input_hash, input_payload, langgraph_thread_id, "
-                "run_number, status) "
-                "VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'awaiting_human')"
-            ),
+            text("INSERT INTO runs (id, organisation_id, pipeline_id, snapshot_id, trigger_type, input_hash, input_payload, langgraph_thread_id, run_number, status) VALUES (:id, :oid, :pid, :sid, 'manual', :ih, '{}'::json, :thread, :rn, 'awaiting_human')"),
             {
                 "id": str(run_id),
                 "oid": str(org_id),
@@ -192,11 +184,7 @@ async def _seed_claimed_choice_gate(engine: AsyncEngine) -> _SeededGate:
             },
         )
         await conn.execute(
-            text(
-                "INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, "
-                "account_id, claimed_at, claim_token, expires_at, gate_config_json) "
-                "VALUES (:id, :oid, :rid, :pid, :review, :aid, now(), :tok, :exp, CAST(:cfg AS json))"
-            ),
+            text("INSERT INTO hitl_claims (id, organisation_id, run_id, pipeline_id, review_id, account_id, claimed_at, claim_token, expires_at, gate_config_json) VALUES (:id, :oid, :rid, :pid, :review, :aid, now(), :tok, :exp, CAST(:cfg AS json))"),
             {
                 "id": str(uuid.uuid4()),
                 "oid": str(org_id),
@@ -334,10 +322,7 @@ async def test_approve_runs_validation_inside_the_transaction(
     async with db_engine.connect() as conn:
         row = (
             await conn.execute(
-                text(
-                    "SELECT decision, decided_by, decision_payload FROM hitl_claims "
-                    "WHERE run_id = :rid AND review_id = :review"
-                ),
+                text("SELECT decision, decided_by, decision_payload FROM hitl_claims WHERE run_id = :rid AND review_id = :review"),
                 {"rid": str(gate.run_id), "review": gate.review_id},
             )
         ).fetchone()

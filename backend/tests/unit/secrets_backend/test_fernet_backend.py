@@ -235,11 +235,7 @@ class TestDeleteSecret:
         await backend.delete_secret("existing-key")
 
         delete_stmt = next(
-            (
-                call.args[0]
-                for call in mock_session.execute.await_args_list
-                if "DELETE FROM secrets" in str(call.args[0])
-            ),
+            (call.args[0] for call in mock_session.execute.await_args_list if "DELETE FROM secrets" in str(call.args[0])),
             None,
         )
         assert delete_stmt is not None, "Expected a DELETE statement against the secrets table"
@@ -256,9 +252,7 @@ class TestSetSecretTOCTOU:
 
     async def test_integrity_error_retries_then_succeeds(self):
         """A concurrent INSERT racing this one is retried exactly once."""
-        session = self._session_with_flush(
-            AsyncMock(side_effect=[IntegrityError("stmt", {}, Exception("duplicate key")), None])
-        )
+        session = self._session_with_flush(AsyncMock(side_effect=[IntegrityError("stmt", {}, Exception("duplicate key")), None]))
         backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         await backend.set_secret("new-key", _SECRET_VALUE)
@@ -267,9 +261,7 @@ class TestSetSecretTOCTOU:
         assert session.add.call_count == 2, "Expected the new row to be re-added on retry"
 
     async def test_integrity_error_exhausted_raises(self):
-        session = self._session_with_flush(
-            AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key")))
-        )
+        session = self._session_with_flush(AsyncMock(side_effect=IntegrityError("stmt", {}, Exception("duplicate key"))))
         backend = FernetSecretsBackend(fernet_key=_KEY, session=session)
 
         with pytest.raises(IntegrityError):
@@ -448,9 +440,7 @@ class TestOrgIdCaching:
         call_count = session.execute.call_count
         await backend.set_secret("key2", "val2")
 
-        assert session.execute.call_count == call_count + 1, (
-            f"Expected {call_count + 1} execute calls, got {session.execute.call_count}"
-        )
+        assert session.execute.call_count == call_count + 1, f"Expected {call_count + 1} execute calls, got {session.execute.call_count}"
 
 
 class TestSetSessionResetsCache:

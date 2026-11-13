@@ -468,13 +468,13 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_control_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value="function-ref")),
             ]
         )
         result = await smoke(session)
         assert result["connectivity"] == "ok"
-        assert result["session_user"] == "farna_breakglass"
+        assert result["session_user"] == "farna_control_breakglass"
 
     async def test_probe_returns_wrong_value(self) -> None:
         session = _mock_session()
@@ -490,7 +490,7 @@ class TestSmoke:
                 MagicMock(scalar_one=MagicMock(return_value="postgres")),
             ]
         )
-        with pytest.raises(SmokeFailureError, match="farna_breakglass"):
+        with pytest.raises(SmokeFailureError, match="farna_control_breakglass"):
             await smoke(session)
 
     async def test_function_missing(self) -> None:
@@ -498,7 +498,7 @@ class TestSmoke:
         session.execute = AsyncMock(
             side_effect=[
                 MagicMock(scalar_one=MagicMock(return_value=1)),
-                MagicMock(scalar_one=MagicMock(return_value="farna_breakglass")),
+                MagicMock(scalar_one=MagicMock(return_value="farna_control_breakglass")),
                 MagicMock(scalar_one=MagicMock(return_value=None)),
             ]
         )

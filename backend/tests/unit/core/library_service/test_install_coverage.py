@@ -428,9 +428,7 @@ class TestPersistCollectionRow:
 # ---------------------------------------------------------------------------
 
 
-def _make_schema_pin(
-    pid: uuid.UUID, *, fields: list[dict[str, Any]] | None = None, definition_json: dict[str, Any] | None = None
-) -> LibraryPrimitive:
+def _make_schema_pin(pid: uuid.UUID, *, fields: list[dict[str, Any]] | None = None, definition_json: dict[str, Any] | None = None) -> LibraryPrimitive:
     content: dict[str, Any] = {}
     if definition_json is not None:
         content["definition_json"] = definition_json

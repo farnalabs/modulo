@@ -253,9 +253,7 @@ def test_infer_schema_threads_session_into_model_backend(client: TestClient) -> 
     # must build the secrets backend with the DB session — this is the exact
     # regression the PR-Reviewer MAJOR flagged for schemas.py:916.
     assert captured_backends, "ModelBackendHub.initialise was never called"
-    assert all(b is not None and getattr(b, "_session", None) is not None for b in captured_backends), (
-        "model-backend secrets backend must carry the DB session"
-    )
+    assert all(b is not None and getattr(b, "_session", None) is not None for b in captured_backends), "model-backend secrets backend must carry the DB session"
 
 
 def test_infer_schema_threads_session_into_model_backend_decrypt(client: TestClient) -> None:
@@ -307,9 +305,7 @@ def test_infer_schema_threads_session_into_model_backend_decrypt(client: TestCli
 
     assert resp.status_code == 200
     assert backend_sessions, "ModelBackendHub must receive a secrets backend for the model-backend decrypt"
-    assert all(s is not None for s in backend_sessions), (
-        "model-backend decrypt secrets backend must carry the DB session, or credentials never decrypt"
-    )
+    assert all(s is not None for s in backend_sessions), "model-backend decrypt secrets backend must carry the DB session, or credentials never decrypt"
     # ORG-SCOPE AT DECRYPT (MAJOR regression): the model-backend decrypt is the
     # LAST secrets backend built (the context loader and connector sampling each
     # build their own earlier). The decrypt must re-assert the org scope in its
@@ -317,10 +313,7 @@ def test_infer_schema_threads_session_into_model_backend_decrypt(client: TestCli
     # transaction-local, so the loader's org scope is gone once it commits. A
     # missing re-assert leaves no set_rls_org call after the final backend build.
     last_backend_build = next(i for i, (kind, _) in reversed(list(enumerate(events))) if kind == "create_backend")
-    assert any(kind == "rls" and org == _ORG_ID for i, (kind, org) in enumerate(events) if i > last_backend_build), (
-        "model-backend decrypt must re-assert the org scope (set_rls_org) in the same "
-        "transaction as the credential decrypt"
-    )
+    assert any(kind == "rls" and org == _ORG_ID for i, (kind, org) in enumerate(events) if i > last_backend_build), "model-backend decrypt must re-assert the org scope (set_rls_org) in the same transaction as the credential decrypt"
     # Sanity: the loader + sampling re-asserts happen before the final build.
     assert mock_rls.call_count >= 2
 
@@ -394,9 +387,7 @@ def test_infer_schema_passes_connector_type_to_service(client: TestClient) -> No
         patch("farna.api.routes.schemas.create_secrets_backend"),
         patch("farna.api.routes.schemas.SchemaInferenceService", autospec=True) as mock_service_cls,
     ):
-        mock_service_cls.return_value.infer = AsyncMock(
-            return_value={"type": "object", "properties": {"summary": {"type": "string"}}}
-        )
+        mock_service_cls.return_value.infer = AsyncMock(return_value={"type": "object", "properties": {"summary": {"type": "string"}}})
         resp = client.post(
             "/api/v1/schemas/infer",
             json={
@@ -618,9 +609,7 @@ def test_infer_schema_defaults_filters_and_limit(client: TestClient) -> None:
         patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("farna.api.routes.schemas.set_rls_org"),
         patch("farna.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1"}]),
-        patch(
-            "farna.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}
-        ),
+        patch("farna.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}),
         patch("farna.api.routes.schemas.ConnectorHub.initialise"),
         patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(
@@ -692,9 +681,7 @@ def test_infer_schema_emits_audit_event_with_tool_source_and_model(client: TestC
         patch("farna.api.routes.schemas.list_model_backends", return_value=page_result),
         patch("farna.api.routes.schemas.set_rls_org"),
         patch("farna.api.routes.schemas.ConnectorHub.sample", return_value=[{"id": "1", "title": "Test"}]),
-        patch(
-            "farna.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}
-        ),
+        patch("farna.api.routes.schemas.SchemaInferenceService.infer", return_value={"type": "object", "properties": {}}),
         patch("farna.api.routes.schemas.ConnectorHub.initialise"),
         patch("farna.api.routes.schemas.ModelBackendHub.initialise"),
         patch(

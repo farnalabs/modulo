@@ -32,11 +32,7 @@ def _code_only(src: str) -> str:
     (``with_for_update(key_share=True)``) to explain why it is gone; the guard
     must scan executable code, not the explanation of its removal.
     """
-    tokens = [
-        tok.string
-        for tok in tokenize.generate_tokens(io.StringIO(src).readline)
-        if tok.type not in (tokenize.COMMENT, tokenize.STRING, tokenize.INDENT, tokenize.DEDENT, tokenize.NL)
-    ]
+    tokens = [tok.string for tok in tokenize.generate_tokens(io.StringIO(src).readline) if tok.type not in (tokenize.COMMENT, tokenize.STRING, tokenize.INDENT, tokenize.DEDENT, tokenize.NL)]
     return "\n".join(tokens)
 
 
@@ -111,19 +107,13 @@ def test_update_cost_controls_takes_advisory_before_org_row_mutation() -> None:
     lock_at = _token_index(src, _COST_STATE_LOCK_TOKEN)
     patch_at = _token_index(src, _ORG_ROW_MUTATOR_CALL_TOKEN)
     settings_at = _token_index(src, _ORG_ROW_SETTINGS_CALL_TOKEN)
-    assert lock_at < patch_at, (
-        "the cost advisory must be acquired BEFORE _cost_controls_patch, which "
-        "mutates the organisations row (org.daily_spend_limit) — the P1 lock-order inversion"
-    )
+    assert lock_at < patch_at, "the cost advisory must be acquired BEFORE _cost_controls_patch, which mutates the organisations row (org.daily_spend_limit) — the P1 lock-order inversion"
     assert lock_at < settings_at, "the advisory must precede every organisations-row write"
 
     # ``_cost_controls_patch`` really does mutate the org row (so the ordering
     # above is load-bearing, not vacuous). Raw source: the assignment must exist.
     patch_src = inspect.getsource(costs_routes._cost_controls_patch)
-    assert _ORG_DAILY_SPEND_ATTR in patch_src, (
-        "_cost_controls_patch must mutate org.daily_spend_limit; if that moved, this "
-        "guard's premise changed and must be revisited"
-    )
+    assert _ORG_DAILY_SPEND_ATTR in patch_src, "_cost_controls_patch must mutate org.daily_spend_limit; if that moved, this guard's premise changed and must be revisited"
 
 
 def test_set_spend_ceiling_takes_advisory_before_cost_state_write() -> None:

@@ -206,7 +206,7 @@ kill_timeout = 180
   policy = "always"
 
 [env]
-  MODULO_DB = "postgres"
+  FARNA_CONTROL_DB = "postgres"
   # Deployment environment name stamped on every operator alert email (FAR-1495).
   MODULO_ENV = "production"
   # Operator-alert environment allowlist: only these MODULO_ENVs may send
@@ -215,14 +215,14 @@ kill_timeout = 180
   # Set to "production" on BOTH Fly apps so staging — a CI-only E2E
   # environment with no live workload — stops paging while prod keeps alerting.
   ALERT_ENVIRONMENTS = "production"
-  # MODULO_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
+  # FARNA_CONTROL_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the farna_control_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.
-  MODULO_PUBLIC_URL = "https://app.modulo.run"
-  # MODULO_USERS is set with `fly secrets set` and must not be committed.
-  MODULO_PLUGIN_DISCOVERY = "false"
+  FARNA_CONTROL_PUBLIC_URL = "https://app.modulo.run"
+  # FARNA_CONTROL_USERS is set with `fly secrets set` and must not be committed.
+  FARNA_CONTROL_PLUGIN_DISCOVERY = "false"
   # Caps in-process local-run concurrency on the web machine to reduce worst-case event-loop load (paired with the CPU bump).
-  MODULO_MAX_LOCAL_CONCURRENCY = "2"
+  FARNA_CONTROL_MAX_LOCAL_CONCURRENCY = "2"
   SAQ_WORKER_CONCURRENCY = "20"
   # Code-accurate invariant: the effective pool is >= SAQ_WORKER_CONCURRENCY
   # + 5 (max() floor in saq_worker._effective_redis_pool_size - every

@@ -76,9 +76,7 @@ def client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -132,9 +130,7 @@ def test_pipeline_references_pagination(client: TestClient) -> None:
     page_result = MagicMock(items=[ref], total=5, page=2, page_size=1)
     with (
         patch("farna.api.routes.model_backends.get_model_backend", return_value=_make_backend()),
-        patch(
-            "farna.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result
-        ) as mock_refs,
+        patch("farna.api.routes.model_backends.list_pipeline_references_for_backend", return_value=page_result) as mock_refs,
         patch("farna.api.routes.model_backends.set_rls_org"),
         patch("farna.api.routes.model_backends.set_rls_user_context"),
     ):

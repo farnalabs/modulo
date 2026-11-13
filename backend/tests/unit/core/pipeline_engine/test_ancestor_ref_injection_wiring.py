@@ -154,9 +154,7 @@ class TestFoldAncestorEmissionRefs:
     def test_malformed_entries_are_skipped_not_fatal(self) -> None:
         malformed_state = _declaring_state(
             artifacts=[
-                _artifact(
-                    "a", "completed", {"work_item_refs": ["garbage", {"kind": "jira"}, _ref("jira", "OK", "agent")]}
-                ),
+                _artifact("a", "completed", {"work_item_refs": ["garbage", {"kind": "jira"}, _ref("jira", "OK", "agent")]}),
             ]
         )
         folded = _fold_ancestor_emission_refs(malformed_state)

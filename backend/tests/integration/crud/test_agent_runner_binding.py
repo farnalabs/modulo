@@ -46,21 +46,11 @@ _INSERT_MODEL_BACKEND_SQL = text(
     "'{}'::json, 'enabled', 'org', 'native')"
 )
 
-_INSERT_BINDING_SQL = text(
-    "INSERT INTO agent_runner_bindings (id, organisation_id, agent_id, model_backend_id, "
-    "target_env_var, source_field, account_id) "
-    "VALUES (:id, :oid, :aid, :bid, :target, :source, :uid)"
-)
+_INSERT_BINDING_SQL = text("INSERT INTO agent_runner_bindings (id, organisation_id, agent_id, model_backend_id, target_env_var, source_field, account_id) VALUES (:id, :oid, :aid, :bid, :target, :source, :uid)")
 
-_INSERT_LOCAL_PROFILE_SQL = text(
-    "INSERT INTO environment_profiles (id, organisation_id, name, provider_type, config_json, "
-    "capabilities_json, secret_refs_json, account_id) "
-    "VALUES (:id, :oid, :n, 'local', CAST(:cfg AS json), '[]'::json, '[]'::json, :uid)"
-)
+_INSERT_LOCAL_PROFILE_SQL = text("INSERT INTO environment_profiles (id, organisation_id, name, provider_type, config_json, capabilities_json, secret_refs_json, account_id) VALUES (:id, :oid, :n, 'local', CAST(:cfg AS json), '[]'::json, '[]'::json, :uid)")
 
-_INSERT_SECRET_SQL = text(
-    "INSERT INTO secrets (id, organisation_id, key, encrypted_value) VALUES (:id, :oid, :key, :value)"
-)
+_INSERT_SECRET_SQL = text("INSERT INTO secrets (id, organisation_id, key, encrypted_value) VALUES (:id, :oid, :key, :value)")
 
 
 def _binding_spec(backend_id: uuid.UUID, user_id: uuid.UUID, *, target: str = "OPENCODE_API_KEY") -> dict:
@@ -72,9 +62,7 @@ def _binding_spec(backend_id: uuid.UUID, user_id: uuid.UUID, *, target: str = "O
     }
 
 
-async def _seed_agent_and_backend(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, name: str
-) -> tuple:
+async def _seed_agent_and_backend(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID, name: str) -> tuple:
     agent = await create_agent(
         rls_session,
         org_id=test_org,
@@ -131,9 +119,7 @@ async def test_unique_target_env_var_per_agent(rls_session, test_org, test_user)
 
 async def test_delete_bound_backend_blocked_at_db_level(rls_session, test_org, test_user) -> None:
     agent, mb = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-restrict")
-    await replace_agent_bindings(
-        rls_session, org_id=test_org, agent_id=agent.id, bindings_specs=[_binding_spec(mb.id, test_user)]
-    )
+    await replace_agent_bindings(rls_session, org_id=test_org, agent_id=agent.id, bindings_specs=[_binding_spec(mb.id, test_user)])
     with pytest.raises(HTTPException) as excinfo:
         await delete_model_backend(rls_session, mb.id)
     assert "Cannot delete model backend" in str(excinfo.value.detail)
@@ -155,10 +141,7 @@ async def test_rls_org_isolation(db_engine: AsyncEngine, app_engine: AsyncEngine
             {"id": str(foreign_org), "n": "RLS Other Org", "s": f"rls-{foreign_org.hex[:8]}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) "
-                "VALUES (:id, :e, :n, 'h', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :e, :n, 'h', 'local', true)"),
             {"id": str(foreign_user), "e": "rls-bind@example.com", "n": "RLS Bind"},
         )
         await conn.execute(
@@ -222,26 +205,18 @@ async def test_delete_binding_scoped_to_agent(rls_session, test_org, test_user) 
     """
     agent_a, mb_a = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-A")
     agent_b, mb_b = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-B")
-    created_a = await replace_agent_bindings(
-        rls_session, org_id=test_org, agent_id=agent_a.id, bindings_specs=[_binding_spec(mb_a.id, test_user)]
-    )
-    created_b = await replace_agent_bindings(
-        rls_session, org_id=test_org, agent_id=agent_b.id, bindings_specs=[_binding_spec(mb_b.id, test_user)]
-    )
+    created_a = await replace_agent_bindings(rls_session, org_id=test_org, agent_id=agent_a.id, bindings_specs=[_binding_spec(mb_a.id, test_user)])
+    created_b = await replace_agent_bindings(rls_session, org_id=test_org, agent_id=agent_b.id, bindings_specs=[_binding_spec(mb_b.id, test_user)])
 
     # Wrong-agent DELETE is scoped out: not deleted, row survives.
     # (delete_binding resolves the row SCOPED to the path's agent — the F8
     # contract; a foreign binding is a plain False, never a cross-agent hit.)
     assert await delete_binding(rls_session, binding_id=created_b[0].id, agent_id=agent_a.id) is False
-    assert (
-        await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_b[0].id))
-    ).scalar_one_or_none() is not None
+    assert (await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_b[0].id))).scalar_one_or_none() is not None
 
     # Correct-agent DELETE removes the row.
     assert await delete_binding(rls_session, binding_id=created_a[0].id, agent_id=agent_a.id) is True
-    assert (
-        await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_a[0].id))
-    ).scalar_one_or_none() is None
+    assert (await rls_session.execute(select(AgentRunnerBinding).where(AgentRunnerBinding.id == created_a[0].id))).scalar_one_or_none() is None
 
 
 async def test_org_teardown_with_bindings_present(db_engine: AsyncEngine, test_user: uuid.UUID) -> None:
@@ -325,9 +300,7 @@ async def _seed_resolution_scene(
 
     from farna.settings import get_settings
 
-    encrypted_secret = Fernet(get_settings().fernet_key.encode()).encrypt(
-        json.dumps({"api_key": secret_value}).encode("utf-8")
-    )
+    encrypted_secret = Fernet(get_settings().fernet_key.encode()).encrypt(json.dumps({"api_key": secret_value}).encode("utf-8"))
     config_json = '{"allow_runner_env_bindings": true}' if profile_opt_in else "{}"
 
     stmts: list[tuple[Any, dict[str, Any]]] = [
@@ -406,16 +379,11 @@ async def resolution_org(db_engine: AsyncEngine) -> tuple[uuid.UUID, uuid.UUID]:
             {"id": str(org_id), "n": f"Resolution-{org_id.hex[:8]}", "s": f"res-{org_id.hex[:8]}"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO accounts (id, email, display_name, password_hash, "
-                "auth_provider, active) VALUES (:id, :email, :n, 'hash', 'local', true)"
-            ),
+            text("INSERT INTO accounts (id, email, display_name, password_hash, auth_provider, active) VALUES (:id, :email, :n, 'hash', 'local', true)"),
             {"id": str(user_id), "email": f"resolution-{user_id.hex[:8]}@example.com", "n": "Resolution User"},
         )
         await conn.execute(
-            text(
-                "INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"
-            ),
+            text("INSERT INTO org_memberships (id, account_id, organisation_id, role) VALUES (:mid, :aid, :oid, 'admin')"),
             {"mid": str(uuid.uuid4()), "aid": str(user_id), "oid": str(org_id)},
         )
     return org_id, user_id
@@ -425,15 +393,11 @@ def _app_session_factory(app_engine: AsyncEngine) -> Any:
     return async_sessionmaker(app_engine, expire_on_commit=False)
 
 
-async def test_local_profile_refuses_bindings_without_opt_in(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_local_profile_refuses_bindings_without_opt_in(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """Local + bindings + no opt-in -> typed provision-time refusal (D7 posture)."""
     from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
-    agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=False
-    )
+    agent_id, _backend_id, profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=False)
 
     with pytest.raises(LocalProviderBindingsRefusedError):
         await resolve_agent_bindings(
@@ -444,9 +408,7 @@ async def test_local_profile_refuses_bindings_without_opt_in(
         )
 
 
-async def test_string_opt_in_is_not_an_opt_in(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_string_opt_in_is_not_an_opt_in(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """FAR-592 qa F10: a TRUTHY STRING ("true") is NOT an opt-in.
 
     Only an explicit JSON ``true`` opts the Local tier in — a
@@ -455,16 +417,10 @@ async def test_string_opt_in_is_not_an_opt_in(
     """
     from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
-    agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
-    )
+    agent_id, _backend_id, profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True)
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
-            text(
-                "UPDATE environment_profiles "
-                'SET config_json = \'{"allow_runner_env_bindings": "true"}\'::json '
-                "WHERE id = :pid"
-            ),
+            text('UPDATE environment_profiles SET config_json = \'{"allow_runner_env_bindings": "true"}\'::json WHERE id = :pid'),
             {"pid": str(profile_id)},
         )
 
@@ -477,9 +433,7 @@ async def test_string_opt_in_is_not_an_opt_in(
         )
 
 
-async def test_unresolvable_profile_fails_closed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_unresolvable_profile_fails_closed(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """FAR-592 qa F10: a PROVIDED but unresolvable profile refuses (fail-closed).
 
     The open E2B-default path only applies when NO profile id is handed over —
@@ -488,9 +442,7 @@ async def test_unresolvable_profile_fails_closed(
     """
     from farna.core.runner_bindings import LocalProviderBindingsRefusedError
 
-    agent_id, _backend_id, _real_profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
-    )
+    agent_id, _backend_id, _real_profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True)
 
     with pytest.raises(LocalProviderBindingsRefusedError, match="fail-closed"):
         await resolve_agent_bindings(
@@ -501,16 +453,12 @@ async def test_unresolvable_profile_fails_closed(
         )
 
 
-async def test_missing_backend_fails_resolution_typed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_missing_backend_fails_resolution_typed(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """FAR-592 qa F3: a binding to a backend that is NOT org-visible fails
     typed in the validating PRE-PASS (never a raw dict-index KeyError)."""
     from farna.core.runner_bindings import AgentBindingResolutionError
 
-    agent_id, backend_id, _profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
-    )
+    agent_id, backend_id, _profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True)
     # The binding row CANNOT point at a nonexistent backend (FK), so make the
     # backend row invisible to the org instead: repoint it to a scratch org.
     # The FK on model_backends.organisation_id is satisfied by org B; the
@@ -535,9 +483,7 @@ async def test_missing_backend_fails_resolution_typed(
         )
 
 
-async def test_replace_reserved_target_returns_422(
-    rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID
-) -> None:
+async def test_replace_reserved_target_returns_422(rls_session: AsyncSession, test_org: uuid.UUID, test_user: uuid.UUID) -> None:
     """FAR-592 qa F7: BindingValidationError surfaces as HTTP 422 — the
     validator message travels in ``detail`` (never a raw 500)."""
     agent, mb = await _seed_agent_and_backend(rls_session, test_org, test_user, "BindAgent-422")
@@ -549,9 +495,7 @@ async def test_replace_reserved_target_returns_422(
     assert "GITHUB_TOKEN" in str(excinfo.value.detail)
 
 
-async def test_concurrent_replace_serialises_no_union(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_concurrent_replace_serialises_no_union(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """FAR-592 qa F6: concurrent replace calls serialise on the agent row lock.
 
     While a replace sits UNCOMMITTED holding the agent row lock, a second
@@ -628,13 +572,9 @@ async def test_concurrent_replace_serialises_no_union(
     assert rows[0].id == created[0].id
 
 
-async def test_local_profile_opt_in_resolves_decrypted_secret(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_local_profile_opt_in_resolves_decrypted_secret(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """Explicit opt-in: the runner env sees the DECRYPTED credential value."""
-    agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True, secret_value="decrypted-stanza-key"
-    )
+    agent_id, _backend_id, profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True, secret_value="decrypted-stanza-key")
 
     resolved = await resolve_agent_bindings(
         session_factory=_app_session_factory(app_engine),
@@ -645,15 +585,11 @@ async def test_local_profile_opt_in_resolves_decrypted_secret(
     assert resolved == {"OPENCODE_API_KEY": "decrypted-stanza-key"}
 
 
-async def test_unknown_source_field_fails_resolution_typed(
-    db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]
-) -> None:
+async def test_unknown_source_field_fails_resolution_typed(db_engine: AsyncEngine, app_engine: AsyncEngine, resolution_org: tuple[uuid.UUID, uuid.UUID]) -> None:
     """A source field the stored secret does not carry -> typed resolution error."""
     from farna.core.runner_bindings import AgentBindingResolutionError
 
-    agent_id, _backend_id, profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
-    )
+    agent_id, _backend_id, profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True)
 
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
@@ -687,9 +623,7 @@ async def test_binding_export_import_round_trip(
     from farna.db.crud.pipeline import create_pipeline
     from farna.settings import get_settings
 
-    agent_id, backend_id, _profile_id = await _seed_resolution_scene(
-        db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True
-    )
+    agent_id, backend_id, _profile_id = await _seed_resolution_scene(db_engine, resolution_org[0], resolution_org[1], profile_opt_in=True)
     backend_name = f"Resolve-{backend_id.hex[:6]}"
 
     # Export org A: pipeline -> agent -> binding (backend pulled into the bundle).
@@ -708,16 +642,12 @@ async def test_binding_export_import_round_trip(
         data = await export_pipeline_bundle(session, pipeline.id)
 
     bundle = extract_bundle_json_from_zip(data)
-    assert bundle["agents"][0]["model_backend_bindings"] == [
-        {"model_backend_name": backend_name, "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}
-    ]
+    assert bundle["agents"][0]["model_backend_bindings"] == [{"model_backend_name": backend_name, "target_env_var": "OPENCODE_API_KEY", "source_field": "api_key"}]
 
     # Import into a FRESH org B whose same-named backend is a DIFFERENT row.
     org_b = uuid.uuid4()
     backend_b = uuid.uuid4()
-    encrypted_secret = Fernet(get_settings().fernet_key.encode()).encrypt(
-        json.dumps({"api_key": "stanza-secret-value"}).encode("utf-8")
-    )
+    encrypted_secret = Fernet(get_settings().fernet_key.encode()).encrypt(json.dumps({"api_key": "stanza-secret-value"}).encode("utf-8"))
     async with db_engine.connect() as conn, conn.begin():
         await conn.execute(
             _INSERT_ORG_SQL,
@@ -758,9 +688,7 @@ async def test_binding_export_import_round_trip(
         imported_agent_id = uuid.UUID(result["agents"][str(agent_id)])
 
         rows = await session.execute(
-            text(
-                "SELECT model_backend_id, target_env_var, source_field FROM agent_runner_bindings WHERE agent_id = :aid"
-            ),
+            text("SELECT model_backend_id, target_env_var, source_field FROM agent_runner_bindings WHERE agent_id = :aid"),
             {"aid": imported_agent_id},
         )
         imported = rows.all()

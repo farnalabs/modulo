@@ -64,9 +64,7 @@ class TestDeferCapacityDeniedRun:
         run_id = uuid.uuid4()
         update = AsyncMock(return_value=object())
         with patch("farna.db.crud.run.update_run_status", new=update):
-            landed = await pe.defer_capacity_denied_run_to_awaiting_human(
-                MagicMock(), str(run_id), str(ORG), claim_token="tok-9"
-            )
+            landed = await pe.defer_capacity_denied_run_to_awaiting_human(MagicMock(), str(run_id), str(ORG), claim_token="tok-9")
 
         assert landed is True
         update.assert_awaited_once()
@@ -84,9 +82,7 @@ class TestDeferCapacityDeniedRun:
     async def test_reset_reports_false_when_the_fence_rejects(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_session_factory(monkeypatch)
         with patch("farna.db.crud.run.update_run_status", new=AsyncMock(return_value=None)):
-            landed = await pe.defer_capacity_denied_run_to_awaiting_human(
-                MagicMock(), str(uuid.uuid4()), str(ORG), claim_token="stale"
-            )
+            landed = await pe.defer_capacity_denied_run_to_awaiting_human(MagicMock(), str(uuid.uuid4()), str(ORG), claim_token="stale")
         assert landed is False
 
 
@@ -113,9 +109,7 @@ class TestRunExecutorCapacityDeferred:
             ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch.object(
-                pe, "defer_capacity_denied_run_to_awaiting_human", new_callable=AsyncMock, return_value=True
-            ) as defer,
+            patch.object(pe, "defer_capacity_denied_run_to_awaiting_human", new_callable=AsyncMock, return_value=True) as defer,
         ):
             result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
                 engine,
@@ -151,9 +145,7 @@ class TestRunExecutorCapacityDeferred:
             ),
             patch.object(pe, "heartbeat_loop", new_callable=AsyncMock),
             patch.object(pe, "fail_run_terminal", new_callable=AsyncMock) as fail,
-            patch.object(
-                pe, "defer_capacity_denied_run_to_awaiting_human", new_callable=AsyncMock, return_value=True
-            ) as defer,
+            patch.object(pe, "defer_capacity_denied_run_to_awaiting_human", new_callable=AsyncMock, return_value=True) as defer,
         ):
             result = await pe.run_executor_with_watchdog(  # type: ignore[arg-type]
                 engine,
@@ -302,9 +294,7 @@ class TestResumeRedispatchCapacityGate:
             patch.object(ch, "_resume_org_capacity_free", new=AsyncMock(return_value=False)),
             patch.object(ch, "_re_enqueue_run", new=enqueue),
         ):
-            rc = await ch._re_dispatch_reconciled_run(
-                MagicMock(), q, ORG, row, "resume_run", "suffix", {"action": "approved"}, False, 0, summary
-            )
+            rc = await ch._re_dispatch_reconciled_run(MagicMock(), q, ORG, row, "resume_run", "suffix", {"action": "approved"}, False, 0, summary)
 
         assert rc == 0
         assert summary["capacity_deferred"] == 1
@@ -321,9 +311,7 @@ class TestResumeRedispatchCapacityGate:
             patch.object(ch, "_resume_org_capacity_free", new=AsyncMock(return_value=True)),
             patch.object(ch, "_re_enqueue_run", new=enqueue),
         ):
-            rc = await ch._re_dispatch_reconciled_run(
-                MagicMock(), q, ORG, row, "resume_run", "suffix", {"action": "approved"}, False, 0, summary
-            )
+            rc = await ch._re_dispatch_reconciled_run(MagicMock(), q, ORG, row, "resume_run", "suffix", {"action": "approved"}, False, 0, summary)
 
         assert rc == 0
         assert summary["repaired"] == 1
@@ -344,9 +332,7 @@ class TestResumeRedispatchCapacityGate:
             patch.object(ch, "_resume_org_capacity_free", new=capacity),
             patch.object(ch, "_re_enqueue_run", new=enqueue),
         ):
-            await ch._re_dispatch_reconciled_run(
-                MagicMock(), q, ORG, row, "execute_run", "suffix", None, False, 0, summary
-            )
+            await ch._re_dispatch_reconciled_run(MagicMock(), q, ORG, row, "execute_run", "suffix", None, False, 0, summary)
 
         capacity.assert_not_awaited()
         enqueue.assert_awaited_once()

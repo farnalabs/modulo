@@ -138,9 +138,7 @@ def _service_unavailable_records(caplog: pytest.LogCaptureFixture) -> list[loggi
 class TestRaiseSessionContractErrorGuard:
     """The shared guard's contract (FAR-1464 Step 5, helper-level)."""
 
-    def test_invalid_request_error_raises_500_with_the_classifier_detail(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_invalid_request_error_raises_500_with_the_classifier_detail(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.ERROR), pytest.raises(HTTPException) as excinfo:
             raise_session_contract_error(_invalid_request_error(), "test.route_handler")
 
@@ -177,9 +175,7 @@ class TestAdminCreateTeamArmGuard:
 
     URL = "/api/v1/admin/teams"
 
-    def test_invalid_request_error_is_500_not_503(
-        self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_invalid_request_error_is_500_not_503(self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture) -> None:
         client = _build_client(_begin_failing_session(_invalid_request_error()))
         with caplog.at_level(logging.ERROR):
             resp = client.post(self.URL, json={"name": "guard-test-team"})
@@ -189,9 +185,7 @@ class TestAdminCreateTeamArmGuard:
         records = _service_unavailable_records(caplog)
         assert not records, f"session-contract 500 must not file a db_transient record: {records}"
 
-    def test_operational_error_still_surfaces_as_503(
-        self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_operational_error_still_surfaces_as_503(self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture) -> None:
         client = _build_client(_begin_failing_session(_operational_error()))
         with caplog.at_level(logging.ERROR):
             resp = client.post(self.URL, json={"name": "guard-test-team"})
@@ -207,9 +201,7 @@ class TestFeatureFlagsListArmGuard:
 
     URL = "/api/v1/admin/feature-flags"
 
-    def test_invalid_request_error_is_500_not_503(
-        self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture
-    ) -> None:
+    def test_invalid_request_error_is_500_not_503(self, cleanup_overrides: None, caplog: pytest.LogCaptureFixture) -> None:
         client = _build_client(_ok_session())
         with (
             patch(

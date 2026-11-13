@@ -265,9 +265,7 @@ class TestCanonicalWorkItemId:
         assert canonical_work_item_id(_ORG, "github_issue", "#5") == canonical_work_item_id(_ORG, "github_issue", "5")
 
     def test_github_url_and_qualified_ref_collapse_to_same_row(self) -> None:
-        assert canonical_work_item_id(_ORG, "github_issue", "https://github.com/a/b/pull/5") == canonical_work_item_id(
-            _ORG, "github_issue", "a/b#5"
-        )
+        assert canonical_work_item_id(_ORG, "github_issue", "https://github.com/a/b/pull/5") == canonical_work_item_id(_ORG, "github_issue", "a/b#5")
 
     def test_tracker_spacing_collapses_to_same_row(self) -> None:
         assert canonical_work_item_id(_ORG, "linear", "far 123") == canonical_work_item_id(_ORG, "linear", "far-123")
@@ -276,9 +274,7 @@ class TestCanonicalWorkItemId:
         assert canonical_work_item_id(_ORG, "github_issue", "#5") != canonical_work_item_id(_ORG, "jira", "FAR-5")
 
     def test_org_participates_in_the_id(self) -> None:
-        assert canonical_work_item_id(_ORG, "github_issue", "#5") != canonical_work_item_id(
-            _OTHER_ORG, "github_issue", "#5"
-        )
+        assert canonical_work_item_id(_ORG, "github_issue", "#5") != canonical_work_item_id(_OTHER_ORG, "github_issue", "#5")
 
     def test_returns_typed_uuid(self) -> None:
         result = canonical_work_item_id(_ORG, "github_issue", "#5")

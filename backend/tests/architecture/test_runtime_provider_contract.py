@@ -90,10 +90,7 @@ def test_concrete_providers_not_imported_outside_runtime_provider_package() -> N
         for module in _imported_modules(tree):
             if module in _CONCRETE_MODULES:
                 violations.append(f"  {rel}: imports concrete provider module {module}")
-    assert not violations, (
-        "Concrete runtime-provider modules must only be imported inside core/runtime_provider.\n"
-        "Resolve providers via RuntimeProviderHub.resolve() / build_hub() instead.\n" + "\n".join(violations)
-    )
+    assert not violations, "Concrete runtime-provider modules must only be imported inside core/runtime_provider.\nResolve providers via RuntimeProviderHub.resolve() / build_hub() instead.\n" + "\n".join(violations)
 
 
 def test_hub_consumers_call_only_abc_methods() -> None:
@@ -151,10 +148,7 @@ def test_hub_consumers_call_only_abc_methods() -> None:
             if method in _ABC_METHODS or method.startswith("_"):
                 continue
             violations.append(f"  {rel}:{node.lineno}  .{method}() is not on the runtime-provider ABC/hub surface")
-    assert not violations, (
-        "Hub consumers must only call ABC-declared provider methods or RuntimeProviderHub's "
-        "public surface (ADR 029).\n" + "\n".join(violations)
-    )
+    assert not violations, "Hub consumers must only call ABC-declared provider methods or RuntimeProviderHub's public surface (ADR 029).\n" + "\n".join(violations)
 
 
 def _is_provider_expr(node: ast.expr, names: set[str]) -> bool:

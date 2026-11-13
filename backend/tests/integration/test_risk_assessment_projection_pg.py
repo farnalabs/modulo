@@ -150,9 +150,7 @@ async def test_key_prefix_like_filters_on_postgres(db_session: AsyncSession) -> 
 async def test_node_subject_split_part_and_pipeline_subquery(db_session: AsyncSession) -> None:
     seeded = await _seed(db_session)
 
-    rows, degraded = await _load_risk_assessment_rows(
-        db_session, seeded["org_id"], pipeline_id=seeded["pipeline_id"], days=7
-    )
+    rows, degraded = await _load_risk_assessment_rows(db_session, seeded["org_id"], pipeline_id=seeded["pipeline_id"], days=7)
 
     assert degraded is False
     # split_part extracts the run id from "{run_id}:{node_id}", so the node row

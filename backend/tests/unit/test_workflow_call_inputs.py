@@ -167,10 +167,7 @@ def test_every_with_key_is_declared_by_the_called_workflow() -> None:
         declared = _workflow_call_inputs(_load(_callee_path(site)))
         for key in site.with_inputs:
             if key not in declared:
-                problems.append(
-                    f"{site.caller.name} job '{site.job_id}' passes with.{key} to {site.callee_name}, "
-                    f"which does not declare it under workflow_call.inputs (declared: {sorted(declared)})"
-                )
+                problems.append(f"{site.caller.name} job '{site.job_id}' passes with.{key} to {site.callee_name}, which does not declare it under workflow_call.inputs (declared: {sorted(declared)})")
     assert not problems, "\n".join(problems)
 
 
@@ -180,10 +177,7 @@ def test_every_required_workflow_call_input_is_supplied() -> None:
         declared = _workflow_call_inputs(_load(_callee_path(site)))
         for name, spec in declared.items():
             if isinstance(spec, dict) and spec.get("required") is True and name not in site.with_inputs:
-                problems.append(
-                    f"{site.caller.name} job '{site.job_id}' calls {site.callee_name} without its "
-                    f"required workflow_call input '{name}'"
-                )
+                problems.append(f"{site.caller.name} job '{site.job_id}' calls {site.callee_name} without its required workflow_call input '{name}'")
     assert not problems, "\n".join(problems)
 
 
@@ -212,7 +206,4 @@ def test_called_workflows_do_not_read_caller_owned_event_inputs() -> None:
 def test_release_installer_call_sites_are_covered() -> None:
     callees = {site.callee_name for site in _local_call_sites()}
     missing = [name for name in EXPECTED_CALLEES if name not in callees]
-    assert not missing, (
-        f"no local call site exercises {missing} - if the release shape genuinely changed, "
-        "update EXPECTED_CALLEES deliberately"
-    )
+    assert not missing, f"no local call site exercises {missing} - if the release shape genuinely changed, update EXPECTED_CALLEES deliberately"

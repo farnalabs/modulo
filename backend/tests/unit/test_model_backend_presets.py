@@ -50,12 +50,8 @@ def _client_for_session(mock_session: AsyncMock) -> Generator[TestClient, None, 
     app.dependency_overrides[get_settings] = _make_settings
     app.dependency_overrides[get_db_session] = override_session
     app.dependency_overrides[_get_engine] = lambda: MagicMock()
-    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
-    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(
-        username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin"
-    )
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
+    app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: TenantPrincipal(username="testuser", organisation_id=_ORG_ID, account_id=_USER_ID, org_role="admin")
     mock_plan = MagicMock()
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
@@ -135,15 +131,11 @@ class TestModelBackendPresets:
         for preset in MODEL_BACKEND_PRESETS:
             assert isinstance(preset.default_params, dict)
             assert all(isinstance(k, str) for k in preset.default_params)
-            assert all(isinstance(v, (str, int, float, bool)) or v is None for v in preset.default_params.values()), (
-                f"Preset {preset.id!r} default_params must be JSON-serialisable primitives"
-            )
+            assert all(isinstance(v, (str, int, float, bool)) or v is None for v in preset.default_params.values()), f"Preset {preset.id!r} default_params must be JSON-serialisable primitives"
 
     def test_at_least_one_free_or_low_cost_preset(self) -> None:
         hints = [p.description.lower() for p in MODEL_BACKEND_PRESETS]
-        assert any(("free" in h or "low cost" in h) for h in hints), (
-            "At least one preset must advertise a free/low-cost option"
-        )
+        assert any(("free" in h or "low cost" in h) for h in hints), "At least one preset must advertise a free/low-cost option"
 
 
 # ---------------------------------------------------------------------------

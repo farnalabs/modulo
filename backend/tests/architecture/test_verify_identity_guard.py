@@ -59,10 +59,7 @@ from tests.conftest import (
 # If the hook is removed or never fires, ``_REAL_VERIFY_IDENTITY`` is still
 # None here and this module fails to collect — the guard suite cannot go
 # green with a dead capture path.
-assert _root_conftest._REAL_VERIFY_IDENTITY is not None, (
-    "the _verify_identity snapshot must be captured at auth-module import "
-    "(import hook), not deferred to the first guard observation"
-)
+assert _root_conftest._REAL_VERIFY_IDENTITY is not None, "the _verify_identity snapshot must be captured at auth-module import (import hook), not deferred to the first guard observation"
 
 _MISMATCH = "was replaced and not restored"
 

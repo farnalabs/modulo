@@ -116,9 +116,7 @@ def test_chain_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: InMem
         ),
     ],
 )
-def test_error_span_exports_only_the_error_category(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, node: str, error: BaseException, expected_category: str
-) -> None:
+def test_error_span_exports_only_the_error_category(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, node: str, error: BaseException, expected_category: str) -> None:
     """The error status carries the exception class name only — never the message.
 
     Only the error CATEGORY is exported (consent copy: "Error category
@@ -150,9 +148,7 @@ def test_chain_attributes_set(bridge: LangGraphOtelBridge, exporter: InMemorySpa
 # ---------------------------------------------------------------------------
 
 
-def test_run_root_span_carries_deterministic_trace_id(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_run_root_span_carries_deterministic_trace_id(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     thread_id = "org-uuid:run-uuid"
     root = bridge.start_run_root(thread_id)
     bridge.end_run_root()
@@ -259,9 +255,7 @@ def test_llm_span_inherits_parent_context(bridge: LangGraphOtelBridge, exporter:
     assert llm.parent.span_id == chain.context.span_id
 
 
-def test_unknown_parent_run_id_is_handled_gracefully(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_unknown_parent_run_id_is_handled_gracefully(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     unknown_parent = uuid.uuid4()
     # Should not raise even though parent_run_id is not in _spans
@@ -291,9 +285,7 @@ def test_set_run_context_attributes_on_spans(bridge: LangGraphOtelBridge, export
     assert span.attributes.get("pipeline_id") != "pipe-456"
 
 
-def test_run_context_stamps_merge_with_caller_attributes(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_run_context_stamps_merge_with_caller_attributes(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """Identity stamps are merged onto the caller's attributes, not substituted.
 
     ``_span_attributes`` copies the caller's dict before adding the anonymised
@@ -396,9 +388,7 @@ def test_llm_end_records_token_usage(bridge: LangGraphOtelBridge, exporter: InMe
     assert span.status.status_code == StatusCode.OK
 
 
-def test_llm_end_without_token_usage_does_not_raise(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_end_without_token_usage_does_not_raise(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
     bridge.on_llm_end(LLMResult(generations=[], llm_output=None), run_id=run_id)
@@ -408,9 +398,7 @@ def test_llm_end_without_token_usage_does_not_raise(
     assert spans[0].status.status_code == StatusCode.OK
 
 
-def test_llm_end_token_usage_ignores_non_int_values(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_end_token_usage_ignores_non_int_values(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
     result = LLMResult(
@@ -426,9 +414,7 @@ def test_llm_end_token_usage_ignores_non_int_values(
     assert span.status.status_code == StatusCode.OK
 
 
-def test_llm_end_token_usage_ignores_non_dict_usage(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_end_token_usage_ignores_non_dict_usage(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """A non-dict ``token_usage`` must be ignored, not crash and not be recorded."""
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
@@ -443,9 +429,7 @@ def test_llm_end_token_usage_ignores_non_dict_usage(
     assert "langgraph.llm.total_tokens" not in attrs
 
 
-def test_llm_error_records_error_category_without_message(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_llm_error_records_error_category_without_message(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """An LLM failure must export the error category only — never its message."""
     run_id = uuid.uuid4()
     bridge.on_llm_start(_serialized("gpt-4"), ["Hello"], run_id=run_id)
@@ -527,9 +511,7 @@ def test_chat_model_end_finishes_span_ok(bridge: LangGraphOtelBridge, exporter: 
         pytest.param([[]], 0, id="one-empty-group"),
     ],
 )
-def test_chat_model_start_counts_messages_across_groups(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, messages: list[list[Any]], expected_count: int
-) -> None:
+def test_chat_model_start_counts_messages_across_groups(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, messages: list[list[Any]], expected_count: int) -> None:
     """``message_count`` must total every message in every group.
 
     Only ``len(messages)`` (group count) would under-report whenever LangGraph
@@ -578,9 +560,7 @@ def test_chat_model_span_inherits_parent_context(bridge: LangGraphOtelBridge, ex
     assert chat.parent.span_id == chain.context.span_id
 
 
-def test_chat_model_end_without_token_usage_does_not_raise(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_chat_model_end_without_token_usage_does_not_raise(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     run_id = uuid.uuid4()
     _chat_start(bridge, run_id)
     bridge.on_chat_model_end(ChatResult(generations=[]), run_id=run_id)
@@ -609,9 +589,7 @@ def test_tool_lifecycle_exports_ok_span(bridge: LangGraphOtelBridge, exporter: I
     assert str(run_id) not in bridge._spans
 
 
-def test_tool_error_records_error_category_without_message(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_tool_error_records_error_category_without_message(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """A tool failure exports the error category only — never the tool's message."""
     run_id = uuid.uuid4()
     bridge.on_tool_start(_serialized("search"), "query", run_id=run_id)
@@ -685,17 +663,13 @@ def test_spans_dict_empty_after_full_lifecycle(bridge: LangGraphOtelBridge, expo
             "langgraph.chain.ExplicitName",
             id="name-wins-over-id",
         ),
-        pytest.param(
-            {"name": "", "id": ["a", "b", "IdName"]}, "langgraph.chain.IdName", id="empty-name-falls-back-to-id"
-        ),
+        pytest.param({"name": "", "id": ["a", "b", "IdName"]}, "langgraph.chain.IdName", id="empty-name-falls-back-to-id"),
         pytest.param({}, "langgraph.chain.unknown", id="empty-dict"),
         # ``id`` is not a list — must not raise and must fall back to "unknown".
         pytest.param({"id": "not-a-list"}, "langgraph.chain.unknown", id="non-list-id"),
     ],
 )
-def test_serialized_name_resolution(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, serialized: dict[str, Any] | None, expected_name: str
-) -> None:
+def test_serialized_name_resolution(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter, serialized: dict[str, Any] | None, expected_name: str) -> None:
     """The span name is derived from LangChain's ``serialized`` dict.
 
     ``serialized`` is frequently ``None`` or partial in production, so each
@@ -731,9 +705,7 @@ def test_no_tags_leaves_no_tags_attribute(bridge: LangGraphOtelBridge, exporter:
 # ---------------------------------------------------------------------------
 
 
-def test_start_with_same_run_id_finalizes_previous_span(
-    bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter
-) -> None:
+def test_start_with_same_run_id_finalizes_previous_span(bridge: LangGraphOtelBridge, exporter: InMemorySpanExporter) -> None:
     """Reusing a run_id while the first span is still open ends the first span."""
     run_id = uuid.uuid4()
     bridge.on_chain_start(_serialized("First"), {}, run_id=run_id)

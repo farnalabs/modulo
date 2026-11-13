@@ -78,9 +78,7 @@ async def test_query_pages(connector):
 @respx.mock
 async def test_query_pages_with_space_id(connector):
     pages = {"results": [{"id": "p1", "title": "Space Page", "spaceId": "s1"}]}
-    respx.get(f"{_BASE}/wiki/api/v2/pages", params={"spaceId": "s1", "limit": 50}).mock(
-        return_value=httpx.Response(200, json=pages)
-    )
+    respx.get(f"{_BASE}/wiki/api/v2/pages", params={"spaceId": "s1", "limit": 50}).mock(return_value=httpx.Response(200, json=pages))
     result = await connector.query(ConnectorQuery(resource="pages", filters={"space_id": "s1", "limit": 50}))
     assert len(result.records) == 1
     assert result.records[0]["spaceId"] == "s1"
@@ -128,9 +126,7 @@ async def test_query_spaces(connector):
 @respx.mock
 async def test_query_spaces_with_type(connector):
     spaces = {"results": [{"id": "s1", "name": "Global Space", "key": "GS"}]}
-    respx.get(f"{_BASE}/wiki/api/v2/spaces", params={"limit": 50, "type": "global"}).mock(
-        return_value=httpx.Response(200, json=spaces)
-    )
+    respx.get(f"{_BASE}/wiki/api/v2/spaces", params={"limit": 50, "type": "global"}).mock(return_value=httpx.Response(200, json=spaces))
     result = await connector.query(ConnectorQuery(resource="spaces", filters={"limit": 50, "type": "global"}))
     assert len(result.records) == 1
 
@@ -167,9 +163,7 @@ async def test_query_content_search(connector):
             {"id": "c1", "title": "Found Page", "type": "page"},
         ]
     }
-    respx.get(f"{_BASE}/wiki/rest/api/content/search", params={"cql": "text~bug"}).mock(
-        return_value=httpx.Response(200, json=results)
-    )
+    respx.get(f"{_BASE}/wiki/rest/api/content/search", params={"cql": "text~bug"}).mock(return_value=httpx.Response(200, json=results))
     result = await connector.query(ConnectorQuery(resource="content", filters={"cql": "text~bug"}))
     assert len(result.records) == 1
     assert result.records[0]["title"] == "Found Page"
@@ -234,9 +228,7 @@ async def test_query_spaces_missing_results_no_crash(connector):
 @respx.mock
 async def test_query_children_non_list_results_no_crash(connector):
     """A corrupt non-list ``results`` page field must degrade gracefully."""
-    respx.get(f"{_BASE}/wiki/api/v2/pages/p1/children").mock(
-        return_value=httpx.Response(200, json={"results": {"id": "c1"}})
-    )
+    respx.get(f"{_BASE}/wiki/api/v2/pages/p1/children").mock(return_value=httpx.Response(200, json={"results": {"id": "c1"}}))
     result = await connector.query(ConnectorQuery(resource="children", filters={"page_id": "p1"}))
     assert not result.records
 
@@ -302,9 +294,7 @@ async def test_write_create_page(connector):
 
 @respx.mock
 async def test_write_update_page(connector):
-    respx.put(f"{_BASE}/wiki/api/v2/pages/p1").mock(
-        return_value=httpx.Response(200, json={"id": "p1", "title": "Updated", "version": {"number": 2}})
-    )
+    respx.put(f"{_BASE}/wiki/api/v2/pages/p1").mock(return_value=httpx.Response(200, json={"id": "p1", "title": "Updated", "version": {"number": 2}}))
     result = await connector.write(
         ConnectorPayload(
             resource="page_update",

@@ -248,10 +248,7 @@ class TestSweepEmitsFar714ClassSignal:
         # The SHARED constant — the fingerprint that merges this writer into
         # the chokepoint's group. Never a re-spelling.
         assert call.kwargs["message"] == ch._NODELESS_ZOMBIE_STABLE_MESSAGE
-        assert call.kwargs["message"] == (
-            "dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed "
-            "(SAQ claimed the run but no node was ever dispatched)"
-        )
+        assert call.kwargs["message"] == ("dispatcher_reconcile: claimed-but-never-dispatched zombie terminal-failed (SAQ claimed the run but no node was ever dispatched)")
         context = call.kwargs["context"]
         assert context["run_id"] == str(run_id)
         assert context["claim_count"] == 3

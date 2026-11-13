@@ -153,9 +153,7 @@ class TestManifestLoad:
         for path, route in manifest["routes"].items():
             if route["required_tier"] == "community":
                 roles = route["required_roles"]
-                assert roles is None or isinstance(roles, list), (
-                    f"Route {path} should have null roles or an explicit role list"
-                )
+                assert roles is None or isinstance(roles, list), f"Route {path} should have null roles or an explicit role list"
 
     def test_community_routes_roles_are_admin_only(self):
         """A community-tier route declaring explicit roles stays admin-gated.
@@ -211,26 +209,14 @@ class TestManifestLoad:
             if path in viewer_visible_public_routes:
                 read_permission = viewer_visible_public_routes[path]
                 assert route.get("visibility") == "public", f"Viewer-readable community route {path} must be public"
-                assert "viewer" in route["required_roles"], (
-                    f"Viewer-readable community route {path} must include the viewer role"
-                )
-                assert route.get("required_permissions") == [read_permission], (
-                    f"Viewer-readable community route {path} must require only {read_permission}"
-                )
+                assert "viewer" in route["required_roles"], f"Viewer-readable community route {path} must include the viewer role"
+                assert route.get("required_permissions") == [read_permission], f"Viewer-readable community route {path} must require only {read_permission}"
                 continue
             visibility = route.get("visibility")
-            assert visibility in dev_gate_permissions, (
-                f"Community route {path} may only widen roles to ['operator', 'admin'] "
-                "behind a dev-only visibility gate (in_dev or private_preview)"
-            )
+            assert visibility in dev_gate_permissions, f"Community route {path} may only widen roles to ['operator', 'admin'] behind a dev-only visibility gate (in_dev or private_preview)"
             gate_permission = dev_gate_permissions[visibility]
-            assert gate_permission in (route.get("required_permissions") or []), (
-                f"Community route {path} widened roles without the {gate_permission} permission gate"
-            )
-            assert route["required_roles"] == ["operator", "admin"], (
-                f"Community route {path} with explicit roles must require exactly ['admin'] "
-                "or the dev-gated ['operator', 'admin'] set"
-            )
+            assert gate_permission in (route.get("required_permissions") or []), f"Community route {path} widened roles without the {gate_permission} permission gate"
+            assert route["required_roles"] == ["operator", "admin"], f"Community route {path} with explicit roles must require exactly ['admin'] or the dev-gated ['operator', 'admin'] set"
 
     def test_admin_routes_require_admin_role(self):
         """Team-tier /admin routes require the admin org-role, except system_admin_only routes.
@@ -257,14 +243,10 @@ class TestManifestLoad:
             if not (path.startswith("/admin/") and route["required_tier"] == "team"):
                 continue
             if route.get("system_admin_only") is True:
-                assert route["required_roles"] is None, (
-                    f"system_admin_only route {path} must not carry an org-role gate"
-                )
+                assert route["required_roles"] is None, f"system_admin_only route {path} must not carry an org-role gate"
             else:
                 expected_roles = ["admin", "viewer"] if path in viewer_visible_admin_routes else ["admin"]
-                assert route["required_roles"] == expected_roles, (
-                    f"Route {path} should require {expected_roles} role(s)"
-                )
+                assert route["required_roles"] == expected_roles, f"Route {path} should require {expected_roles} role(s)"
 
 
 class TestManifestEndpoint:

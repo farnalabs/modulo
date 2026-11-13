@@ -84,9 +84,7 @@ class _Harness:
     subscribed webhook endpoint."""
 
     def __init__(self, tmp_path: Path) -> None:
-        self.engine: AsyncEngine = create_async_engine(
-            f"sqlite+aiosqlite:///{tmp_path / 'hitl_suppress.db'}", echo=False
-        )
+        self.engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'hitl_suppress.db'}", echo=False)
         self.notifier = Notifier(self.engine, _KEY)
         self.endpoint_dispatch = AsyncMock(
             return_value=DispatchResult(

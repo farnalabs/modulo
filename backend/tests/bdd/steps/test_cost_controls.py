@@ -79,9 +79,7 @@ def _enforce_token_budget(tokens: int, ctx: dict[str, Any]) -> None:
             ctx["token_override_error_code"] = None
             ctx["token_override_error_detail"] = None
         else:
-            ctx["token_override_status"], ctx["token_override_error_code"], ctx["token_override_error_detail"] = (
-                override
-            )
+            ctx["token_override_status"], ctx["token_override_error_code"], ctx["token_override_error_detail"] = override
     finally:
         loop.close()
 
@@ -304,9 +302,7 @@ def _check_spend(cost: str, ctx: dict[str, Any]) -> None:
 
 @then("the spend is approved")
 def spend_approved(ctx: dict[str, Any]) -> None:
-    assert ctx.get("spend_approved") is True, (
-        f"Expected spend approved, got: approved={ctx.get('spend_approved')}, reason={ctx.get('spend_reason')}"
-    )
+    assert ctx.get("spend_approved") is True, f"Expected spend approved, got: approved={ctx.get('spend_approved')}, reason={ctx.get('spend_reason')}"
 
 
 @then(
@@ -375,12 +371,9 @@ def _check_circuit_breaker(amount: str, ctx: dict[str, Any]) -> None:
     dispatch_mock = AsyncMock()
     update_mock = MagicMock()
 
-    if pipeline.circuit_breaker_tripped or pipeline.circuit_breaker_threshold is None:
-        mock_execute = AsyncMock(side_effect=[pipeline_result])
-    else:
-        # threshold present + not tripped → pipeline read, monthly SUM, then the
-        # trip's trigger update.
-        mock_execute = AsyncMock(side_effect=[pipeline_result, monthly_result, MagicMock()])
+    # threshold present + not tripped → pipeline read, monthly SUM, then the
+    # trip's trigger update.
+    mock_execute = AsyncMock(side_effect=([pipeline_result] if pipeline.circuit_breaker_tripped or pipeline.circuit_breaker_threshold is None else [pipeline_result, monthly_result, MagicMock()]))
 
     with (
         patch("farna.core.cost_controller._dispatch_circuit_breaker_tripped", new=dispatch_mock),
@@ -497,9 +490,7 @@ def admin_reenables_pipeline(pipeline_name: str, ctx: dict[str, Any]) -> None:
 
         loop = asyncio.new_event_loop()
         try:
-            reset = loop.run_until_complete(
-                reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=pipeline.id)
-            )
+            reset = loop.run_until_complete(reset_pipeline_circuit_breaker(mock_session, org_id=_ORG_ID, pipeline_id=pipeline.id))
             ctx["cb_reset"] = reset
             ctx["cb_pipeline"] = pipeline
             ctx["cb_update"] = update_mock
@@ -531,10 +522,7 @@ def new_runs_allowed(ctx: dict[str, Any]) -> None:
     ctx["pipeline_cb_tripped"] = False
     ctx["pipeline_cb_threshold"] = None
     _check_circuit_breaker("10.00", ctx)
-    assert ctx.get("cb_approved") is True, (
-        f"Expected new run to be allowed after reset, got approved={ctx.get('cb_approved')} "
-        f"reason={ctx.get('cb_reason')}"
-    )
+    assert ctx.get("cb_approved") is True, f"Expected new run to be allowed after reset, got approved={ctx.get('cb_approved')} reason={ctx.get('cb_reason')}"
 
 
 # ===========================================================================
@@ -703,10 +691,7 @@ def _get_ceiling_route(request: Any, ctx: dict[str, Any], client: Any, *, body: 
         patch("farna.api.routes.costs.lock_org_cost_state", new=AsyncMock()),
         patch("farna.api.routes.costs.set_rls_org"),
     ):
-        if body is None:
-            resp = client.get("/api/v1/admin/costs/ceiling")
-        else:
-            resp = client.put("/api/v1/admin/costs/ceiling", json=body)
+        resp = client.get("/api/v1/admin/costs/ceiling") if body is None else client.put("/api/v1/admin/costs/ceiling", json=body)
     ctx["ceiling_org"] = org
     ctx["ceiling_store"] = store
     _store_response(request, ctx, resp)
@@ -790,9 +775,7 @@ def response_spend_ceiling_is_null(request: Any) -> None:
 def response_ceiling_stored_cents(cents: int, ctx: dict[str, Any]) -> None:
     store = ctx.get("ceiling_store")
     assert store is not None, "no ceiling write was driven"
-    assert store["spend_ceiling_cents"] == cents, (
-        f"Expected spend_ceiling stored as {cents} cents, got {store['spend_ceiling_cents']}"
-    )
+    assert store["spend_ceiling_cents"] == cents, f"Expected spend_ceiling stored as {cents} cents, got {store['spend_ceiling_cents']}"
 
 
 def _run_ledger_block(cost: str, ctx: dict[str, Any]) -> None:
@@ -944,9 +927,7 @@ def org_cumulative_incremented(amount: str, ctx: dict[str, Any]) -> None:
     # FAR-1833: a single atomic increment of the run's cost, inside the ledger
     # savepoint — applied exactly once per accepted ledger write.
     accrual.assert_awaited_once()
-    assert accrual.await_args.kwargs["delta_cents"] == _usd_cents(amount), (
-        f"Expected one accrual of {_usd_cents(amount)} cents, got {accrual.await_args}"
-    )
+    assert accrual.await_args.kwargs["delta_cents"] == _usd_cents(amount), f"Expected one accrual of {_usd_cents(amount)} cents, got {accrual.await_args}"
 
 
 # ===========================================================================

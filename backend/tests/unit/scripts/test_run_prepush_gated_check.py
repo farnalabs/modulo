@@ -94,9 +94,7 @@ def test_non_python_files_do_not_match_python_pattern():
 
 
 def test_windows_separators_are_normalised():
-    assert mod._matches_pattern(["backend\\src\\modulo\\foo.py"], "backend/src/**/*.py") == [
-        "backend\\src\\modulo\\foo.py"
-    ]
+    assert mod._matches_pattern(["backend\\src\\modulo\\foo.py"], "backend/src/**/*.py") == ["backend\\src\\modulo\\foo.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +289,7 @@ def _commit(repo: Path, relpath: str) -> None:
 
 def _sentinel(marker: Path, exit_code: int) -> list[str]:
     """A real command that writes *marker* then exits with *exit_code*."""
-    code = (
-        f"import pathlib, sys; pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8'); sys.exit({exit_code})"
-    )
+    code = f"import pathlib, sys; pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8'); sys.exit({exit_code})"
     return [sys.executable, "-c", code]
 
 

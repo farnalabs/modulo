@@ -608,10 +608,7 @@ class TestFAR102Metrics:
         assert out[0]["capacity_failure_count"] == 7
         expected = round((2 * 60_000.0 + 5 * 1_000.0) / 7, 1)
         assert out[0]["avg_capacity_wait_ms"] == expected
-        assert out[0]["avg_capacity_wait_ms"] < 20_000, (
-            "the capacity-wait mean must stay near the capacity subset's true mean, "
-            "not the total-run-count-weighted ~59s"
-        )
+        assert out[0]["avg_capacity_wait_ms"] < 20_000, "the capacity-wait mean must stay near the capacity subset's true mean, not the total-run-count-weighted ~59s"
 
     def test_zero_fill_capacity_metrics_are_null_safe(self) -> None:
         out = bucket_rows(
@@ -644,9 +641,7 @@ class TestFAR2079QueueWaitNonNegative:
         expr = str(stmt.selected_columns["avg_queue_wait_ms"].element.compile(dialect=postgresql.dialect()))
         assert "CASE WHEN" in expr.upper(), "the average must filter samples, not average raw values"
         assert "queue_wait_ms >=" in expr, "negative stored samples must be excluded from the mean"
-        assert "THEN run_daily_facts.queue_wait_ms END" in expr, (
-            "the guard is on the STORED column (historical facts), not on a derived expression"
-        )
+        assert "THEN run_daily_facts.queue_wait_ms END" in expr, "the guard is on the STORED column (historical facts), not on a derived expression"
 
     def test_non_negative_samples_average_to_a_non_negative_bucket(self) -> None:
         # The valid (ordered) path: two facts, one whose dispatch-phase
@@ -868,10 +863,7 @@ class TestDimensionedSelect:
     def test_raw_dimension_key_is_selected(self, dimension: AnalyticsDimension, key_attr: str) -> None:
         stmt, _ = build_facts_query(_query(dimension=dimension))
         keys = {k.name for k in stmt.selected_columns}
-        assert key_attr in keys, (
-            f"{dimension.value} dimension: the {key_attr} column must be in the SELECT "
-            "so bucket_rows can resolve a non-None key"
-        )
+        assert key_attr in keys, f"{dimension.value} dimension: the {key_attr} column must be in the SELECT so bucket_rows can resolve a non-None key"
         assert "key_label" not in keys, "non-label dimensions must not emit key_label"
 
     @pytest.mark.parametrize(
@@ -885,10 +877,7 @@ class TestDimensionedSelect:
         stmt, _ = build_facts_query(_query(dimension=dimension))
         keys = {k.name for k in stmt.selected_columns}
         assert "key_label" in keys, "label dimensions must select the MIN(snapshot label)"
-        assert key_attr in keys, (
-            f"{dimension.value} dimension: the raw {key_attr} column must be selected so a NULL "
-            "snapshot label still buckets by the UUID (the documented fallback was dead code)"
-        )
+        assert key_attr in keys, f"{dimension.value} dimension: the raw {key_attr} column must be selected so a NULL snapshot label still buckets by the UUID (the documented fallback was dead code)"
 
     def test_build_then_bucket_rows_returns_non_none_keys(self) -> None:
         # End-to-end within a DB-free unit test: build a trigger_type dimensioned
@@ -1473,9 +1462,7 @@ class TestToUtcAware:
     def test_non_midnight_datetime_not_expanded(self) -> None:
         # A datetime carrying a real time-of-day must be left unchanged even
         # with end_of_day=True — it is an explicit instant, not a bare date.
-        assert to_utc_aware(datetime(2026, 8, 6, 14, 0, 0), end_of_day=True) == datetime(
-            2026, 8, 6, 14, 0, 0, tzinfo=UTC
-        )
+        assert to_utc_aware(datetime(2026, 8, 6, 14, 0, 0), end_of_day=True) == datetime(2026, 8, 6, 14, 0, 0, tzinfo=UTC)
 
     def test_mixed_naive_aware_compare_safely(self) -> None:
         # A naive date_from and an aware date_to must normalise so the range
@@ -1495,9 +1482,7 @@ class TestHourGroupByCap:
         assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is True
 
     def test_cap_default_matches_constant(self) -> None:
-        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is (
-            (date(2026, 8, 16) - date(2026, 8, 1)).days > HOUR_GROUPBY_MAX_RANGE_DAYS
-        )
+        assert hour_groupby_span_exceeds(date(2026, 8, 1), date(2026, 8, 16)) is ((date(2026, 8, 16) - date(2026, 8, 1)).days > HOUR_GROUPBY_MAX_RANGE_DAYS)
 
     def test_mixed_aware_naive_inputs_do_not_raise(self) -> None:
         frm = datetime(2026, 8, 6, 14, 0, 0, tzinfo=timezone(timedelta(hours=5)))
@@ -1546,9 +1531,7 @@ class TestReconcileCooldown:
         maintenance_mod._reconcile_cooldown.clear()
         now = [1000.0]
         monkeypatch.setattr(maintenance_mod.time, "monotonic", lambda: now[0])
-        maintenance_mod._reconcile_cooldown[("org-a", "ledger_exceeds_facts")] = (
-            now[0] - maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS - 10
-        )
+        maintenance_mod._reconcile_cooldown[("org-a", "ledger_exceeds_facts")] = now[0] - maintenance_mod._RECONCILE_ALERT_COOLDOWN_SECONDS - 10
         maintenance_mod._reconcile_cooldown[("org-b", "ledger_exceeds_facts")] = now[0] - 10
 
         maintenance_mod._reconcile_cooldown_prune(now[0])
@@ -1589,9 +1572,7 @@ class TestConcurrencyCompiledSql:
         sql = str(compiled).upper()
         assert "GROUP BY" not in sql, "overlap counting happens in Python, never SQL GROUP BY"
         assert "LIMIT" in sql, "the raw-row cap must bound the SQL scan"
-        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values(), (
-            "the only SQL LIMIT must be the raw-row cap sentinel (cap+1), never the user limit"
-        )
+        assert CONCURRENCY_MAX_RAW_ROWS + 1 in compiled.params.values(), "the only SQL LIMIT must be the raw-row cap sentinel (cap+1), never the user limit"
 
     def test_raw_row_cap_binds_cap_plus_one_sentinel(self) -> None:
         # Regression guard: the scan is capped at CONCURRENCY_MAX_RAW_ROWS + 1

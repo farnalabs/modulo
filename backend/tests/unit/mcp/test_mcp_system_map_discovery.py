@@ -573,18 +573,14 @@ def test_ai_discovery_errors_preserve_safe_structured_codes(
     message: str,
     extra: dict[str, str],
 ) -> None:
-    payload = _system_maps_http_error_payload(
-        StarletteHTTPException(status_code=status_code, detail={"code": code, "message": message, **extra})
-    )
+    payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=status_code, detail={"code": code, "message": message, **extra}))
     expected = {"error": code, "detail": message, **extra}
     assert payload == expected
 
 
 def test_http_error_payload_never_echoes_a_structured_detail() -> None:
     """A non-string detail is replaced by the safe constant."""
-    payload = _system_maps_http_error_payload(
-        StarletteHTTPException(status_code=404, detail={"internal": "do-not-leak"})
-    )
+    payload = _system_maps_http_error_payload(StarletteHTTPException(status_code=404, detail={"internal": "do-not-leak"}))
 
     assert payload == {"error": "not_found", "detail": _MSG_UNEXPECTED_ERROR}
     assert "do-not-leak" not in payload["detail"]
@@ -609,9 +605,7 @@ async def test_discovery_session_yields_the_factory_session() -> None:
 
 @pytest.mark.asyncio
 async def test_programming_error_maps_to_migration_required() -> None:
-    result = await _call_tool_with_rest_handler_error(
-        ProgrammingError("SELECT 1", {}, Exception("column does not exist"))
-    )
+    result = await _call_tool_with_rest_handler_error(ProgrammingError("SELECT 1", {}, Exception("column does not exist")))
 
     assert result["error"] == "migration_required"
     assert result["detail"] == _MSG_DB_MIGRATION_REQUIRED

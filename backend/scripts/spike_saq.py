@@ -105,17 +105,11 @@ async def check1_blmove(redis: aioredis.Redis, q: RedisQueue) -> None:
     deq = await q.dequeue(timeout=1)
     active = await redis.lrange(f"saq:{QUEUE_NAME}:active", 0, -1)
     queued_after = await redis.lrange(f"saq:{QUEUE_NAME}:queued", 0, -1)
-    moved = (
-        deq is not None
-        and deq.id == job.id
-        and any(x == job.id.encode() for x in active)
-        and not any(x == job.id.encode() for x in queued_after)
-    )
+    moved = deq is not None and deq.id == job.id and any(x == job.id.encode() for x in active) and not any(x == job.id.encode() for x in queued_after)
     record(
         "1 BLMOVE dequeue",
         "PASS" if moved else "FAIL",
-        f"queued before={len(queued)}, dequeue id={deq.id if deq else None}, "
-        f"active after={len(active)}, queued after={len(queued_after)} (blmove LEFT->RIGHT)",
+        f"queued before={len(queued)}, dequeue id={deq.id if deq else None}, active after={len(active)}, queued after={len(queued_after)} (blmove LEFT->RIGHT)",
     )
 
 
@@ -138,13 +132,7 @@ async def check2_queue_keys(redis: aioredis.Redis, q: RedisQueue) -> None:
         "queued_type": queued_type.decode(),
         "zscore_present": scored is not None,
     }
-    ok = (
-        job.id == job_hash
-        and hash_type == b"string"
-        and incomplete_type == b"zset"
-        and queued_type == b"list"
-        and scored is not None
-    )
+    ok = job.id == job_hash and hash_type == b"string" and incomplete_type == b"zset" and queued_type == b"list" and scored is not None
     # active list exists after a dequeue
     await q.dequeue(timeout=1)
     active_type = await redis.type(active)
@@ -177,9 +165,7 @@ async def check3_dedupe(redis: aioredis.Redis, q: RedisQueue) -> None:
     record(
         "3 dedupe",
         "PASS" if ok else "FAIL",
-        f"job1={job1.id if job1 else None}, job2={'deduped(None)' if job2 is None else job2.id}, "
-        f"abort_after_enqueue={abort_after_enqueue}, abort_type={abort_type.decode()}, "
-        f"abort_pttl={abort_ttl}ms (SETEX ttl=5), enqueue_with_abort_key={blocked_by_abort}",
+        f"job1={job1.id if job1 else None}, job2={'deduped(None)' if job2 is None else job2.id}, abort_after_enqueue={abort_after_enqueue}, abort_type={abort_type.decode()}, abort_pttl={abort_ttl}ms (SETEX ttl=5), enqueue_with_abort_key={blocked_by_abort}",
     )
 
 
@@ -239,8 +225,7 @@ async def check5_queued_duplicate(redis: aioredis.Redis, q: RedisQueue) -> None:
     record(
         "5 QUEUED-duplicate",
         "PASS" if ok else "FAIL",
-        f"queued entries before eviction={count_before}, re-enqueue={'ok' if rejob is not None else 'deduped'}, "
-        f"queued entries after repair+enqueue={count_after} (LREM queued prevents duplicate)",
+        f"queued entries before eviction={count_before}, re-enqueue={'ok' if rejob is not None else 'deduped'}, queued entries after repair+enqueue={count_after} (LREM queued prevents duplicate)",
     )
 
 
@@ -282,10 +267,7 @@ async def check6_retry_timing(redis: aioredis.Redis, q: RedisQueue) -> None:
     record(
         "6 retry timing",
         "PASS" if ok else "FAIL",
-        f"attempt starts (monotonic)={[round(a, 2) for a in _flaky_attempts]}, "
-        f"attempt_nos={_flaky_attempt_nos}, gap={round(gap, 2)}s "
-        f"(retry_delay=10, retry_backoff=False -> FIXED ~10s, no jitter), "
-        f"final_status={final.status}",
+        f"attempt starts (monotonic)={[round(a, 2) for a in _flaky_attempts]}, attempt_nos={_flaky_attempt_nos}, gap={round(gap, 2)}s (retry_delay=10, retry_backoff=False -> FIXED ~10s, no jitter), final_status={final.status}",
     )
 
 
@@ -324,8 +306,7 @@ async def check7_retries_semantics(redis: aioredis.Redis, q: RedisQueue) -> None
     record(
         "7 retries=N semantics",
         "PASS" if ok else "FAIL",
-        f"attempt_nos={_fail_attempt_nos}, final attempts={final.attempts}, final status={final.status} "
-        f"(retries=2 -> 2 TOTAL attempts, 1 retry)",
+        f"attempt_nos={_fail_attempt_nos}, final attempts={final.attempts}, final status={final.status} (retries=2 -> 2 TOTAL attempts, 1 retry)",
     )
 
 
@@ -353,10 +334,7 @@ async def check8_ttl_semantics(redis: aioredis.Redis, q: RedisQueue) -> None:
     record(
         "8 ttl semantics",
         "PASS" if ok else "FAIL",
-        f"PTTL after enqueue={pttl_enqueue}ms (no expiry), PTTL after ACTIVE update={pttl_active}ms "
-        f"(no expiry), PTTL after finish={pttl_finish}ms (SETEX job.ttl=300) "
-        f"-> ttl is FINISH-ORIGIN (result retention), NOT enqueue-origin nor start-origin. "
-        f"A ttl=300 does NOT expire the job hash mid-run.",
+        f"PTTL after enqueue={pttl_enqueue}ms (no expiry), PTTL after ACTIVE update={pttl_active}ms (no expiry), PTTL after finish={pttl_finish}ms (SETEX job.ttl=300) -> ttl is FINISH-ORIGIN (result retention), NOT enqueue-origin nor start-origin. A ttl=300 does NOT expire the job hash mid-run.",
     )
 
 
@@ -420,9 +398,7 @@ async def check9_cli() -> None:
     record(
         "9 CLI invocation",
         "PASS" if ok else "FAIL",
-        f"settings positional present={has_settings_positional}, subcommand group absent={not has_subcommand_group}, "
-        f"first positional is settings={first_positional_is_settings}; usage={usage_line.strip()}; "
-        f"positional=[{positional_block}]",
+        f"settings positional present={has_settings_positional}, subcommand group absent={not has_subcommand_group}, first positional is settings={first_positional_is_settings}; usage={usage_line.strip()}; positional=[{positional_block}]",
     )
 
 
@@ -460,8 +436,7 @@ async def check10_worker_heartbeat_ttl(redis: aioredis.Redis, q: RedisQueue) -> 
     record(
         "10 worker heartbeat TTL",
         "PASS" if ok else "FAIL",
-        f"timer={timer}s, worker_info key TTL observed up to {max_observed / 1000:.1f}s "
-        f"(expected timer+1={timer + 1}s; write_worker_info SETEX ttl=timer+1, worker.py:302-307)",
+        f"timer={timer}s, worker_info key TTL observed up to {max_observed / 1000:.1f}s (expected timer+1={timer + 1}s; write_worker_info SETEX ttl=timer+1, worker.py:302-307)",
     )
 
 
@@ -485,8 +460,7 @@ async def check11_cron_unique(redis: aioredis.Redis, q: RedisQueue) -> None:
     record(
         "11 cron unique=True",
         "PASS" if ok else "FAIL",
-        f"cron '* * * * * *' over ~6s: fires={fires}, max concurrent executions={_cron_max_concurrent} "
-        f"(unique=True -> key cron:spike_cron -> deduped while incomplete, no double-fire)",
+        f"cron '* * * * * *' over ~6s: fires={fires}, max concurrent executions={_cron_max_concurrent} (unique=True -> key cron:spike_cron -> deduped while incomplete, no double-fire)",
     )
 
 

@@ -150,11 +150,16 @@ def main() -> None:
     # If set, fix it like the others. If not, derive it from the fixed DATABASE_URL
     # by swapping the username to farna_control_system -- the password stays the same, and
     # bootstrap_role.py reads it from the URL to create the role.
-    system_url = os.environ.get("FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL", "")
+    system_url = os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL", "")
     if system_url:
         system_url = fix_database_url(system_url)
     elif runtime_url:
         system_url = derive_system_database_url(runtime_url)
+        if system_url:
+            print(  # noqa: T201
+                "WARNING: FARNA_CONTROL_SYSTEM_DATABASE_URL is not configured; derived system URL reuses the app password. Configure an explicit system-role URL to avoid authentication failure.",
+                file=sys.stderr,
+            )
         if not system_url:
             print(  # noqa: T201
                 "WARNING: cannot derive MODULO_SYSTEM_DATABASE_URL (DATABASE_URL has no usable password/userinfo) - system crons will fall back to farna_control_app",
@@ -162,7 +167,7 @@ def main() -> None:
             )
 
     if system_url:
-        os.environ["FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL"] = system_url
+        os.environ["FARNA_CONTROL_SYSTEM_DATABASE_URL"] = system_url
         # Short-lived container bootstrap env file, consistent with the
         # /tmp/database_url.env and /tmp/database_admin_url.env files written above.
         _write_env_file("/tmp/system_database_url.env", system_url)  # nosec B108  # noqa: S108  # NOSONAR S5443

@@ -46,9 +46,7 @@ def _sign(body: bytes, *, secret: str = _SECRET, timestamp: int | None = None) -
     return f"t={ts},v1={sig}"
 
 
-def _invoice_event(
-    event_id: str = "evt_inv_paid", *, email: str = "bob@acme.com", name: str = "Acme Inc"
-) -> dict[str, Any]:
+def _invoice_event(event_id: str = "evt_inv_paid", *, email: str = "bob@acme.com", name: str = "Acme Inc") -> dict[str, Any]:
     return {
         "id": event_id,
         "type": "invoice.paid",

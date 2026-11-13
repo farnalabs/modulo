@@ -126,13 +126,7 @@ class TestCapObservabilityRealExport:
         span_names = [s.name for rss in request.resource_spans for scope in rss.scope_spans for s in scope.spans]
         assert "license.verify" in span_names
 
-        attributes = {
-            attr.key: attr.value.string_value
-            for rss in request.resource_spans
-            for scope in rss.scope_spans
-            for span in scope.spans
-            for attr in span.attributes
-        }
+        attributes = {attr.key: attr.value.string_value for rss in request.resource_spans for scope in rss.scope_spans for span in scope.spans for attr in span.attributes}
         assert attributes.get("modulo.tier") == "team"
 
     def test_disabled_telemetry_sends_nothing(self, otlp_server: _OtlpServer, monkeypatch: pytest.MonkeyPatch) -> None:

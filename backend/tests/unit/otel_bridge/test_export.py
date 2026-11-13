@@ -218,9 +218,7 @@ def test_shutdown_otel_with_provider_without_shutdown_method() -> None:
         ),
     ],
 )
-def test_sanitise_url_strips_credentials_but_preserves_host_and_port(
-    url: str, expected: str, secrets: tuple[str, ...]
-) -> None:
+def test_sanitise_url_strips_credentials_but_preserves_host_and_port(url: str, expected: str, secrets: tuple[str, ...]) -> None:
     """Credentials must be redacted before a URL reaches a log line.
 
     The host and port must survive so an operator can still tell which collector

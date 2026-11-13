@@ -126,9 +126,7 @@ def call_set_org_context(org: str, ctx) -> None:
 @then("the session stores org_id in session.info")
 def check_session_info(ctx) -> None:
     session = ctx["session"]
-    assert session.info.get(_TENANT_KEY) == ctx["org_id"], (
-        f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, got {session.info.get(_TENANT_KEY)!r}"
-    )
+    assert session.info.get(_TENANT_KEY) == ctx["org_id"], f"Expected session.info[{_TENANT_KEY!r}] = {ctx['org_id']!r}, got {session.info.get(_TENANT_KEY)!r}"
 
 
 @then("apply_tenant_filter injects WHERE organisation_id = :org_id")
