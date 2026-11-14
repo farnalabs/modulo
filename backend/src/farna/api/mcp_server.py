@@ -11220,6 +11220,97 @@ async def _system_maps_discovery_session() -> AsyncGenerator[AsyncSession, None]
 
 
 @mcp.tool(
+    name="get_system_map_overview",
+    description=(
+        "Read the observed health, loop metrics and bottlenecks for a published System Maps "
+        "revision (mirrors GET /api/v1/system-maps/{map_id}/overview). Requires the system_maps_read "
+        "feature (system_maps for internal callers) and system_map.overview permission; internal "
+        "callers may select a draft or historical revision, while ordinary callers see published "
+        "revisions only."
+    ),
+)
+@mcp_audited("system_map_overview_read", "system_map", fail_closed=False)
+@_RETRY_DB
+async def get_system_map_overview(
+    map_id: uuid.UUID,
+    revision_id: uuid.UUID | None = None,
+    at: datetime | None = None,
+    window_days: int = 7,
+) -> dict[str, Any]:
+    """Read System Maps overview through the canonical REST handler."""
+    try:
+        if not await validate_current_auth():
+            return _tool_auth_error(_MSG_TOKEN_REVOKED)
+        _check_agent_tool_scope("get_system_map_overview")
+
+        org_id = _ctx_org_id_val()
+        user_id = _ctx_user_id_val()
+        role = _ctx_role_val() or ""
+        internal_access = _mcp_internal_system_maps_access()
+        feature_name = "system_maps" if internal_access else "system_maps_read"
+        feature_error = await _require_plan_feature(org_id, get_settings(), feature_name)
+        if feature_error is not None:
+            return feature_error
+
+        from farna.api.routes.system_maps import (
+            OVERVIEW_WINDOW_MAX_DAYS,
+            OVERVIEW_WINDOW_MIN_DAYS,
+            get_repo,
+        )
+        from farna.api.routes.system_maps import get_system_map_overview_endpoint as rest_overview
+
+        # Parity with the REST route's ``Query(ge=..., le=...)``: the handler is
+        # invoked directly, so FastAPI never validates this bound for us.
+        if not (OVERVIEW_WINDOW_MIN_DAYS <= window_days <= OVERVIEW_WINDOW_MAX_DAYS):
+            return {
+                "error": "validation_failed",
+                "field": "window_days",
+                "detail": (f"window_days must be between {OVERVIEW_WINDOW_MIN_DAYS} and {OVERVIEW_WINDOW_MAX_DAYS}, got {window_days}"),
+            }
+
+        rest_overview = _unwrap_system_maps_route_handler(rest_overview)
+        from farna.auth.jwt import TenantPrincipal
+
+        principal = TenantPrincipal(
+            username=str(user_id),
+            organisation_id=org_id,
+            account_id=user_id,
+            org_role=role,
+            key_grants=_ctx_key_grants.get(None),
+            key_scope=_ctx_key_scope.get(None),
+            team_id=_ctx_team_id_val(),
+        )
+        async with _system_maps_discovery_session() as session:
+            repository = await get_repo()
+            result = await rest_overview(
+                map_id=map_id,
+                revision_id=revision_id,
+                at=at,
+                window_days=window_days,
+                session=session,
+                principal=principal,
+                repository=repository,
+                internal_access=internal_access,
+            )
+        return result.model_dump(mode="json")
+    except MCPAuthorizationError as exc:
+        return {"error": "insufficient_scope", "detail": str(exc)}
+    except StarletteHTTPException as exc:
+        return _system_maps_http_error_payload(exc)
+    except ProgrammingError:
+        _log.exception("get_system_map_overview failed")
+        return {"error": "migration_required", "detail": _MSG_DB_MIGRATION_REQUIRED}
+    except SQLAlchemyError as exc:
+        if (contract_error := _tool_session_contract_error(exc, "mcp.get_system_map_overview")) is not None:
+            return contract_error
+        _log.exception("get_system_map_overview failed")
+        return _sqlalchemy_exception_response(exc, _MSG_DB_OPERATION_FAILED, "mcp.get_system_map_overview")
+    except Exception as exc:
+        _log.exception("get_system_map_overview failed")
+        return _tool_exception_error("Failed to get System Maps overview", exc, "mcp.get_system_map_overview")
+
+
+@mcp.tool(
     name="discover_system_map",
     description=(
         "Internal preview. Inspect the organisation and persist an unpublished System Maps "

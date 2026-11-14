@@ -427,7 +427,10 @@ def rest_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_tenant_user] = lambda: principal
     app.dependency_overrides[get_current_tenant_user_or_api_key] = lambda: principal
     try:
-        yield TestClient(app)
+        client = TestClient(app)
+        client.cookies.set("XSRF-TOKEN", "test-csrf-token")
+        client.headers["X-CSRF-Token"] = "test-csrf-token"
+        yield client
     finally:
         app.dependency_overrides.clear()
 
@@ -775,16 +778,15 @@ def test_route_handler_without_a_wrapper_is_used_as_is() -> None:
 
 
 def test_no_system_maps_tools_on_mcp_beyond_discovery() -> None:
-    """FAR-2288: discover_system_map is the ONLY System Maps tool on MCP.
+    """System Maps MCP exposes discovery and overview, but not authoring.
 
-    Authoring, publish, diff, restore, overview and revision reads are REST-only
-    and must not be registered on MCP.
+    Authoring, publish, diff, restore and revision reads remain REST-only.
     """
     from farna.api.mcp_server import mcp
     from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
 
     system_map_mcp_tools = {name for name in mcp._tool_manager._tools if "system_map" in name}
-    assert system_map_mcp_tools == {"discover_system_map"}
+    assert system_map_mcp_tools == {"discover_system_map", "get_system_map_overview"}
 
     forbidden_tool_names = {
         "create_system_map",
@@ -798,8 +800,109 @@ def test_no_system_maps_tools_on_mcp_beyond_discovery() -> None:
         "diff_system_map_revision",
         "restore_system_map_revision",
         "get_system_map_revision",
-        "get_system_map_overview",
     }
     for forbidden in forbidden_tool_names:
         assert forbidden not in mcp._tool_manager._tools
         assert forbidden not in TOOL_SCOPE_REQUIREMENTS
+
+
+@pytest.mark.asyncio
+async def test_system_map_overview_delegates_to_rest_handler() -> None:
+    from farna.api.mcp_server import get_system_map_overview
+
+    overview = SimpleNamespace(model_dump=MagicMock(return_value={"revision_id": str(_REVISION_ID), "nodes": []}))
+    rest_handler = AsyncMock(return_value=overview)
+    repository = object()
+    session = AsyncMock()
+
+    @asynccontextmanager
+    async def session_cm() -> AsyncGenerator[AsyncMock, None]:
+        yield session
+
+    with (
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)) as feature_gate,
+        patch("farna.api.mcp_server._system_maps_discovery_session", return_value=session_cm()),
+        patch("farna.api.mcp_server._check_agent_tool_scope"),
+        patch("farna.api.routes.system_maps.get_system_map_overview_endpoint", new=rest_handler),
+        patch("farna.api.routes.system_maps.get_repo", new=AsyncMock(return_value=repository)),
+    ):
+        result = await get_system_map_overview(map_id=_MAP_ID, revision_id=_REVISION_ID, window_days=14)
+
+    assert result == {"revision_id": str(_REVISION_ID), "nodes": []}
+    feature_gate.assert_awaited_once()
+    assert feature_gate.await_args.args[0] == ORG_ID
+    assert feature_gate.await_args.args[2] == "system_maps"
+    rest_handler.assert_awaited_once()
+    assert rest_handler.await_args.kwargs["repository"] is repository
+    assert rest_handler.await_args.kwargs["window_days"] == 14
+
+
+@pytest.mark.asyncio
+async def test_system_map_overview_drives_the_real_handler_on_a_real_session() -> None:
+    """The overview handler owns the transaction on a genuine ``AsyncSession``.
+
+    Regression for the tool opening the session through ``_session`` (which
+    begins a transaction) and then calling the handler, whose body begins a
+    second transaction on the same session: SQLAlchemy raises
+    ``InvalidRequestError: A transaction is already begun`` and every real
+    call returned ``session_contract_error``.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from farna.api.mcp_server import get_system_map_overview
+
+    engine = create_async_engine("sqlite+aiosqlite://", echo=False)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    revision = SimpleNamespace(id=_REVISION_ID, system_map_id=_MAP_ID, status="published", revision_number=1)
+    repository = MagicMock()
+    repository.get_map_by_id = AsyncMock(return_value=SimpleNamespace(id=_MAP_ID))
+    repository.get_revision_by_id = AsyncMock(return_value=revision)
+    repository.get_full_revision_graph = AsyncMock(return_value={"nodes": [], "loop_configs": []})
+    repository.get_overview_pipeline_metrics = AsyncMock(return_value={})
+    repository.get_overview_loop_metrics = AsyncMock(return_value={})
+
+    try:
+        with (
+            patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+            patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+            patch("farna.api.mcp_server._check_agent_tool_scope"),
+            patch("farna.api.mcp_server._get_session_factory", return_value=factory),
+            patch("farna.api.routes.system_maps.get_repo", new=AsyncMock(return_value=repository)),
+        ):
+            result = await get_system_map_overview(map_id=_MAP_ID, revision_id=_REVISION_ID)
+    finally:
+        await engine.dispose()
+
+    assert result["system_map_id"] == str(_MAP_ID)
+    assert result["revision_id"] == str(_REVISION_ID)
+    assert not result["nodes"]
+    repository.get_full_revision_graph.assert_awaited_once()
+
+
+@pytest.mark.parametrize("window_days", [0, 91])
+@pytest.mark.asyncio
+async def test_system_map_overview_rejects_an_out_of_range_window(window_days: int) -> None:
+    """Parity with the REST route's ``Query(ge=1, le=90)``."""
+    from farna.api.mcp_server import get_system_map_overview
+
+    rest_handler = AsyncMock()
+    with (
+        patch("farna.api.mcp_server.validate_current_auth", new=AsyncMock(return_value=True)),
+        patch("farna.api.mcp_server._require_plan_feature", new=AsyncMock(return_value=None)),
+        patch("farna.api.mcp_server._check_agent_tool_scope"),
+        patch("farna.api.routes.system_maps.get_system_map_overview_endpoint", new=rest_handler),
+    ):
+        result = await get_system_map_overview(map_id=_MAP_ID, window_days=window_days)
+
+    assert result["error"] == "validation_failed"
+    assert result["field"] == "window_days"
+    rest_handler.assert_not_awaited()
+
+
+def test_system_map_overview_is_registered_without_unimplemented_tools() -> None:
+    from farna.api.mcp_server import mcp
+    from farna.core.mcp.scope_validator import TOOL_SCOPE_REQUIREMENTS
+
+    assert "get_system_map_overview" in mcp._tool_manager._tools
+    assert TOOL_SCOPE_REQUIREMENTS["get_system_map_overview"] == "system_map.overview"

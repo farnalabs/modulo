@@ -190,6 +190,7 @@ _TOOL_REQUIREMENTS: dict[str, ToolRequirement] = {
     # ``_require_plan_feature``. Deny-by-default already refuses an ordinary
     # caller (viewer) and a grant-set without the key.
     "discover_system_map": ToolRequirement(SYSTEM_MAPS_ACCESS_PERMISSION),
+    "get_system_map_overview": ToolRequirement("system_map.overview"),
     # FAR-1879/FAR-1930: both MCP housekeeping tools mirror their REST twins
     # (GET /api/v1/admin/housekeeping and POST /api/v1/admin/housekeeping/cleanup),
     # each gated by BOTH ``require_permission("housekeeping.manage")`` (admin

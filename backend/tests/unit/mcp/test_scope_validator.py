@@ -663,6 +663,9 @@ class TestConstants:
             "get_pipeline_diff",
             # FAR-2288: internal-preview System Maps discovery.
             "discover_system_map",
+            # System Maps overview read tool (mirrors GET
+            # /api/v1/system-maps/{map_id}/overview).
+            "get_system_map_overview",
         }
         assert set(TOOL_SCOPE_REQUIREMENTS) == expected_tools
 
