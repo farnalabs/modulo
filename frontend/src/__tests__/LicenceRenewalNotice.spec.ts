@@ -200,7 +200,7 @@ describe('LicenceRenewalNotice', () => {
       const banner = wrapper.get('[data-testid="licence-lapsed-banner"]')
       expect(banner.text()).toContain('Team capability is off')
       expect(banner.text()).toContain('audit log')
-      expect(banner.text()).toContain('rest of Modulo keeps working')
+      expect(banner.text()).toContain('rest of Farna Control keeps working')
 
       await wrapper.get('[data-testid="licence-lapsed-install-action"]').trigger('click')
       expect(wrapper.emitted('install-key')).toHaveLength(1)

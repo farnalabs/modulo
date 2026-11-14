@@ -50,7 +50,7 @@ describe('StageNode stageTypeLabel', () => {
     const wrapper = mountNode({ data: { name: 'Test', description: '', stage_type: 'modulo', owner: null, graduated: false } })
     await flushPromises()
     const vm = wrapper.vm as unknown as { stageTypeLabel: string }
-    expect(vm.stageTypeLabel).toBe('Modulo')
+    expect(vm.stageTypeLabel).toBe('Farna Control')
   })
 
   it('returns "External" for external type', async () => {
@@ -319,7 +319,7 @@ describe('StageNode stage type label in template', () => {
     for (const stageType of types) {
       const wrapper = mountNode({ data: { name: 'Test', description: '', stage_type: stageType, owner: null, graduated: false } })
       await flushPromises()
-      const expectedLabel = { modulo: 'Modulo', external: 'External', manual: 'Manual', placeholder: 'Placeholder' }[stageType]
+      const expectedLabel = { modulo: 'Farna Control', external: 'External', manual: 'Manual', placeholder: 'Placeholder' }[stageType]
       expect(wrapper.text()).toContain(expectedLabel)
     }
   })

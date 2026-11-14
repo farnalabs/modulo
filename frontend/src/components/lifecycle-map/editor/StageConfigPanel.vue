@@ -68,7 +68,7 @@
         Graduate Stage
       </Button>
       <p class="mt-1 text-[10px] text-muted-foreground">
-        Promote this {{ form.stage_type }} stage to a Modulo-managed pipeline
+        Promote this {{ form.stage_type }} stage to a Farna Control-managed pipeline
       </p>
     </div>
   </div>
@@ -109,8 +109,8 @@ const emit = defineEmits<{
 }>()
 
 const stageTypeOptions = [
-  { value: 'modulo' as StageType, label: 'Modulo', description: 'Managed by a Modulo pipeline' },
-  { value: 'external' as StageType, label: 'External', description: 'Runs outside Modulo' },
+  { value: 'modulo' as StageType, label: 'Farna Control', description: 'Managed by a Farna Control pipeline' },
+  { value: 'external' as StageType, label: 'External', description: 'Runs outside Farna Control' },
   { value: 'manual' as StageType, label: 'Manual', description: 'Human-performed step' },
   { value: 'placeholder' as StageType, label: 'Placeholder', description: 'Not yet defined' },
 ]

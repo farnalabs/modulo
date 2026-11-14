@@ -31,15 +31,15 @@ import type { StageType } from '../../../types/lifecycleMap'
 const paletteItems = [
   {
     type: 'modulo' as StageType,
-    label: 'Modulo',
-    description: 'Managed by a Modulo pipeline',
+    label: 'Farna Control',
+    description: 'Managed by a Farna Control pipeline',
     icon: CogIcon,
     iconClass: 'text-primary-text',
   },
   {
     type: 'external' as StageType,
     label: 'External',
-    description: 'Runs outside Modulo',
+    description: 'Runs outside Farna Control',
     icon: GlobeIcon,
     iconClass: 'text-sky-500',
   },

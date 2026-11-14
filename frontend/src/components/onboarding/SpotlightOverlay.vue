@@ -47,7 +47,7 @@
       aria-live="polite"
     >
       <p class="text-sm text-muted-foreground">
-        {{ spotlight.message.value || 'Follow the next step to continue setting up Modulo.' }}
+        {{ spotlight.message.value || 'Follow the next step to continue setting up Farna Control.' }}
       </p>
       <p class="text-xs text-muted-foreground mt-2">{{ $t('components.onboarding.SpotlightOverlay.dismiss_hint') }}</p>
     </div>
