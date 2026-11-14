@@ -819,7 +819,7 @@ class TestToggleFeatureFlag:
 # Regression: the toggle endpoint used to call ``registry.set_override`` on a
 # per-request registry — an in-memory mutation with no DB write. The response
 # claimed ``overridden: true`` while the very next request (or process) saw the
-# flag inactive again (observed live on app.modulo.run 2026-09-09). The toggle
+# flag inactive again (observed live on control.farna.dev 2026-09-09). The toggle
 # now persists via the same org-settings path as the org-override endpoint.
 
 

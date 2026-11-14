@@ -2,7 +2,7 @@
 """Attach the production-deploy job's conclusion to ``deploy.yml`` run records.
 
 FAR-2152: a throttled ``deploy.yml`` run concludes **SUCCESS** while shipping
-nothing - every downstream job, including ``Deploy to app.modulo.run``, is
+nothing - every downstream job, including ``Deploy to control.farna.dev``, is
 skipped. Any consumer that reads the RUN conclusion therefore cannot tell a
 real deploy from a no-op, and (2026-10-25) four "successful" deploy runs
 between 12:03Z and 12:44Z shipped nothing while a regression stayed invisible.
@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 
 #: The production-deploy job. Its conclusion IS the deploy-attempt signal.
-DEPLOY_JOB_NAME = "Deploy to app.modulo.run"
+DEPLOY_JOB_NAME = "Deploy to control.farna.dev"
 
 #: Enough completed runs to find a 2-failure streak even when throttled no-ops
 #: are interleaved (a throttled run is neutral, so the walk skips past it).

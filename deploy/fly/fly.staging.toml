@@ -101,12 +101,12 @@ kill_timeout = 180
   # + worker-liveness watchdog alerts).
   # Staging is a CI-only E2E environment with no live workload, so its
   # readiness blips are pure operator noise — "production" excludes it while
-  # keeping app.modulo.run alerting (same value as fly.toml).
+  # keeping control.farna.dev alerting (same value as fly.toml).
   ALERT_ENVIRONMENTS = "production"
   # FARNA_CONTROL_SYSTEM_DATABASE_URL is DERIVED AT BOOT (not set here): bootstrap_db.py
   # derives it from DATABASE_URL with the farna_control_system role (LOGIN, BYPASSRLS)
   # and entrypoint.sh exports it. It contains a password, so no literal value.
-  FARNA_CONTROL_PUBLIC_URL = "https://staging.modulo.run"
+  FARNA_CONTROL_PUBLIC_URL = "https://staging-control.farna.dev"
   FARNA_CONTROL_PLUGIN_DISCOVERY = "false"
   # Staging-only dev-mode toggle (preview/in-development features via Admin > Feature Flags).
   FARNA_CONTROL_DEV_MODE = "true"
@@ -149,7 +149,7 @@ kill_timeout = 180
   # REQUIRED: Upstash Redis instance. Create with:
   #   fly redis create --name modulo-staging-redis -r lhr,ams --enable-eviction
   # Then store its connection string with `fly secrets set REDIS_URL=...`.
-  CORS_ORIGINS = "https://modulo.run,https://staging.modulo.run,http://localhost:5173"
+  CORS_ORIGINS = "https://modulo.run,https://staging-control.farna.dev,https://staging.modulo.run,http://localhost:5173"
 
 # App process-group LIVENESS check (FAR-1193 / ADR 043 Decision 4), parity with
 # fly.toml. Top-level [checks], NOT a service check: observability only, it does

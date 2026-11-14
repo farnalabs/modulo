@@ -217,10 +217,10 @@ describe('SsoProviderForm — callback URL', () => {
 
   it('shows callback URL when provided', () => {
     const wrapper = mountForm(makeData(), {
-      callbackUrl: 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback',
+      callbackUrl: 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback',
     })
     expect(wrapper.text()).toContain('Callback URL')
-    expect(wrapper.text()).toContain('https://app.modulo.run/api/v1/auth/oidc/my-provider/callback')
+    expect(wrapper.text()).toContain('https://control.farna.dev/api/v1/auth/oidc/my-provider/callback')
   })
 
   it('does not show callback URL when not provided', () => {
@@ -230,14 +230,14 @@ describe('SsoProviderForm — callback URL', () => {
 
   it('has a copy button with data-testid', () => {
     const wrapper = mountForm(makeData(), {
-      callbackUrl: 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback',
+      callbackUrl: 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback',
     })
     expect(wrapper.find('[data-testid="sso-callback-url-copy"]').exists()).toBe(true)
   })
 
   it('copy button has aria-label for a11y', () => {
     const wrapper = mountForm(makeData(), {
-      callbackUrl: 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback',
+      callbackUrl: 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback',
     })
     const copyBtn = wrapper.find('[data-testid="sso-callback-url-copy"]')
     expect(copyBtn.attributes('aria-label')).toBeDefined()
@@ -249,7 +249,7 @@ describe('SsoProviderForm — callback URL', () => {
       value: { writeText },
       configurable: true,
     })
-    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
     const wrapper = mountForm(makeData(), { callbackUrl })
     await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
     await flushPromises()
@@ -268,7 +268,7 @@ describe('SsoProviderForm — callback URL', () => {
       constructor(public readonly items: Record<string, Blob>) {}
     }
     vi.stubGlobal('ClipboardItem', ClipboardItemMock)
-    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
     const wrapper = mountForm(makeData(), { callbackUrl })
     await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
     await flushPromises()
@@ -287,7 +287,7 @@ describe('SsoProviderForm — callback URL', () => {
       value: execCommand,
       configurable: true,
     })
-    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
     const wrapper = mountForm(makeData(), { callbackUrl })
     await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
     await flushPromises()
@@ -311,7 +311,7 @@ describe('SsoProviderForm — callback URL', () => {
       value: execCommand,
       configurable: true,
     })
-    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
     const wrapper = mountForm(makeData(), { callbackUrl })
     await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
     await flushPromises()
@@ -332,7 +332,7 @@ describe('SsoProviderForm — callback URL', () => {
       value: execCommand,
       configurable: true,
     })
-    const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+    const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
     const wrapper = mountForm(makeData(), { callbackUrl })
     await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
     await flushPromises()
@@ -354,7 +354,7 @@ describe('SsoProviderForm — callback URL', () => {
         value: execCommand,
         configurable: true,
       })
-      const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+      const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
       const wrapper = mountForm(makeData(), { callbackUrl })
       await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
       await flushPromises()
@@ -378,7 +378,7 @@ describe('SsoProviderForm — callback URL', () => {
         value: { writeText },
         configurable: true,
       })
-      const callbackUrl = 'https://app.modulo.run/api/v1/auth/oidc/my-provider/callback'
+      const callbackUrl = 'https://control.farna.dev/api/v1/auth/oidc/my-provider/callback'
       const wrapper = mountForm(makeData(), { callbackUrl })
       await wrapper.find('[data-testid="sso-callback-url-copy"]').trigger('click')
       await flushPromises()
@@ -467,7 +467,7 @@ describe('SsoProviderForm — contract shape validation', () => {
       updated_at: '2026-01-01T00:00:00Z',
       preset: 'google',
       tenant_domain: null,
-      callback_url: 'https://app.modulo.run/api/v1/auth/oidc/google/callback',
+      callback_url: 'https://control.farna.dev/api/v1/auth/oidc/google/callback',
     }
     expect(response).toHaveProperty('preset')
     expect(response).toHaveProperty('tenant_domain')

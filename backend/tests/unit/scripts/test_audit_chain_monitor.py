@@ -37,7 +37,7 @@ _RUN_URL = "https://github.com/farnalabs/modulo/actions/runs/40316916204"
 
 
 def _jobs(*steps: dict[str, Any]) -> dict[str, Any]:
-    return {"jobs": [{"name": "Check app.modulo.run audit chain continuity", "steps": list(steps)}]}
+    return {"jobs": [{"name": "Check control.farna.dev audit chain continuity", "steps": list(steps)}]}
 
 
 def _blind_jobs(*, escalated: bool = False, recovered: bool = False) -> dict[str, Any]:

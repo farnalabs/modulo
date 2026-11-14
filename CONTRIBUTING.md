@@ -241,7 +241,7 @@ farna-control/
 │   └── fly/                      # fly.staging.toml + Fly helper scripts
 ├── docker-compose.yml            # Full stack: Postgres + Redis + backend + workers + frontend
 ├── docker-compose.local.yml      # Local dev infra: Postgres + Redis + observability
-├── fly.toml                      # Fly config for app.modulo.run
+├── fly.toml                      # Fly config for control.farna.dev
 └── ...                           # dotfile config (.gitignore, ruff.toml, .pre-commit-config.yaml, ...)
 ```
 

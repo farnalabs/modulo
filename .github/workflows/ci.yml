@@ -2220,7 +2220,7 @@ jobs:
       # it looks like protection while providing none. Do not re-add one here.
       #
       # The real bound lives APP-SIDE, enforced atomically at run-creation
-      # time: the Branch Fixer pipeline's own concurrency on app.modulo.run —
+      # time: the Branch Fixer pipeline's own concurrency on control.farna.dev —
       # pipeline id 6bdf5fca-1b29-4ad2-a273-2b3684e97348 — via its
       # max_concurrent_runs and its webhook trigger's max_concurrent_runs
       # (follow-up tracked separately; FAR-1843). The dispatch guards that
@@ -2335,7 +2335,7 @@ jobs:
               transient)
                 DISPATCH_FAILURE="webhook unreachable"
                 DISPATCH_CAUSE="the Branch Fixer webhook or a gateway in front of it was unavailable (HTTP ${LAST_HTTP}) for the whole retry budget"
-                DISPATCH_ACTION="Check that app.modulo.run is healthy and that MODULO_BRANCH_FIXER_WEBHOOK_URL points at it, then re-run this CI job."
+                DISPATCH_ACTION="Check that control.farna.dev is healthy and that MODULO_BRANCH_FIXER_WEBHOOK_URL points at it, then re-run this CI job."
                 ;;
               config)
                 DISPATCH_FAILURE="webhook secret unavailable"

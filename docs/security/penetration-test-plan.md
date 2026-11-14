@@ -20,17 +20,17 @@ This document defines the methodology, schedule, scope, and reporting framework 
 
 | Component | Details | Target Environment |
 |---|---|---|
-| **Backend API** | FastAPI REST endpoints (all routes under `/api/v1/`, `/auth/`, `/mcp/`, `/ws/`) | `app.modulo.run` (staging & production) |
-| **MCP Server** | JSON-RPC over SSE for agent tool invocation, including tool authorization, scope enforcement, and input validation | MCP endpoint on `app.modulo.run` |
-| **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://app.modulo.run/ws/` |
-| **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `app.modulo.run` |
-| **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `app.modulo.run/auth/` |
+| **Backend API** | FastAPI REST endpoints (all routes under `/api/v1/`, `/auth/`, `/mcp/`, `/ws/`) | `control.farna.dev` (staging & production) |
+| **MCP Server** | JSON-RPC over SSE for agent tool invocation, including tool authorization, scope enforcement, and input validation | MCP endpoint on `control.farna.dev` |
+| **WebSocket Gateway** | Real-time agent session streaming, HITL approval channels, eval result streaming | `wss://control.farna.dev/ws/` |
+| **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `control.farna.dev` |
+| **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `control.farna.dev/auth/` |
 | **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/farna-control` |
 | **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/modulo` |
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
 
 > **Reference deployment.** The targets above name the reference instance
-> (`app.modulo.run`, the `farnalabs` GitHub organization and the published image
+> (`control.farna.dev`, the `farnalabs` GitHub organization and the published image
 > `ghcr.io/farnalabs/modulo`). Substitute your own host, organization and
 > registry prefix when applying this plan to a different deployment.
 
@@ -73,7 +73,7 @@ Full external penetration tests are conducted **quarterly** (every 3 months). A 
 
 ### 2.3 Rules of Engagement
 
-- Testing is limited to `app.modulo.run`, `*.modulo.run`, and the Farna Control GitHub organization
+- Testing is limited to `control.farna.dev`, `*.modulo.run`, and the Farna Control GitHub organization
 - No denial-of-service attacks against production without 48-hour written approval
 - No exfiltration of production customer data beyond what is minimally necessary to demonstrate a finding
 - All testing must use a dedicated test organization/tenant with synthetic data
@@ -89,7 +89,7 @@ Testing follows the **OWASP Web Security Testing Guide (WSTG) v5.0** with additi
 
 ### 3.1 Information Gathering (WSTG-INFO)
 
-- DNS enumeration and subdomain discovery (`modulo.run`, `app.modulo.run`, `demo.modulo.run`)
+- DNS enumeration and subdomain discovery (`modulo.run`, `control.farna.dev`, `demo.modulo.run`)
 - Technology fingerprinting (HTTP headers, cookie attributes, framework signatures)
 - Endpoint discovery via common API path wordlists (`/api/v1/`, `/mcp/v1/`)
 - Directory listing and exposed `.git`, `.env`, and configuration files

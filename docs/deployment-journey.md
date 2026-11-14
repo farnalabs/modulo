@@ -77,7 +77,7 @@ fly secrets set \
   FERNET_KEY="$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" \
   DATABASE_URL="postgresql+asyncpg://..." \
   REDIS_URL="redis://..." \
-  MODULO_PUBLIC_URL="https://app.modulo.run" \
+  MODULO_PUBLIC_URL="https://control.farna.dev" \
   MODULO_USERS="admin:your-password"
 fly deploy
 ```

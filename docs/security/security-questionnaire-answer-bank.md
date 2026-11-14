@@ -22,7 +22,7 @@ no answer is an unsupported claim.
 A: No. Farna Control is self-hosted only. The customer runs it on their own
 infrastructure. There is no Farnalabs-operated multi-tenant service and no
 hosted production offering. A read-only demo with sample data exists at
-`app.modulo.run/demo` for evaluation; it is not a hosted product and holds no
+`control.farna.dev/demo` for evaluation; it is not a hosted product and holds no
 customer data.
 
 Evidence: `README.md`; `docs/architecture.md`; `docs/core-principles.md`

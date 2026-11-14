@@ -13,7 +13,7 @@ SQLAlchemy ``PendingRollbackError``). Because the lock is session-scoped,
 ROLLBACK does not release it either: the pooled connection returned to the pool
 STILL HOLDING IT, every later ``pg_try_advisory_lock`` returned false, and
 snapshot creation failed permanently (``snapshot_lock_busy`` — the HTTP 503
-"Pipeline snapshot lock unavailable after 5 attempts" seen on app.modulo.run).
+"Pipeline snapshot lock unavailable after 5 attempts" seen on control.farna.dev).
 
 These tests are the only ones that can catch it, because they run against a
 REAL Postgres with a POOLED engine:

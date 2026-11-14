@@ -9,7 +9,7 @@ on:
       target_url:
         description: 'Target URL to scan'
         required: false
-        default: 'https://staging.modulo.run'
+        default: 'https://staging-control.farna.dev'
       scan_type:
         description: 'baseline (fast) or full (deep)'
         required: false
@@ -40,7 +40,7 @@ jobs:
         id: zap
         shell: bash
         env:
-          INPUT_TARGET_URL: ${{ github.event.inputs.target_url || 'https://staging.modulo.run' }}
+          INPUT_TARGET_URL: ${{ github.event.inputs.target_url || 'https://staging-control.farna.dev' }}
           INPUT_SCAN_TYPE: ${{ github.event.inputs.scan_type || 'baseline' }}
         run: |
           TARGET="$INPUT_TARGET_URL"

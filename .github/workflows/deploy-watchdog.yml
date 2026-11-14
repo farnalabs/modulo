@@ -96,7 +96,7 @@ jobs:
       # the 3-consecutive-failure cap and a failed re-dispatch - and each one
       # is visible in the Actions tab AND emailed (FAR-2139). Dispatch is
       # ALWAYS plain: deploy.yml's throttle anchor
-      # only counts runs whose "Deploy to app.modulo.run" job SUCCEEDED, so a
+      # only counts runs whose "Deploy to control.farna.dev" job SUCCEEDED, so a
       # FAILED deploy never advances the throttle window and a plain dispatch
       # re-runs full pre-deploy CI and deploys once CI passes - the throttle
       # never needs bypassing, and bypassing it on a red main would only
@@ -121,7 +121,7 @@ jobs:
 
           DEPLOY_WORKFLOW="deploy.yml"
           PROD_APP="app-modulo"
-          PROD_URL="https://app.modulo.run"
+          PROD_URL="https://control.farna.dev"
           # The watchdog's own escalation floor (FAR-910/FAR-954): it stops
           # re-dispatching after this many consecutive failed deploys. It is
           # deliberately HIGHER than the staleness check's 2-run threshold, so
@@ -210,7 +210,7 @@ jobs:
           }
 
           # ---- 1. Deploy-run state: is a deploy already trying? ----
-          # databaseId is needed to read each run's "Deploy to app.modulo.run"
+          # databaseId is needed to read each run's "Deploy to control.farna.dev"
           # job conclusion (FAR-2152: a throttled no-op's RUN conclusion is
           # success, so run-level data alone cannot tell a deploy from a skip).
           RUNS_JSON="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --branch main --limit 10 --json databaseId,status,conclusion 2>/dev/null)" || RUNS_JSON=""
@@ -443,7 +443,7 @@ jobs:
 
           # ---- 5. Dispatch decision: plain dispatch only, capped at 3 consecutive failures ----
           # deploy.yml's throttle anchor only counts runs whose "Deploy to
-          # app.modulo.run" job SUCCEEDED - a FAILED deploy never advances the
+          # control.farna.dev" job SUCCEEDED - a FAILED deploy never advances the
           # throttle window - so a plain dispatch after a failure re-runs full
           # pre-deploy CI and deploys once CI passes; the throttle is never an
           # obstacle here. The only runaway-retry protection needed is a cap:
@@ -454,12 +454,12 @@ jobs:
           # dispatch (a throttled no-op success counts as a success: bounded
           # churn is accepted and staleness-check escalates if it persists).
           #
-          # FAR-954: throttled runs (Deploy to app.modulo.run skipped) are NOT
+          # FAR-954: throttled runs (Deploy to control.farna.dev skipped) are NOT
           # failures — they did not attempt a deploy. Counting them as failures
           # would cap the re-dispatch after just 3 throttle events, even though
           # no deploy was attempted. Filter them out of the consecutive-failure
           # check: only runs where the deploy job actually ran and failed count.
-          # FAR-2152: attach each completed run's "Deploy to app.modulo.run"
+          # FAR-2152: attach each completed run's "Deploy to control.farna.dev"
           # JOB conclusion. A throttled run's RUN conclusion is success while
           # its deploy job is skipped - it deployed nothing. The enrichment
           # fails open: without the field the walk below falls back to the run

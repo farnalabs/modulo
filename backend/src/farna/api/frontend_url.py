@@ -18,7 +18,7 @@ Resolution order (deployment-agnostic):
 Rationale: CORS origins are for CORS, not for routing the browser after
 login.  Picking ``cors_origins.split(",")[0]`` is wrong on any deployment
 where the marketing site appears first in the CORS list (e.g.
-``modulo.run,app.modulo.run``).
+``modulo.run,control.farna.dev``).
 """
 
 from __future__ import annotations

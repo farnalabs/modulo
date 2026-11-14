@@ -27,7 +27,7 @@ contained `steps` and no `outputs`). So:
   read **step presence/conclusion** – or the job/run conclusion.
 
 Both existing precedent and every fix here follow that: `deploy_run_attempts.py`
-reads the "Deploy to app.modulo.run" **job** conclusion, the k8s-conformance
+reads the "Deploy to control.farna.dev" **job** conclusion, the k8s-conformance
 staleness job reads the "Run the runtime-provider conformance suite" **step**
 conclusion, and the FAR-2157 markers are dedicated steps. A future edit that
 replaces a marker with a job output silently disarms the signal – the guard suite

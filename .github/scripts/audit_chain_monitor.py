@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Audit-chain monitor escalation state machine (FAR-2160).
 
-``audit-chain-monitor.yml`` runs every 6h and verifies app.modulo.run's audit
+``audit-chain-monitor.yml`` runs every 6h and verifies control.farna.dev's audit
 chain. When it cannot authenticate it verifies NOTHING: the auth step writes
 ``authenticated=false``, both checks skip, and the ``Record the NOT RUN monitor
 cycle (FAR-2157)`` step runs. FAR-2157 made that legible; nobody was told. A
@@ -75,7 +75,7 @@ ESCALATION_STEP_NAME = "Record the blind-cycle escalation (FAR-2160)"
 #: incident was closed, so a later blindness is a fresh incident.
 RECOVERY_STEP_NAME = "Record the recovered monitor cycle (FAR-2160)"
 #: The step that proves the monitor authenticated (FAR-1468).
-AUTH_STEP_NAME = "Authenticate to app.modulo.run (admin login)"
+AUTH_STEP_NAME = "Authenticate to control.farna.dev (admin login)"
 
 #: A stable title marker a human can search for, and the code dedupes on.
 TICKET_TITLE_MARKER = "AUDIT-CHAIN MONITOR BLIND"
@@ -494,7 +494,7 @@ def build_email(*, state: MonitorState, action: str, run_url: str) -> tuple[str,
         f"  This cycle              : {run_url}",
         "",
         "What this means",
-        "  The monitor runs every 6h to verify app.modulo.run's audit chain (chain",
+        "  The monitor runs every 6h to verify control.farna.dev's audit chain (chain",
         "  integrity plus 24h continuity). It could not authenticate, so it verified",
         "  NOTHING. A green run in this state is not evidence the chain is intact -",
         "  it is no evidence at all.",
@@ -519,7 +519,7 @@ def build_ticket(*, state: MonitorState, run_url: str) -> tuple[str, str]:
     one blind incident from another. The body names the monitor, the measured
     facts and the concrete repair - a reader needs no other tab.
     """
-    title = f"{TICKET_TITLE_MARKER} [incident {state.incident_id}]: audit chain unverified on app.modulo.run (FAR-2160)"
+    title = f"{TICKET_TITLE_MARKER} [incident {state.incident_id}]: audit chain unverified on control.farna.dev (FAR-2160)"
     description = "\n".join(
         [
             "Automated escalation from `audit-chain-monitor.yml` (FAR-2160).",

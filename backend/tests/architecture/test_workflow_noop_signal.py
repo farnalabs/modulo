@@ -169,7 +169,7 @@ def test_audit_chain_monitor_missing_credentials_is_marked_not_run() -> None:
     still succeeds (a missing secret must not red-queue the monitor); the
     marker is what makes it honest.
     """
-    auth = _step_named(AUDIT_CHAIN_YML, "Authenticate to app.modulo.run (admin login)")
+    auth = _step_named(AUDIT_CHAIN_YML, "Authenticate to control.farna.dev (admin login)")
     auth_run = str(auth.get("run") or "")
     marker = _step_named(AUDIT_CHAIN_YML, AUDIT_NOT_RUN_STEP)
     marker_run = str(marker.get("run") or "")

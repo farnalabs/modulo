@@ -22,7 +22,7 @@ This audit examines every review stage in Farna Control to verify that reviewing
 
 ## Review Stages Audited
 
-### 1. PR Reviewer Pipeline (app.modulo.run)
+### 1. PR Reviewer Pipeline (control.farna.dev)
 
 **Pipeline ID:** `d6b2c25b-ff7f-490a-9967-633b6adcc93c`
 **Trigger:** GitHub Actions `pr-review.yml` workflow (on CI completion)

@@ -1,7 +1,7 @@
 """Structured reason logging on the webhook/health 503 raise paths.
 
 2026-09-04T14:48Z incident: ~8/10 GitHub pr-review webhook POSTs to
-app.modulo.run failed with HTTP 503 and NO persisted cause — the fail-closed
+control.farna.dev failed with HTTP 503 and NO persisted cause — the fail-closed
 raise sites logged either a bare log code or nothing, so the reason was lost
 with the response. These tests lock in the contract that every 503 raise site
 in webhooks.py and the /healthz/ready aggregation emits a structured record
