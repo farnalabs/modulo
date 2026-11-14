@@ -1709,14 +1709,21 @@ def test_run_state_bind_supervisor() -> None:
 @pytest.mark.skipif(sys.platform == "win32", reason="signal handlers not installed on Windows")
 def test_run_state_double_signal_sets_force_exit() -> None:
     state = entry_module._RunState()
-    state.install_signal_handlers()
-    # First signal
-    os.kill(os.getpid(), signal.SIGTERM)
-    assert state.shutdown_requested.is_set()
-    assert not state.force_exit.is_set()
-    # Second signal
-    os.kill(os.getpid(), signal.SIGTERM)
-    assert state.force_exit.is_set()
+    # Save original handlers so the pytest process isn't left with our test handlers
+    original_sigint = signal.getsignal(signal.SIGINT)
+    original_sigterm = signal.getsignal(signal.SIGTERM)
+    try:
+        state.install_signal_handlers()
+        # First signal
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert state.shutdown_requested.is_set()
+        assert not state.force_exit.is_set()
+        # Second signal
+        os.kill(os.getpid(), signal.SIGTERM)
+        assert state.force_exit.is_set()
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
+        signal.signal(signal.SIGTERM, original_sigterm)
 
 
 # ---------------------------------------------------------------------------
