@@ -63,6 +63,15 @@ from tests.unit.api.mock_session import make_session_factory
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _stub_capacity_alerts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep reconcile unit tests focused on row budgeting, not Redis alert scans."""
+    monkeypatch.setattr(
+        "farna.core.capacity_alerts.evaluate_capacity_alerts",
+        AsyncMock(return_value={}),
+    )
+
+
 def _make_settings(**overrides: Any) -> MagicMock:
     base: dict[str, Any] = {
         "saq_runs_queue": "runs",

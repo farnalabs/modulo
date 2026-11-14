@@ -1223,6 +1223,7 @@ class TestInsertEvalDefinitionBindingViolation:
         principal.organisation_id = _ORG_ID
         principal.account_id = _USER_ID
         principal.org_role = "admin"
+        principal.key_grants = frozenset({"gate.create"})
         run = MagicMock()
         run.pipeline_id = _PIPELINE_ID
         req = MagicMock()
