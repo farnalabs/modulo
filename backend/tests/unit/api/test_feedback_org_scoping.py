@@ -166,6 +166,7 @@ async def test_publish_eval_proposal_binding_violation_returns_400() -> None:
     principal.organisation_id = _ORG_ID
     principal.account_id = uuid.uuid4()
     principal.org_role = "admin"
+    principal.key_grants = frozenset({"gate.create"})
     req = PublishEvalProposalRequest(name="n", eval_type="regex", config={})
 
     with (

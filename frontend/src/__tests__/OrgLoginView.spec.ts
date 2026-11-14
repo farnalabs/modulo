@@ -132,7 +132,7 @@ describe('OrgLoginView', () => {
     // h1 must always contain the product brand — never the org name
     const h1 = wrapper.find('h1')
     expect(h1.exists()).toBe(true)
-    expect(h1.text()).toBe('Modulo')
+    expect(h1.text()).toBe('Farna Control')
     // Org name appears as a subordinate line, not in h1
     expect(wrapper.text()).toContain('Sign in to Test Org')
   })
