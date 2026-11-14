@@ -196,14 +196,14 @@ KNOWN_FIXES: tuple[KnownFix, ...] = (
             "`no_output_reason` as the lead: a provider/session fault needs a "
             "different fix from a genuinely long task."
         ),
-        link="https://github.com/farnalabs/modulo/blob/main/docs/troubleshooting.md",
+        link="https://github.com/farnalabs/farna-control/blob/main/docs/troubleshooting.md",
     ),
     KnownFix(
         fix_id="sandbox_timeout_exceeds_e2b_cap",
         signature="SANDBOX_TIMEOUT_EXCEEDS_E2B_CAP",
         title="Sandbox node timeout exceeds the E2B 1-hour cap",
         body=("The node's `timeout_seconds` is above E2B's 1-hour sandbox timeout cap, so provisioning fails. Set `timeout_seconds` to 3300 or less to keep provisioning headroom (FAR-511)."),
-        link="https://github.com/farnalabs/modulo/blob/main/docs/agent-config.md",
+        link="https://github.com/farnalabs/farna-control/blob/main/docs/agent-config.md",
     ),
     KnownFix(
         fix_id="model_insufficient_funds",

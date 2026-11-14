@@ -383,7 +383,7 @@ jobs:
         run: |
           echo "Cleaning up stale merge-queue branches (older than 7 days)..."
           CUTOFF=$(date -d '7 days ago' +%s)
-          gh api repos/farnalabs/modulo/branches --paginate --jq '.[].name' | { grep -E '^merge-queue/(failed|active)-' || true; } | while IFS= read -r branch; do
+          gh api repos/farnalabs/farna-control/branches --paginate --jq '.[].name' | { grep -E '^merge-queue/(failed|active)-' || true; } | while IFS= read -r branch; do
             # Extract timestamp from branch name: merge-queue/<failed|active>-<timestamp>
             BRANCH_TS=$(echo "$branch" | sed -E 's/^merge-queue\/(failed|active)-//')
             if [ "$BRANCH_TS" -lt "$CUTOFF" ] 2>/dev/null; then
@@ -2177,7 +2177,7 @@ jobs:
           # .github/workflows/* (selected per-PR in the loop below).
           # MODULO_REVIEWBOT_TOKEN is a classic PAT (vault: github-reviewbot-pat,
           # login modulo-reviewbot) whose X-OAuth-Scopes include `workflow` and
-          # whose repo permissions include push:true on farnalabs/modulo (both
+          # whose repo permissions include push:true on farnalabs/farna-control (both
           # probed live 2026-10-01). GITHUB_TOKEN - the github-actions App
           # installation token - has no `workflows` permission key at all and
           # never can, so GitHub refuses it server-side on any PR that modifies

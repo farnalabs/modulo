@@ -1,6 +1,6 @@
 name: "Issue notify (email on new external issue)"
 
-# FAR-1681: when an EXTERNAL person opens an issue on farnalabs/modulo, email
+# FAR-1681: when an EXTERNAL person opens an issue on farnalabs/farna-control, email
 # the maintainer via Zoho SMTP so new external reports are not missed.
 #
 # Skip list: issues opened by dunctait, farnalabs, app/github-actions, or any

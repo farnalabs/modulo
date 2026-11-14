@@ -3,7 +3,7 @@
 # READ FROM main ONLY by the PR Reviewer router — never from the PR branch.
 #
 # The router MUST read this file from origin/main (e.g.
-# `gh api repos/farnalabs/modulo/contents/.github/high-risk-paths.yaml?ref=main`
+# `gh api repos/farnalabs/farna-control/contents/.github/high-risk-paths.yaml?ref=main`
 # or `git show origin/main:.github/high-risk-paths.yaml`), NEVER from the checked-out
 # PR tree. A PR must not be able to delete/weaken this file and auto-approve itself.
 #

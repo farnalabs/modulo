@@ -963,7 +963,7 @@ class Settings(BaseSettings):
     # workflow so an operator can jump straight to it. The defaults point at
     # Modulo's own dogfood repo/instance; a self-hosted deployment sets these to
     # its own fork and API base. An empty repo disables the lookup entirely.
-    modulo_deploy_run_repo: str = Field(default="farnalabs/modulo", validation_alias=_product_aliases("FARNA_CONTROL_DEPLOY_RUN_REPO", "FARNA_CONTROL_MODULO_DEPLOY_RUN_REPO"))
+    modulo_deploy_run_repo: str = Field(default="farnalabs/farna-control", validation_alias=_product_aliases("FARNA_CONTROL_DEPLOY_RUN_REPO", "FARNA_CONTROL_MODULO_DEPLOY_RUN_REPO"))
     modulo_deploy_run_workflow: str = Field(default="deploy.yml", validation_alias=_product_aliases("FARNA_CONTROL_DEPLOY_RUN_WORKFLOW", "FARNA_CONTROL_MODULO_DEPLOY_RUN_WORKFLOW"))
     modulo_deploy_run_api_base: str = Field(default="https://api.github.com", validation_alias=_product_aliases("FARNA_CONTROL_DEPLOY_RUN_API_BASE", "FARNA_CONTROL_MODULO_DEPLOY_RUN_API_BASE"))
     # database-hygiene sub-check (FAR-1445). Unlike its neighbours this

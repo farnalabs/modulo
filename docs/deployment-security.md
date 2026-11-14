@@ -412,10 +412,10 @@ Until that lands, scan a deployed image tag manually:
 
 ```bash
 # Manual scan (pin the version you deployed; :latest tracks the newest release)
-trivy image ghcr.io/farnalabs/modulo:<version>
+trivy image ghcr.io/farnalabs/farna-control:<version>
 
 # Scan with severity filter
-trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/modulo:<version>
+trivy image --severity CRITICAL,HIGH ghcr.io/farnalabs/farna-control:<version>
 ```
 
 **Version pin reference (Docker Compose production):**
@@ -450,23 +450,23 @@ image, because the all-in-one image runs nginx and supervisord alongside the
 API and both SAQ workers:
 
 ```dockerfile
-# backend/Dockerfile (ghcr.io/farnalabs/modulo/backend)
+# backend/Dockerfile (ghcr.io/farnalabs/farna-control/backend)
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# deploy/docker/Dockerfile.all-in-one (ghcr.io/farnalabs/modulo)
+# deploy/docker/Dockerfile.all-in-one (ghcr.io/farnalabs/farna-control)
 USER www-data
 
-# frontend/Dockerfile.prod (ghcr.io/farnalabs/modulo/frontend)
+# frontend/Dockerfile.prod (ghcr.io/farnalabs/farna-control/frontend)
 USER nginx
 ```
 
 **Verify:**
 ```bash
-docker run --rm --entrypoint whoami ghcr.io/farnalabs/modulo:<version>
+docker run --rm --entrypoint whoami ghcr.io/farnalabs/farna-control:<version>
 # Expected: www-data (the all-in-one image)
 
-docker run --rm --entrypoint whoami ghcr.io/farnalabs/modulo/backend:<version>
+docker run --rm --entrypoint whoami ghcr.io/farnalabs/farna-control/backend:<version>
 # Expected: appuser
 ```
 
@@ -497,7 +497,7 @@ tag. This prevents tag-mutation attacks on the registry:
 
 ```yaml
 modulo:
-  image: ghcr.io/farnalabs/modulo@sha256:<digest>
+  image: ghcr.io/farnalabs/farna-control@sha256:<digest>
 ```
 
 For `docker compose` development, use `pull_policy: always` to pick up newly
@@ -587,7 +587,7 @@ Configure alerts for these events in your monitoring system:
 | Failed login rate spike | Auth 401s > 10/min per IP | High | Security on-call |
 | Migration failure | Backend crash loop on startup | Critical | Ops channel |
 | CSRF token mismatch | 403 on state-changing endpoint | Medium | Ops channel |
-| Container image with Critical CVE | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – not automated in CI | High | Security channel |
+| Container image with Critical CVE | Manual image scan (`trivy image ghcr.io/farnalabs/farna-control:<version>`) – not automated in CI | High | Security channel |
 | Unexpected outbound connection | Network policy violation | Critical | Security on-call |
 
 ---
@@ -632,7 +632,7 @@ Configure alerts for these events in your monitoring system:
 ```bash
 # Docker Compose – pin the previous image version and restart
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:<previous-version>
+docker tag ghcr.io/farnalabs/farna-control:old ghcr.io/farnalabs/farna-control:<previous-version>
 TAG=<previous-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d
 ```
 
@@ -725,7 +725,7 @@ before marking a production deployment as complete.
 
 ### Containers
 
-- [ ] Deployed image tag scanned manually (`trivy image ghcr.io/farnalabs/modulo:<version>`) with zero critical/high CVEs – image scanning is not automated in CI (see §5.1)
+- [ ] Deployed image tag scanned manually (`trivy image ghcr.io/farnalabs/farna-control:<version>`) with zero critical/high CVEs – image scanning is not automated in CI (see §5.1)
 - [ ] Container runs as non-root user (`whoami` != `root`)
 - [ ] Read-only root filesystem enabled for backend containers
 - [ ] Image pinned by digest, not tag (production)

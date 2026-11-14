@@ -12,7 +12,7 @@ This skill is a decision guide, not a second installer. Use the documented Modul
 Ask which shape fits the user's environment:
 
 - **Native workstation evaluation on Linux:** use the published `scripts/install.sh` flow described in the public installation docs. The current repository script is Linux-only; macOS uses the separately documented signed `.dmg` path. Do not claim native installation is available on Windows.
-- **Current macOS artifacts:** the published release currently exposes an Apple Silicon (`arm64`) `.dmg`; do not promise an Intel (`x86_64`) download unless the selected release page lists one. Check the [public installation guide](https://modulo.run/docs/installation) and [releases page](https://github.com/farnalabs/modulo/releases) for the release-specific artifact list.
+- **Current macOS artifacts:** the published release currently exposes an Apple Silicon (`arm64`) `.dmg`; do not promise an Intel (`x86_64`) download unless the selected release page lists one. Check the [public installation guide](https://modulo.run/docs/installation) and [releases page](https://github.com/farnalabs/farna-control/releases) for the release-specific artifact list.
 - **Docker Compose:** use for a self-hosted server or production single machine. Follow the public installation/deployment documentation and keep `.env` credentials out of chat and source control.
 - **Kubernetes:** use the maintained Helm chart for multi-replica deployments, with PostgreSQL and the documented Redis choice. Follow the public Kubernetes guide.
 - **Existing remote self-host:** connect to its canonical HTTPS base URL. Reverse proxies, SSH tunnels, cloud hosts, and multiple instances are supported connection contexts; do not assume their topology.

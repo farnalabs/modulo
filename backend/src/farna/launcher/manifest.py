@@ -300,7 +300,7 @@ def verify_artifacts(root: Path, manifest: ReleaseManifest) -> None:
         artifact = _resolve_bundle_artifact(root, name)
         actual = _digest_of(artifact)
         if actual != expected:
-            raise ManifestSecurityError(f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual} — do not use this download; report it at https://github.com/farnalabs/modulo/issues")
+            raise ManifestSecurityError(f"artifact '{name}' sha256 MISMATCH: expected {expected}, got {actual} — do not use this download; report it at https://github.com/farnalabs/farna-control/issues")
 
 
 def build_release_manifest(

@@ -69,7 +69,7 @@ without managing servers or databases.
 
 ```bash
 # One-time
-fly launch --image ghcr.io/farnalabs/modulo
+fly launch --image ghcr.io/farnalabs/farna-control
 fly postgres create --name modulo-db
 fly redis create --name modulo-redis
 fly secrets set \

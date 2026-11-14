@@ -156,7 +156,7 @@ instead.
 | Failed login rate spike (>10/min per IP) | Backend logs / OTel | Credential stuffing, SSO probe |
 | 429 rate limit threshold crossed | Reverse proxy logs | DoS, brute force |
 | Unexpected outbound connection | Network policy logs | Data exfiltration, C2 beacon |
-| Container with Critical CVE deployed | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – no automated image scan runs in CI yet | Known-exploit path |
+| Container with Critical CVE deployed | Manual image scan (`trivy image ghcr.io/farnalabs/farna-control:<version>`) – no automated image scan runs in CI yet | Known-exploit path |
 | CSRF token mismatch spike | Backend error logs | CSRF probing, automated scanning |
 | Unexplained 403/401 without auth header | Backend access logs | API key leak, token reuse |
 | RLS policy violation logged | Postgres logs | Multi-tenant cross-read |
@@ -333,7 +333,7 @@ See §6 for the full process. Minimum steps:
 | Attribute | Details |
 |-----------|---------|
 | Severity | **High** (with known PoC), **Medium** (theoretical) |
-| Detection | Manual image scan (`trivy image ghcr.io/farnalabs/modulo:<version>`) – no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
+| Detection | Manual image scan (`trivy image ghcr.io/farnalabs/farna-control:<version>`) – no automated image scan runs in CI yet; GitHub Advisory alert, security scanner notification |
 | Containment | Block network to affected Pod, deploy patched image |
 | Eradication | Verify no IOCs, rebuild image from pinned base |
 | Prevention | Per-push/PR dependency scans in CI (`pip-audit`) – no scheduled weekly scan (see `docs/security/dependency-policy.md`); pinned base image digests |
@@ -659,7 +659,7 @@ Once confirmed, contact security@modulo.run to re-enable SSO.
 - [ ] Container logs exported: `docker compose -f deploy/compose/docker-compose.prod.yml logs modulo > incident-YYYYMMDD-container.log`
 - [ ] Audit log window exported: `GET /api/v1/admin/audit/export` (Team-tier `audit_viewer` feature plus `audit.manage`; paginated; there is no audit CLI). On a Community install the events are still recorded, but there is no product route to export them - preserve the database snapshot instead
 - [ ] Database snapshot: `pg_dump -Fc modulo > incident-YYYYMMDD.dump`
-- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/modulo:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses the image pinned in `deploy/compose/docker-compose.prod.yml`; substitute your own registry prefix if you mirror the image)
+- [ ] Container image digest recorded: `docker image inspect ghcr.io/farnalabs/farna-control:${TAG} | jq '.[0].RepoDigests'` (the production compose service uses the image pinned in `deploy/compose/docker-compose.prod.yml`; substitute your own registry prefix if you mirror the image)
 - [ ] Network logs captured from cloud provider (VPC flow logs, host firewall logs)
 - [ ] Active users/accounts snapshot: query the accounts via the admin API (`GET /api/v1/admin/users`); there is no session CLI
 - [ ] Checkpoint state snapshot: list runs via the UI or `GET /api/v1/runs`

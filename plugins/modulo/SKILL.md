@@ -38,6 +38,6 @@ The safe order is: choose or install an instance; verify health; initialise or c
 
 - Installation and deployment: <https://modulo.run/docs/installation>
 - Remote MCP: <https://modulo.run/docs/mcp>
-- Product repository: <https://github.com/farnalabs/modulo>
+- Product repository: <https://github.com/farnalabs/farna-control>
 
 The repository's internal `docs/` files are implementation evidence for maintainers; the links above are the user-facing documentation to follow.

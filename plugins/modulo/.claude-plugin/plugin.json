@@ -3,9 +3,9 @@
   "description": "Agent-native setup and safe operation of self-hosted Modulo.",
   "author": {
     "name": "Farna Labs",
-    "url": "https://github.com/farnalabs/modulo"
+    "url": "https://github.com/farnalabs/farna-control"
   },
   "homepage": "https://modulo.run/docs/what-is-modulo",
-  "repository": "https://github.com/farnalabs/modulo",
+  "repository": "https://github.com/farnalabs/farna-control",
   "license": "BUSL-1.1"
 }

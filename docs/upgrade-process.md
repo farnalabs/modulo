@@ -288,7 +288,7 @@ only while it is being rolled forward.
 ```bash
 # Docker Compose – pin the previous image version and restart
 docker compose -f deploy/compose/docker-compose.prod.yml stop modulo
-docker tag ghcr.io/farnalabs/modulo:old ghcr.io/farnalabs/modulo:<previous-version>
+docker tag ghcr.io/farnalabs/farna-control:old ghcr.io/farnalabs/farna-control:<previous-version>
 TAG=<previous-version> docker compose -f deploy/compose/docker-compose.prod.yml up -d
 
 # Self-hosted

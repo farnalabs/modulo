@@ -1,6 +1,6 @@
 # Modulo operations
 
-Use the surface that matches the deployment and task. Public references: <https://modulo.run/docs/installation>, <https://modulo.run/docs/mcp>, and <https://github.com/farnalabs/modulo>.
+Use the surface that matches the deployment and task. Public references: <https://modulo.run/docs/installation>, <https://modulo.run/docs/mcp>, and <https://github.com/farnalabs/farna-control>.
 
 ## Native launcher
 

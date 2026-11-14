@@ -12,4 +12,4 @@ Start with the public docs:
 
 - <https://modulo.run/docs/installation>
 - <https://modulo.run/docs/mcp>
-- <https://github.com/farnalabs/modulo>
+- <https://github.com/farnalabs/farna-control>

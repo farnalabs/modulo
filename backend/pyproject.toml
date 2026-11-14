@@ -121,8 +121,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://modulo.run"
-Source = "https://github.com/farnalabs/modulo"
-BugTracker = "https://github.com/farnalabs/modulo/issues"
+Source = "https://github.com/farnalabs/farna-control"
+BugTracker = "https://github.com/farnalabs/farna-control/issues"
 
 [project.scripts]
 farna-control = "farna.cli.main:cli"

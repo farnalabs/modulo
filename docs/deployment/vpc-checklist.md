@@ -65,7 +65,7 @@
 
 - [ ] **Image is pulled from VPC-internal registry** (ECR, GAR, ACR) – not Docker Hub
   - the shipped `deploy/compose/docker-compose.prod.yml` does **not** satisfy this out of
-    the box: it pins `ghcr.io/farnalabs/modulo:${TAG:?TAG is required - set the Modulo version you intend to run}`, `postgres:16-alpine` and
+    the box: it pins `ghcr.io/farnalabs/farna-control:${TAG:?TAG is required - set the Modulo version you intend to run}`, `postgres:16-alpine` and
     `redis:8-alpine`. The last two are Docker Hub official images, so an air-gapped or
     egress-restricted VPC cannot pull them. The Farna Control image now **requires** `TAG` to be
     set (no default), so the compose file will refuse to start without it.

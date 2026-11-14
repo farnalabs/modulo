@@ -39,7 +39,7 @@ Verified properties:
 
 ## Build the image from source
 
-The production compose file pulls `ghcr.io/farnalabs/modulo:${TAG}`. That image
+The production compose file pulls `ghcr.io/farnalabs/farna-control:${TAG}`. That image
 is convenient, but it is a Farnalabs-built artifact. The escrow path is to build
 the same all-in-one image from the source you already have:
 
@@ -50,7 +50,7 @@ git checkout <release-tag>          # the release you intend to keep running
 
 docker build \
   -f deploy/docker/Dockerfile.all-in-one \
-  -t ghcr.io/farnalabs/modulo:local \
+  -t ghcr.io/farnalabs/farna-control:local \
   .
 ```
 

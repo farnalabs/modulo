@@ -26,12 +26,12 @@ This document defines the methodology, schedule, scope, and reporting framework 
 | **Frontend SPA** | Vue 3 single-page application (all routes), including OIDC redirect flows, session handling, and CSRF token management | `control.farna.dev` |
 | **SSO Flows** | OIDC (Google, GitHub, Azure AD) and SAML (Okta, OneLogin): handshake, callback handling, token exchange, session creation | `control.farna.dev/auth/` |
 | **CI/CD Pipeline** | Hosted Ubicloud GitHub Actions runner (ubicloud-standard-2); workflow definitions, secret injection, artifact handling | `github.com/farnalabs/farna-control` |
-| **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/modulo` |
+| **Container Images** | Docker images for backend, frontend, and supporting services; base image provenance, layer contents, runtime user | Registry: `ghcr.io/farnalabs/farna-control` |
 | **Agent Execution Sandbox** | MCP tool execution isolation, prompt injection guards, sensitive data masking, checkpoint encryption | Sandbox Workers on Cloudflare |
 
 > **Reference deployment.** The targets above name the reference instance
 > (`control.farna.dev`, the `farnalabs` GitHub organization and the published image
-> `ghcr.io/farnalabs/modulo`). Substitute your own host, organization and
+> `ghcr.io/farnalabs/farna-control`). Substitute your own host, organization and
 > registry prefix when applying this plan to a different deployment.
 
 ### 1.3 Out of Scope

@@ -80,14 +80,14 @@ jobs:
           # before this step existed (an absent headSha derives no coalesce key,
           # so the delivery creates a run as before).
           #
-          # The explicit /repos/farnalabs/modulo/... REST path keeps this step
+          # The explicit /repos/farnalabs/farna-control/... REST path keeps this step
           # independent of any git remote layout (the workflow gains a minimal
           # checkout below only so the dispatch step can call the shared
           # scripts/dispatch_with_retry.sh; `gh` here uses GH_TOKEN + the
           # explicit path, exactly as it did before that checkout existed).
           HEAD_SHA=""
           GH_RC=0
-          HEAD_SHA=$(gh api "repos/farnalabs/modulo/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/head_sha_stderr.txt) || GH_RC=$?
+          HEAD_SHA=$(gh api "repos/farnalabs/farna-control/pulls/${PR_NUMBER}" --jq '.head.sha' 2>/tmp/head_sha_stderr.txt) || GH_RC=$?
           if [ "$GH_RC" -ne 0 ] || [ -z "$HEAD_SHA" ]; then
             ERR=$(head -c 300 /tmp/head_sha_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
             echo "::warning::Could not resolve the head SHA for PR #${PR_NUMBER} (rc=${GH_RC}) - dispatching without headSha, so this delivery will not coalesce.${ERR:+ gh api stderr: $ERR}"
@@ -146,7 +146,7 @@ jobs:
             --argjson prNumber "${PR_NUMBER}" \
             --arg headSha "${HEAD_SHA}" \
             --arg failureDescription "${FEEDBACK}" \
-            --arg repo "farnalabs/modulo" \
+            --arg repo "farnalabs/farna-control" \
             --arg taskKind "${TASK_KIND}" \
             '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo}
              + (if $headSha == "" then {} else {headSha: $headSha} end)

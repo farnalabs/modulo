@@ -439,7 +439,7 @@ _RETAINED_VERSIONS = 2
 _CACHE_PREFIXES = (".staging-", ".downloads-", ".current.new.")
 _DEFAULT_BOOT_TIMEOUT = 600.0
 _BOOT_POLL_INTERVAL = 0.5
-_RELEASES_DOWNLOAD_BASE = "https://github.com/farnalabs/modulo/releases/download"
+_RELEASES_DOWNLOAD_BASE = "https://github.com/farnalabs/farna-control/releases/download"
 _RELEASE_MANIFEST_NAME = "RELEASE_MANIFEST.json"
 _LAUNCHER_NAME = "launcher"
 _PRESSURE_RESTORE_MANIFEST_NAME = _RESTORE_MANIFEST_NAME
@@ -918,7 +918,7 @@ def extract_and_verify_bundle(tarball: Path, staging_dir: Path) -> Path:
         artifact = _checksum_artifact(bundle_dir, name)
         actual = _sha256_file(artifact)
         if actual != expected:
-            raise UpgradeError(f"bundle integrity check FAILED for {name}: expected {expected}, got {actual} - do not use this download; report it at https://github.com/farnalabs/modulo/issues")
+            raise UpgradeError(f"bundle integrity check FAILED for {name}: expected {expected}, got {actual} - do not use this download; report it at https://github.com/farnalabs/farna-control/issues")
     _log.info("upgrade.bundle_internal_checksums_verified dir=%s", bundle_dir.name)
     return bundle_dir
 
@@ -1126,7 +1126,7 @@ def run_boot(
     try:
         while process.poll() is None:
             try:
-                with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec B310 - loopback health probe
+                with urllib.request.urlopen(health_url, timeout=2) as response:  # nosec - loopback health probe
                     if response.status == 200:
                         body = json.loads(response.read().decode("utf-8", errors="replace"))
                         if isinstance(body, dict) and body.get("status") == "ok":
@@ -1528,7 +1528,7 @@ def _verify_release_stage(manifest_file: Path, signature_file: Path, tarball: Pa
     except ManifestSecurityError as exc:
         raise UpgradeError(f"release manifest verification FAILED: {exc}") from exc
     if tarball_sha != expected_tarball_sha:
-        raise UpgradeError(f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected {expected_tarball_sha}, got {tarball_sha} - do not use this download; report it at https://github.com/farnalabs/modulo/issues")
+        raise UpgradeError(f"the signed release manifest sha256 MISMATCH for {tarball.name}: expected {expected_tarball_sha}, got {tarball_sha} - do not use this download; report it at https://github.com/farnalabs/farna-control/issues")
     return release_manifest
 
 

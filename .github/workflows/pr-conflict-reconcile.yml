@@ -61,7 +61,7 @@ jobs:
           # (all 31 scheduled runs red when the workflow landed). The job now
           # carries a checkout (added only so the dispatch step can call the
           # shared scripts/dispatch_with_retry.sh), but the explicit
-          # /repos/farnalabs/modulo/... REST paths are kept — they work
+          # /repos/farnalabs/farna-control/... REST paths are kept — they work
           # identically and do not depend on what the checkout happens to
           # place in the working tree. `gh pr list` here and `gh pr view` /
           # `gh pr comment` below must all pass --repo — without it on the
@@ -74,7 +74,7 @@ jobs:
           # instead of the documented FAR-528 graceful skip. Capture the exit
           # code instead of letting `set -e` fire.
           GH_RC=0
-          gh pr list --repo farnalabs/modulo --state open --limit 200 \
+          gh pr list --repo farnalabs/farna-control --state open --limit 200 \
             --json number,headRefName,mergeable,isDraft,labels \
             > /tmp/open_prs.json 2>/tmp/gh_pr_list_stderr.txt || GH_RC=$?
 
@@ -179,7 +179,7 @@ jobs:
           # Fail-open: if the lookup fails we fall back to a per-run nonce, so
           # the fingerprint can never freeze on a stale value and silently
           # suppress every future dispatch.
-          MAIN_SHA=$(gh api repos/farnalabs/modulo/commits/main --jq '.sha' 2>/dev/null || echo "")
+          MAIN_SHA=$(gh api repos/farnalabs/farna-control/commits/main --jq '.sha' 2>/dev/null || echo "")
           if [ -z "$MAIN_SHA" ]; then
             echo "::warning::Could not resolve the tip of main; falling back to a per-run nonce so the conflict fingerprint still allows dispatch."
             MAIN_SHA="unknown-$(date +%s)"
@@ -197,7 +197,7 @@ jobs:
             # Backstop: the Branch Fixer labels unresolvable PRs
             # "modulo-cannot-fix", which this workflow excludes at the detect
             # step, so re-dispatch is bounded even if the recency check misses.
-            FIXER_DATE=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}/commits?per_page=100" \
+            FIXER_DATE=$(gh api "/repos/farnalabs/farna-control/pulls/${PR_NUM}/commits?per_page=100" \
               --jq '[.[] | select(.commit.committer.name == "modulo-branch-fixer")] | last | .commit.committer.date // empty' \
               2>/dev/null || echo "")
             if [ -n "$FIXER_DATE" ]; then
@@ -241,7 +241,7 @@ jobs:
             # depend on remote inference.
             HEAD_SHA=""
             SHA_RC=0
-            HEAD_SHA=$(gh api "/repos/farnalabs/modulo/pulls/${PR_NUM}" --jq '.head.sha' 2>/tmp/pr_head_sha_stderr.txt) || SHA_RC=$?
+            HEAD_SHA=$(gh api "/repos/farnalabs/farna-control/pulls/${PR_NUM}" --jq '.head.sha' 2>/tmp/pr_head_sha_stderr.txt) || SHA_RC=$?
             if [ "$SHA_RC" -ne 0 ] || [ -z "$HEAD_SHA" ]; then
               ERR=$(head -c 300 /tmp/pr_head_sha_stderr.txt 2>/dev/null | tr '\n' ' ' || true)
               echo "::warning::Could not resolve the head SHA for PR #$PR_NUM (rc=$SHA_RC) — dispatching without headSha, so this delivery will not coalesce.${ERR:+ gh api stderr: $ERR}"
@@ -268,7 +268,7 @@ jobs:
               --argjson prNumber "$PR_NUM" \
               --arg headSha "$HEAD_SHA" \
               --arg failureDescription "PR conflicts with origin/main (mergeable=CONFLICTING). merge origin/main into the branch (a MERGE commit — do NOT rebase or force-push a shared/reviewed branch). Resolve conflicts by reading all three versions (base/ours/theirs) and satisfying both intents. Do NOT re-run the test suites in the sandbox — resolve, commit, and push. The node budget is too small for a full conflict resolution plus a suite run, and the push re-arms the pull_request pipeline, which is the authoritative gate. Push — which re-arms the pull_request pipeline (CI + sonarcloud-scan)." \
-              --arg repo "farnalabs/modulo" \
+              --arg repo "farnalabs/farna-control" \
               --arg fingerprint "${FINGERPRINT}" \
               --arg taskKind "conflict" \
               '{branchName: $branchName, prNumber: $prNumber, failureDescription: $failureDescription, repository: $repo, fingerprint: $fingerprint, taskKind: $taskKind}
@@ -320,12 +320,12 @@ jobs:
               # comment on every cycle. Mirror the manual-delivery note below: key
               # the note on an HTML marker and skip when it already exists.
               UNDELIVERED_MARKER="<!-- pr-conflict-reconciler:undelivered-dispatch -->"
-              EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$UNDELIVERED_MARKER\"))] | length" 2>/dev/null || echo "0")
+              EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/farna-control --json comments --jq "[.comments[] | select(.body | contains(\"$UNDELIVERED_MARKER\"))] | length" 2>/dev/null || echo "0")
               if [ "$EXISTING" != "0" ]; then
                 echo "::notice::PR #$PR_NUM already carries an undelivered-dispatch note — not reposting."
               else
                 UNDELIVERED_BODY="The PR Conflict Reconciler could NOT dispatch the Branch Fixer for this PR: every webhook attempt failed (last HTTP ${LAST_HTTP}: ${DETAIL}). Until the conflict is reconciled this PR stays conflicted against \`origin/main\` (mergeable=CONFLICTING), so no pull_request workflow will run to hand it to the fixer. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${UNDELIVERED_MARKER}"
-                if gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$UNDELIVERED_BODY" > /dev/null 2>/tmp/undelivered_comment_stderr.txt; then
+                if gh pr comment "$PR_NUM" --repo farnalabs/farna-control --body "$UNDELIVERED_BODY" > /dev/null 2>/tmp/undelivered_comment_stderr.txt; then
                   echo "::notice::PR #$PR_NUM: posted a comment recording that the Branch Fixer was never dispatched."
                 else
                   # Name the COMMENT failure separately from the webhook failure: the
@@ -370,7 +370,7 @@ jobs:
             BRANCH=$(jq -r ".[$i].headRefName" /tmp/notify_prs.json)
 
             # Check for existing marker comment (idempotent)
-            EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/modulo --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
+            EXISTING=$(gh pr view "$PR_NUM" --repo farnalabs/farna-control --json comments --jq "[.comments[] | select(.body | contains(\"$MARKER\"))] | length" 2>/dev/null || echo "0")
             if [ "$EXISTING" != "0" ]; then
               echo "PR #$PR_NUM already has a manual-delivery conflict note — skipping."
               continue
@@ -388,7 +388,7 @@ jobs:
             or force-push a shared/reviewed branch), resolve conflicts, and push. This re-arms the
             \`pull_request\` pipeline (CI + sonarcloud-scan)."
 
-            gh pr comment "$PR_NUM" --repo farnalabs/modulo --body "$COMMENT_BODY" 2>/dev/null || {
+            gh pr comment "$PR_NUM" --repo farnalabs/farna-control --body "$COMMENT_BODY" 2>/dev/null || {
               echo "::warning::Failed to post manual-delivery conflict comment on PR #$PR_NUM"
             }
 

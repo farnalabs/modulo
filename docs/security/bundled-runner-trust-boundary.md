@@ -205,7 +205,7 @@ dependency CVEs and misconfigurations; it does not scan the built images.
 modulo`, `nginx -t`) only, with no vulnerability gate. Until the automated
 trivy/grype image gate lands (the GA/CI item below), scanning a published
 image tag is a manual operator step:
-`trivy image ghcr.io/farnalabs/modulo:<version>`. The digest-drift guard
+`trivy image ghcr.io/farnalabs/farna-control:<version>`. The digest-drift guard
 (the release job asserts the seed/docs digest constant matches the latest
 `released-<minor>` tag) is likewise a GA/CI item; until it exists, digest
 advances are manual and the pinned digests in `deploy/compose/runner.yml` +

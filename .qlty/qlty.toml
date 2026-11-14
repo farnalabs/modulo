@@ -1,4 +1,4 @@
-# Qlty configuration for farnalabs/modulo.
+# Qlty configuration for farnalabs/farna-control.
 #
 # Checked in so Qlty Cloud uses a deterministic config instead of
 # auto-generating a temporary one on every analysis. See

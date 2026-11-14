@@ -851,7 +851,7 @@ is best-effort and never gates readiness: it is skipped when no `GITHUB_TOKEN` /
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `MODULO_DEPLOY_RUN_REPO` | No | `farnalabs/modulo` | `owner/repo` whose deploy workflow run is linked; empty disables the lookup |
+| `MODULO_DEPLOY_RUN_REPO` | No | `farnalabs/farna-control` | `owner/repo` whose deploy workflow run is linked; empty disables the lookup |
 | `MODULO_DEPLOY_RUN_WORKFLOW` | No | `deploy.yml` | Workflow file name (or numeric id) whose latest run is linked |
 | `MODULO_DEPLOY_RUN_API_BASE` | No | `https://api.github.com` | GitHub API base URL; a GitHub Enterprise Server deployment sets `https://<host>/api/v3` |
 

@@ -47,7 +47,7 @@ RECOVERY_EMAIL_LABEL="recovery email still sent"
 WALK_FIND_LABEL="walk finds the measured unhealthy verdict"
 WALK_READ_LABEL="walk reads the watchdog's verdict step"
 WORKFLOW_NAME="Deploy: Staleness Watchdog"
-DEPLOY_URL="https://github.com/farnalabs/modulo/actions/workflows/deploy.yml"
+DEPLOY_URL="https://github.com/farnalabs/farna-control/actions/workflows/deploy.yml"
 
 assert_eq() {
   local label="$1" expected="$2" actual="$3"
@@ -175,7 +175,7 @@ run_notify() {
     PREVIOUS_VERDICT="$previous" \
     VERDICT_JSON="$verdict" \
     WORKFLOW_NAME="$WORKFLOW_NAME" \
-    RUN_URL="https://github.com/farnalabs/modulo/actions/runs/1" \
+    RUN_URL="https://github.com/farnalabs/farna-control/actions/runs/1" \
     DEPLOY_URL="$DEPLOY_URL" \
     "$@" \
     bash "$NOTIFY"
@@ -510,11 +510,11 @@ run_notify_lookup() {
     VERDICT_JSON="$verdict" \
     WORKFLOW_NAME="$workflow_name" \
     VERDICT_STEP_NAME="$verdict_step" \
-    REPOSITORY="farnalabs/modulo" \
+    REPOSITORY="farnalabs/farna-control" \
     GITHUB_RUN_ID="999" \
     FAKE_RUNS="$(cat "$runs_file")" \
     FAKE_JOBS_DIR="$WORK" \
-    RUN_URL="https://github.com/farnalabs/modulo/actions/runs/999" \
+    RUN_URL="https://github.com/farnalabs/farna-control/actions/runs/999" \
     DEPLOY_URL="$DEPLOY_URL" \
     bash "$NOTIFY"
 }

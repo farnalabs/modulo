@@ -16,8 +16,8 @@ Production deployment readiness checklist for the Farna Control Alpha public lau
   - Redis is reachable only from the application network; never publish port 6379 on a public interface or expose it through an unrestricted host port
 
 - [ ] **Docker images** are published to ghcr.io with anonymous pull enabled
-  - `ghcr.io/farnalabs/modulo:<version>` (pin the version; see version pin table below)
-  - `ghcr.io/farnalabs/modulo:latest` is available but **must not be used in production**
+  - `ghcr.io/farnalabs/farna-control:<version>` (pin the version; see version pin table below)
+  - `ghcr.io/farnalabs/farna-control:latest` is available but **must not be used in production**
 
 **Version pin reference (Docker Compose production):**
 
@@ -65,7 +65,7 @@ Production deployment readiness checklist for the Farna Control Alpha public lau
   - RLS test suite passes (from `backend/`): `uv run pytest tests/unit/db/test_rls.py -v`
 - [ ] **Secrets** are injected via environment, not hardcoded in any file or committed to git
 - [ ] **Container images** have zero critical/high CVEs - scan the published image
-  yourself (`trivy image ghcr.io/farnalabs/modulo:<version>`); CI does not scan built
+  yourself (`trivy image ghcr.io/farnalabs/farna-control:<version>`); CI does not scan built
   images (the Trivy job in `ci.yml` is a filesystem scan, and `publish-images.yml`
   has no vulnerability gate; see [`docs/deployment-security.md`](./deployment-security.md) §5.1)
 - [ ] **Containers** run as non-root user
