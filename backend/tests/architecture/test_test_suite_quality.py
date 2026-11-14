@@ -2168,9 +2168,10 @@ def _empty_bytes_tautologies(tree: ast.AST) -> list[tuple[int, str]]:
             if isinstance(other, ast.Constant):
                 continue
             op_name = "in" if isinstance(op, ast.In) else "not in"
-            # b"" in x is always True; b"" not in x is always False.
-            # x in b"" is always False; x not in b"" is always True.
-            verdict = ("always PASSES" if isinstance(op, ast.In) else "always FAILS") if element_is_empty else ("always FAILS" if isinstance(op, ast.In) else "always PASSES")
+            # b"" in x is always True and b"" not in x is always False; when the
+            # empty literal is the *container* instead, x in b"" is always False
+            # and x not in b"" is always True — so the verdict flips.
+            verdict = "always PASSES" if isinstance(op, ast.In) == element_is_empty else "always FAILS"
             found.append(
                 (
                     node.lineno,
@@ -8193,7 +8194,7 @@ def _dead_container_literal_assert_violations(tree: ast.AST) -> list[tuple[int, 
             continue
         falsy = verdict == "always falsy"
         outcome = "always FAILS" if falsy != negated else "always PASSES"
-        kind = "a zero-argument builtin call that always returns an empty container" if isinstance(candidate, ast.Call) else "an empty container literal" if falsy else "a non-empty container literal"
+        kind = "a zero-argument builtin call that always returns an empty container" if isinstance(candidate, ast.Call) else ("an empty container literal" if falsy else "a non-empty container literal")
         found.append(
             (
                 node.lineno,
