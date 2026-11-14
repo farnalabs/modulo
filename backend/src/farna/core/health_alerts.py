@@ -471,6 +471,13 @@ class _LoopThreadSampler:
         loop was to blame.
         """
         try:
+            # Do not attribute the caller's installation/setup stack.  The
+            # sampler runs on a separate thread, so its first observation can
+            # race the target loop entering its steady-state callback/selector
+            # phase.  Waiting one sampling interval makes the first sample
+            # representative of the loop rather than startup plumbing.
+            if self._stop.wait(self._interval):
+                return
             while not self._stop.is_set():
                 leaf = sys._current_frames().get(self._target_thread_id)
                 with self._samples_lock:

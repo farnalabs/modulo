@@ -33,7 +33,7 @@ _SWEEP_MAX_PER_TICK = 200
 # ix_run_node_outputs_enforcement_pending:
 #   CREATE INDEX ... ON run_node_outputs (run_id)
 #   WHERE schema_enforcement_json IS NOT NULL AND attempt_key <> '__final__'
-ENFORCEMENT_SWEEP_PREDICATE = "rno.schema_enforcement_json IS NOT NULL AND rno.attempt_key <> '__final__'"
+ENFORCEMENT_SWEEP_PREDICATE = "schema_enforcement_json IS NOT NULL AND attempt_key <> '__final__'"
 
 
 async def sweep_schema_enforcement_facts(
