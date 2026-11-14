@@ -749,7 +749,7 @@ cloud-metadata and CGNAT destinations are refused by default.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `SSRF_ALLOW_PRIVATE_RANGES` | No | – | Comma-separated CIDRs to permit as outbound targets, e.g. `127.0.0.0/8,::1/128,10.0.0.0/8` |
+| `SSRF_ALLOW_PRIVATE_RANGES` | No | – | Operator-managed, comma-separated CIDRs to permit as outbound targets, e.g. `127.0.0.0/8,::1/128,10.0.0.0/8`; empty means private/internal targets remain blocked |
 | `SSRF_DNS_TIMEOUT` | No | `10` | DNS resolution timeout in seconds; a hung resolver fails closed |
 | `SSRF_RESOLVE_TTL` | No | `300` | Seconds before the pinned transport re-resolves a host, so a decommissioned or changed IP self-heals |
 | `SSRF_TRUST_PROXY` | No | `false` | Honor `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` in the pinned transport. Only enable when the proxy is the trusted egress boundary: the proxy re-resolves the target server-side, which defeats IP pinning |
@@ -795,7 +795,12 @@ unhealthy detail rather than raising.
 call site. Allowlisting loopback for a local model backend also permits a
 tenant-supplied connector `base_url` to target loopback on the same deployment.
 Grant the narrowest CIDRs that work, and prefer a dedicated deployment when
-untrusted tenants share a cluster with localhost services.
+untrusted tenants share a cluster with localhost services. Model-backend save
+validation rejects private literal targets unless this operator policy allows
+them; hostname resolution is intentionally deferred to the runtime pinned
+transport, which applies the same policy immediately before connecting. Connector
+`allowed_hosts` remains a separate hostname restriction and does not authorise
+private IP ranges.
 
 ---
 

@@ -850,6 +850,9 @@ async def connector_health_endpoint(
             secrets_backend = create_secrets_backend(fernet_key=settings.fernet_key, session=session)
             async with ConnectorHub(secrets_backend=secrets_backend) as hub:
                 await hub.initialise([ci])
+                skipped = getattr(hub, "skipped", {})
+                if connector_id in skipped:
+                    return ConnectorHealthResponse(ok=False, detail=skipped[connector_id])
                 connector = hub.get(connector_id)
                 result = await connector.health_check()
         except ConnectorDecryptError:

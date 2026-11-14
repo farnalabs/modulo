@@ -1625,8 +1625,9 @@ def test_create_rejects_invalid_base_url(client: TestClient, invalid: str) -> No
 
 
 @pytest.mark.parametrize("host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "http://example.com/v1"])
-def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host: str) -> None:
+def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Hostname shape never decides privacy — plain HTTP needs the explicit flag."""
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "")
     with patch("farna.api.routes.model_backends.create_model_backend") as create_mock:
         resp = client.post("/api/v1/model-backends", json={**_CREATE_BODY, "base_url": host})
     assert resp.status_code == 422
@@ -1635,7 +1636,8 @@ def test_create_requires_explicit_opt_in_for_plain_http(client: TestClient, host
 
 
 @pytest.mark.parametrize("host", ["http://10.0.0.5:8000/v1", "http://llm-gateway:8080/v1", "https://models.example.com/v1"])
-def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str) -> None:
+def test_create_accepts_http_with_explicit_opt_in(client: TestClient, host: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
     backend = _make_backend()
     with (
         patch("farna.api.routes.model_backends.create_model_backend", return_value=backend),

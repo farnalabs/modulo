@@ -275,6 +275,8 @@ The `ssrf` module (`backend/src/farna/core/ssrf.py`) provides the shared SSRF (S
 - **Dual-stack loopback needs BOTH entries**: `localhost` resolves to `127.0.0.1` AND `::1`; validation fails closed if ANY resolved address is blocked
 - Tenant-scoped `allow_networks` parameter layers on top of the global floor for a single connector/model backend
 - The allowlist is consulted AFTER the non-negotiable floor - it can never weaken link-local/multicast/metadata blocks
+- Model-backend save-time validation applies the operator-managed global policy to literal private targets; hostname DNS validation remains at runtime in the pinned client so save does not create a second, inconsistent resolver path
+- Connector `allowed_hosts` is a hostname restriction only; it is distinct from the operator's private-IP CIDR authorization
 
 **Proxy Trust**
 - `SSRF_TRUST_PROXY` (default `false`): when `true`, honours `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` env vars

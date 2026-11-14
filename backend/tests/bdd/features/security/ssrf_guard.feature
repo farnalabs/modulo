@@ -64,6 +64,11 @@ Feature: SSRF-safe Outbound URL Validation
     When I validate the outbound URL "http://10.1.2.3/"
     Then the URL is accepted
 
+  Scenario: A private range remains blocked without an operator allowlist
+    Given the global egress allowlist is empty
+    When I validate the outbound URL "https://10.1.2.3/"
+    Then the URL is rejected with "SSRF_ALLOW_PRIVATE_RANGES"
+
   Scenario: The allowlist can never weaken the non-negotiable blocked floor
     Given the global egress allowlist is "169.254.0.0/16,100.64.0.0/10"
     When I validate the outbound URL "http://169.254.169.254/"

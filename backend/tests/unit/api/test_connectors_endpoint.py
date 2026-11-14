@@ -563,6 +563,33 @@ def test_connector_health_check_passes_db_session_and_reports_real_status(client
     assert backend_holder["backend"].get_secret_keys == [str(_CONNECTOR_ID)]
 
 
+def test_connector_health_check_surfaces_ssrf_remediation(client: TestClient) -> None:
+    class _FakeHub:
+        def __init__(self, secrets_backend: object, **kwargs: object) -> None:
+            self.skipped = {_CONNECTOR_ID: "ValueError: URL targets a private/internal network address: 10.0.0.5. Add its CIDR to SSRF_ALLOW_PRIVATE_RANGES to allow this target, or use a public URL."}
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def initialise(self, instances: object, **kwargs: object) -> None:
+            return None
+
+    with (
+        patch("farna.api.routes.connectors.create_secrets_backend", return_value=MagicMock()),
+        patch("farna.api.routes.connectors.ConnectorHub", _FakeHub),
+        patch("farna.api.routes.connectors.set_rls_org"),
+        patch("farna.api.routes.connectors.set_rls_user_context"),
+    ):
+        resp = client.get(f"/api/v1/connectors/{_CONNECTOR_ID}/health")
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is False
+    assert "SSRF_ALLOW_PRIVATE_RANGES" in resp.json()["detail"]
+
+
 def test_connector_health_check_unhealthy_reports_ok_false_in_band(client: TestClient) -> None:
     """A failing health check is reported in-band (``ok: false`` with detail),
     NOT as an HTTP 502 — the probe outcome is a response, not a transport error."""

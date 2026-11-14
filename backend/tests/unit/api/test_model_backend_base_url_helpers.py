@@ -38,6 +38,18 @@ def _http_body(exc: HTTPException) -> str:
     return str(exc.detail)
 
 
+def test_validate_base_url_rejects_private_literal_without_operator_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SSRF_ALLOW_PRIVATE_RANGES", raising=False)
+    with pytest.raises(HTTPException) as excinfo:
+        _validate_base_url("https://10.0.0.5/v1")
+    assert "SSRF_ALLOW_PRIVATE_RANGES" in _http_body(excinfo.value)
+
+
+def test_validate_base_url_accepts_private_literal_with_operator_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SSRF_ALLOW_PRIVATE_RANGES", "10.0.0.0/8")
+    assert _validate_base_url("https://10.0.0.5/v1") == "https://10.0.0.5/v1"
+
+
 def test_validate_base_url_rejects_an_empty_value() -> None:
     with pytest.raises(HTTPException) as excinfo:
         _validate_base_url("   ")

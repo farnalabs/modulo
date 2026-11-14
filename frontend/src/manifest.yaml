@@ -7900,6 +7900,8 @@ features:
 
             # Security — SSRF / egress / injection
             - "[x] An allowed_hosts allowlist plus core SSRF validation (validate_outbound_url_async wired at the composition root) prevent private / loopback / metadata / off-allowlist targets; a non-http/https scheme is rejected"
+            - "[x] Connector allowed_hosts remains a hostname restriction distinct from the operator-managed SSRF_ALLOW_PRIVATE_RANGES CIDR policy; model-backend save validation applies the same operator policy to literal private endpoints and runtime pinned transport validation applies it to resolved hostnames"
+
             - "[x] Injection guard: rendered header names/values are rejected on CR/LF or C0 control chars, rendered headers may not override the protected set (authorization, proxy-authorization, host, content-length, plus the api_key header name), and query params are URL-encoded by httpx"
             - "[x] On the WRITE surface the rendered URL, header values, params and body are screened by the core output-injection filter (filter_output_for_injection); the READ surface deliberately does NOT run the text classifier to avoid false positives on legitimate search terms"
             - "[x] The api_key credential value is never fed through the injection filter (applied post-screening)"
