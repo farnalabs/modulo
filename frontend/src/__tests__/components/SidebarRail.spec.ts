@@ -40,7 +40,7 @@ const NotificationBellStub = {
  */
 const SIZED_CONTROLS = [
   { name: 'expand chevron button', selector: '[aria-label="Expand sidebar"]' },
-  { name: 'brand link (Modulo)', selector: 'a[aria-label="Modulo"]' },
+  { name: 'brand link (Farna Control)', selector: 'a[aria-label="Farna Control"]' },
   { name: 'search button', selector: '[aria-label="Search pages"]' },
   { name: 'theme toggle button', selector: '[aria-label="Toggle theme"]' },
 ] as const
@@ -190,7 +190,7 @@ describe('SidebarRail touch targets', () => {
 
         // The five interactive controls exist with their labels (4 sized + avatar).
         expect(wrapper.find('[aria-label="Expand sidebar"]').exists()).toBe(true)
-        expect(wrapper.find('a[aria-label="Modulo"]').exists()).toBe(true)
+        expect(wrapper.find('a[aria-label="Farna Control"]').exists()).toBe(true)
         expect(wrapper.find(AVATAR_SELECTOR).exists()).toBe(true)
         // WCAG 2.5.3: the accessible name must contain the visible text (the
         // initial), otherwise axe raises label-content-name-mismatch.
@@ -199,7 +199,7 @@ describe('SidebarRail touch targets', () => {
         expect(wrapper.find('[aria-label="Toggle theme"]').exists()).toBe(true)
 
         // Router targets preserved.
-        expect(wrapper.find('a[aria-label="Modulo"]').attributes('href')).toBe('/')
+        expect(wrapper.find('a[aria-label="Farna Control"]').attributes('href')).toBe('/')
         expect(wrapper.find(AVATAR_SELECTOR).attributes('href')).toBe('/admin/my-profile')
 
         // Emits preserved.

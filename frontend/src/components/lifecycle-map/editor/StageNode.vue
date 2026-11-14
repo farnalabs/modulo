@@ -65,7 +65,7 @@ const props = defineProps<{
 
 const stageTypeLabel = computed(() => {
   switch (props.data.stage_type) {
-    case 'modulo': return 'Modulo'
+    case 'modulo': return 'Farna Control'
     case 'external': return 'External'
     case 'manual': return 'Manual'
     case 'placeholder': return 'Placeholder'

@@ -225,7 +225,7 @@ describe('StageConfigPanel stage type buttons', () => {
   it('includes Modulo option', async () => {
     const wrapper = mountPanel()
     await flushPromises()
-    expect(wrapper.text()).toContain('Modulo')
+    expect(wrapper.text()).toContain('Farna Control')
   })
 
   it('includes External option', async () => {
@@ -249,8 +249,8 @@ describe('StageConfigPanel stage type buttons', () => {
   it('shows description for each stage type option', async () => {
     const wrapper = mountPanel()
     await flushPromises()
-    expect(wrapper.text()).toContain('Managed by a Modulo pipeline')
-    expect(wrapper.text()).toContain('Runs outside Modulo')
+    expect(wrapper.text()).toContain('Managed by a Farna Control pipeline')
+    expect(wrapper.text()).toContain('Runs outside Farna Control')
     expect(wrapper.text()).toContain('Human-performed step')
     expect(wrapper.text()).toContain('Not yet defined')
   })
@@ -265,7 +265,7 @@ describe('StageConfigPanel stage type selection', () => {
 
     // Find and click the Modulo button
     const buttons = wrapper.findAll('button[type="button"]')
-    const moduloBtn = buttons.find(b => b.text().includes('Modulo'))!
+    const moduloBtn = buttons.find(b => b.text().includes('Farna Control'))!
     await moduloBtn.trigger('click')
     await flushPromises()
 
@@ -469,7 +469,7 @@ describe('StageConfigPanel graduate button', () => {
     const wrapper = mountPanel({ stage_type: 'manual', graduated: false })
     await flushPromises()
     expect(wrapper.text()).toContain('Promote this')
-    expect(wrapper.text()).toContain('stage to a Modulo-managed pipeline')
+    expect(wrapper.text()).toContain('stage to a Farna Control-managed pipeline')
   })
 })
 

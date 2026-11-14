@@ -236,7 +236,7 @@ describe('EdgeConfigPanel template', () => {
     const wrapper = mountPanel()
     await flushPromises()
     const input = wrapper.find('#edgeconfigpanel-field-1')
-    expect((input.element as HTMLInputElement).placeholder).toBe('Link to Modulo trigger config')
+    expect((input.element as HTMLInputElement).placeholder).toBe('Link to Farna Control trigger config')
   })
 
   it('emits updates from every editable field and normalizes empty values', async () => {

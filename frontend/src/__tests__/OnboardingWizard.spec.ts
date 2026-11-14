@@ -527,7 +527,7 @@ describe('OnboardingWizard — telemetry step (FAR-1131)', () => {
     await wrapper.find('[data-testid="onboarding-wizard-create-pipeline"]').trigger('click')
     await nextTick()
     await clickNext(wrapper) // -> step 6 (telemetry)
-    expect(wrapper.text()).toContain('Help Improve Modulo')
+    expect(wrapper.text()).toContain('Help Improve Farna Control')
     expect(wrapper.text()).toContain('Enable Telemetry')
     expect(wrapper.text()).toContain('Skip for Now')
   })

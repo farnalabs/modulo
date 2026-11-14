@@ -135,7 +135,7 @@ const backendForms = reactive<BackendForm[]>([
   {
     key: 'builtin',
     label: 'Built-in (DB)',
-    description: 'Store errors in Modulo\'s own database. Always available, no external service needed.',
+    description: 'Store errors in Farna Control\'s own database. Always available, no external service needed.',
     hint: '',
     enabled: true,
     fields: [],

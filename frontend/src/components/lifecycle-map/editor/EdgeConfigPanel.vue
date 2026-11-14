@@ -60,7 +60,7 @@
       <input id="edgeconfigpanel-field-1"
         v-model="form.trigger_link"
         class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        placeholder="Link to Modulo trigger config"
+        placeholder="Link to Farna Control trigger config"
       />
     </div>
   </div>
