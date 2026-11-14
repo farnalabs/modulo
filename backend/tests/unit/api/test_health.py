@@ -617,7 +617,7 @@ class TestFetchLatestDeployRunUrl:
         assert url == "https://github.com/o/r/actions/runs/42"
         # The review blocker: the workflow must be in the PATH, not a query
         # param GitHub silently ignores.
-        assert client.requests[0]["path"] == "/repos/farnalabs/modulo/actions/workflows/deploy.yml/runs"
+        assert client.requests[0]["path"] == "/repos/farnalabs/farna-control/actions/workflows/deploy.yml/runs"
         assert client.requests[0]["params"] == {"per_page": 1}
         assert client.requests[0]["headers"]["Authorization"] == "Bearer test-token"
         assert client.closed

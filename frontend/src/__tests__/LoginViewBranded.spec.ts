@@ -109,7 +109,7 @@ describe('LoginView - branded SSO buttons', () => {
     expect(wrapper.text()).toContain('Sign in with my-sso')
   })
 
-  it('h1 always shows "Modulo" (FAR-866 regression)', async () => {
+  it('h1 always shows "Farna Control" (FAR-866 regression)', async () => {
     vi.spyOn(global, 'fetch')
       .mockResolvedValueOnce({
         ok: true,
@@ -128,6 +128,6 @@ describe('LoginView - branded SSO buttons', () => {
       expect(wrapper.find('[data-testid="login-email"]').exists()).toBe(true)
     })
     const h1 = wrapper.find('h1')
-    expect(h1.text()).toBe('Modulo')
+    expect(h1.text()).toBe('Farna Control')
   })
 })
