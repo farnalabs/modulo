@@ -116,9 +116,9 @@ Options:
 
 Environment overrides:
   VERSION=<tag>            Install a specific bundle tag (default: latest release).
-  MODULO_INSTALL_ROOT      Install root (default: ~/.local/opt/modulo).
-  MODULO_BIN_DIR           Shim directory (default: ~/.local/bin).
-  MODULO_DATA_DIR          Bundled data dir (default: ~/.local/share/modulo/data).
+  FARNA_CONTROL_MODULO_INSTALL_ROOT  Install root (default: ~/.local/opt/modulo).
+  FARNA_CONTROL_MODULO_BIN_DIR       Shim directory (default: ~/.local/bin).
+  FARNA_CONTROL_MODULO_DATA_DIR      Bundled data dir (default: ~/.local/share/modulo/data).
 
 When running the downloaded script, pass options like:  bash modulo-install.sh --force
 EOF
@@ -433,8 +433,8 @@ validate_legacy_shim_collision() {
 
 # --- upgrade machinery (FAR-672) --------------------------------------------
 
-if [[ -n "${MODULO_DATA_DIR:-}" ]]; then
-  DATA_DIR="${MODULO_DATA_DIR}"
+if [[ -n "${FARNA_CONTROL_MODULO_DATA_DIR:-${MODULO_DATA_DIR:-}}" ]]; then
+  DATA_DIR="${FARNA_CONTROL_MODULO_DATA_DIR:-${MODULO_DATA_DIR}}"
 elif [[ "$(uname -s)" = "Darwin" && -z "${XDG_DATA_HOME:-}" ]]; then
   DATA_DIR="${HOME}/Library/Application Support/Modulo/data"
 else
