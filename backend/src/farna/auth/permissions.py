@@ -225,6 +225,13 @@ PERMISSIONS: dict[str, str] = {
     "eval.definition.create": "operator",
     "eval.definition.update": "operator",
     "eval.definition.delete": "operator",
+    # PolicyGate authoring is separate from eval-definition permissions.  Gate
+    # action changes are split so raising enforcement and weakening it can be
+    # granted independently from ordinary eval edits.
+    "gate.create": "operator",
+    "gate.edit": "operator",
+    "gate.enforcement.raise": "operator",
+    "gate.enforcement.weaken": "admin",
     # housekeeping
     # RETIRED (FAR-1879): ``housekeeping.list`` and ``housekeeping.perform``
     # are no longer keys. Both MCP tools now resolve to ``housekeeping.manage``

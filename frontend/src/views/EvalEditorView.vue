@@ -644,12 +644,24 @@
                     </label>
                   </div>
 
-                  <p class="text-xs text-muted-foreground">
-                    {{ policyGate.action === 'block'
-                      ? $t('views.EvalEditorView.policyGate.actionBlockDescription')
-                      : $t('views.EvalEditorView.policyGate.actionWarnDescription')
-                    }}
-                  </p>
+                   <p class="text-xs text-muted-foreground">
+                     {{ policyGate.action === 'block'
+                       ? $t('views.EvalEditorView.policyGate.actionBlockDescription')
+                       : $t('views.EvalEditorView.policyGate.actionWarnDescription')
+                     }}
+                   </p>
+                   <div v-if="policyGate.exists && gateSnapshot.action === 'block' && policyGate.action === 'warn'" class="space-y-1">
+                     <label for="policy-gate-reason" class="mb-1 block text-xs font-medium">{{ $t('common.reason') }}</label>
+                     <input
+                       id="policy-gate-reason"
+                       v-model="policyGate.reason"
+                       type="text"
+                       required
+                       data-testid="policy-gate-reason"
+                       class="w-full rounded-lg border border-input bg-background px-2 py-1.5 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                       :placeholder="$t('views.EvalEditorView.policyGate.weakenReasonPlaceholder')"
+                     />
+                   </div>
 
                   <!-- Operator enable/disable toggle (CO-5) -->
                   <div v-if="policyGate.exists" class="flex items-center gap-2">
@@ -1103,6 +1115,7 @@ const policyGate = reactive({
   enabled: true as boolean,
   enabledAt: null as string | null,
   disabledAt: null as string | null,
+  reason: '',
 })
 const gateSnapshot = reactive({
   action: 'warn' as 'warn' | 'block',
@@ -1372,6 +1385,7 @@ function resetForm() {
   policyGate.enabled = true
   policyGate.enabledAt = null
   policyGate.disabledAt = null
+  policyGate.reason = ''
   gateSnapshot.action = 'warn'
   gateError.value = false
   gateDeleteConfirming.value = false
@@ -1489,6 +1503,7 @@ async function fetchPolicyGate(evalId: string) {
     policyGate.enabled = gate.enabled ?? true
     policyGate.enabledAt = gate.enabled_at ?? null
     policyGate.disabledAt = gate.disabled_at ?? null
+    policyGate.reason = ''
     gateSnapshot.action = gate.action as 'warn' | 'block'
   } else {
     // 404 / no gate exists — reset to defaults so a previously viewed eval's
@@ -1500,6 +1515,7 @@ async function fetchPolicyGate(evalId: string) {
     policyGate.enabled = true
     policyGate.enabledAt = null
     policyGate.disabledAt = null
+    policyGate.reason = ''
     gateSnapshot.action = 'warn'
   }
 }
@@ -1605,7 +1621,7 @@ async function persistEval(configParsed: Record<string, unknown>): Promise<Persi
 async function updatePolicyGate(evalId: string): Promise<boolean> {
   const res = await api.PUT('/api/v1/evals/{eval_id}/policy-gate', {
     params: { path: { eval_id: evalId } },
-    body: { action: policyGate.action },
+    body: { action: policyGate.action, reason: policyGate.reason.trim() || undefined },
   })
   // openapi-fetch resolves non-2xx as { data: undefined, error } — it never
   // throws, so the envelope error must be checked here.
@@ -1621,7 +1637,7 @@ async function updatePolicyGate(evalId: string): Promise<boolean> {
 async function createPolicyGate(evalId: string): Promise<boolean> {
   const res = await api.POST('/api/v1/evals/{eval_id}/policy-gate', {
     params: { path: { eval_id: evalId } },
-    body: { action: policyGate.action },
+    body: { action: policyGate.action, reason: policyGate.reason.trim() || undefined },
   })
   if (res.error || !res.data) return false
   const d = res.data
@@ -1636,7 +1652,7 @@ async function createPolicyGate(evalId: string): Promise<boolean> {
 // (§3.3): the eval half reports its own success even when the gate half fails,
 // and the form is NOT reset so the retry stays available.
 async function persistPolicyGateIfModified(savedEvalId: string): Promise<boolean> {
-  const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists
+  const gateModified = policyGate.action !== gateSnapshot.action || !policyGate.exists || (policyGate.action === 'warn' && gateSnapshot.action === 'block' && policyGate.reason.trim().length > 0)
   if (!gateModified) return true
   try {
     if (policyGate.exists && policyGate.id) return await updatePolicyGate(savedEvalId)

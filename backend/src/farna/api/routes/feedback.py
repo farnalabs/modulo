@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from farna.api.constants import MSG_DATABASE_ERROR_OCCURRED_PLEASE
 from farna.api.db_error_handling import handle_db_errors, raise_session_contract_error
 from farna.api.dependencies import get_db_session, require_permission
+from farna.api.routes.evals import _PERMISSION_GATE_CREATE, _require_gate_action_permission
 from farna.api.routes.runs import pipeline_not_runnable_http
 from farna.auth.dependencies import get_current_tenant_user
 from farna.auth.jwt import TenantPrincipal
@@ -581,6 +582,7 @@ async def publish_eval_proposal(
             await set_rls_user_context(session, principal.account_id, principal.org_role)
             mgr = FeedbackManager(session, principal.organisation_id)
             run, node_id = await _resolve_publish_context(mgr, session, record_id, req.node_id, principal.organisation_id)
+            _require_gate_action_permission(principal, permission=_PERMISSION_GATE_CREATE)
 
             from farna.core.eval_engine.eval_definition_write import create_or_update_eval
             from farna.core.eval_engine.policy_gate import PolicyGateBindingViolationError

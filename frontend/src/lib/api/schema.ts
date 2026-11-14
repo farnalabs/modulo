@@ -8273,7 +8273,7 @@ export interface paths {
         get: operations["get_policy_gate_api_v1_evals__eval_id__policy_gate_get"];
         /**
          * Update Policy Gate
-         * @description Update a PolicyGate's action (admin only).
+         * @description Update a PolicyGate's action (operator or admin).
          *
          *     The gate inherits the eval's edit permission — no separate permission
          *     check is performed (criterion 14).
@@ -8299,7 +8299,7 @@ export interface paths {
         put: operations["update_policy_gate_api_v1_evals__eval_id__policy_gate_put"];
         /**
          * Create Policy Gate
-         * @description Create a PolicyGate for an eval (admin only).
+         * @description Create a PolicyGate for an eval (operator or admin).
          *
          *     POST is CREATE-ONLY (FAR-1750, decision of record): an eval that already
          *     has a live gate is refused with a typed 409 — updating (including
@@ -19761,6 +19761,8 @@ export interface components {
         PolicyGateCreateRequest: {
             /** Action */
             action: string;
+            /** Reason */
+            reason?: string | null;
             /** Evaluation Mode */
             evaluation_mode?: string | null;
         };
@@ -19822,6 +19824,8 @@ export interface components {
         PolicyGateUpdateRequest: {
             /** Action */
             action: string;
+            /** Reason */
+            reason?: string | null;
             /** Evaluation Mode */
             evaluation_mode?: string | null;
         };

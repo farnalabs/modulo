@@ -290,6 +290,7 @@ routes:
         breadcrumb: Evals
         parent: /
         product_map: [feat-evals]
+        required_permissions: [eval.list, gate.create, gate.edit]
         sidebar_group: improve
         sidebar_order: 1
         type: form_page
@@ -4390,6 +4391,9 @@ elements:
         dynamic_testid: false
       - testid: policy-gate-heading
         type: element
+        dynamic_testid: false
+      - testid: policy-gate-reason
+        type: input
         dynamic_testid: false
       - testid: policy-gate-action-warn
         type: input

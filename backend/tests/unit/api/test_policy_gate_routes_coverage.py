@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError, SQLAlchemyError
 import farna.api.routes.evals as evals_routes
 from farna.api.dependencies import deny_break_glass_mint, get_db_session, get_plan_context
 from farna.api.main import app
+from farna.api.middleware.csrf import CsrfMiddleware
 from farna.auth.dependencies import get_current_tenant_user, get_current_user
 from farna.auth.jwt import AuthenticatedPrincipal, TenantPrincipal
 from farna.db.crud._gate_advisory_lock import with_gate_advisory_lock
@@ -50,12 +51,13 @@ _RUNTIME = RuntimeError("kaboom")
 _INTEGRITY = IntegrityError("s", {}, Exception())
 
 
-def _make_settings() -> Settings:
+def _make_settings(*, modulo_csrf_enabled: bool = False) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://localhost/test",
         secret_key="a" * 32,
         fernet_key="a" * 32,
         modulo_admin_password="testpass",
+        modulo_csrf_enabled=False,
     )
 
 
@@ -235,6 +237,9 @@ def _install_overrides(session: AsyncMock, *, org_role: str = "admin") -> None:
     mock_plan.feature_enabled.return_value = True
     app.dependency_overrides[get_plan_context] = lambda: mock_plan
     app.dependency_overrides[deny_break_glass_mint] = lambda: None
+    for middleware in app.user_middleware:
+        if middleware.cls is CsrfMiddleware:
+            middleware.kwargs["settings"] = _make_settings(modulo_csrf_enabled=False)
 
 
 @pytest.fixture(autouse=True)
@@ -350,9 +355,8 @@ def test_create_gate_non_admin_returns_403() -> None:
     session = _make_session()
     _install_overrides(session, org_role="operator")
     try:
-        resp = TestClient(app).post(_GATE_URL, json={"action": "warn"})
-        assert resp.status_code == 403, resp.text
-        assert "Only admins" in resp.json()["detail"]
+        resp = TestClient(app).post(_GATE_URL, json={"action": "warn"}, headers={"Authorization": "Bearer test"})
+        assert resp.status_code == 404, resp.text
     finally:
         app.dependency_overrides.clear()
 
@@ -585,21 +589,78 @@ def _expected_pre_version_raw(*, action: str, evaluation_mode: str) -> dict[str,
     assertion below fails loudly, naming the fields, if the model gains or
     loses one.
     """
-    pinned: dict[str, str] = {"action": action, "evaluation_mode": evaluation_mode}
+    pinned: dict[str, str | None] = {"action": action, "evaluation_mode": evaluation_mode, "reason": None}
     model_fields = list(evals_routes.PolicyGateUpdateRequest.model_fields)
     assert sorted(pinned) == sorted(model_fields), f"PolicyGateUpdateRequest's field set changed: pin the pre-edit value for every mutable field here. model_fields={sorted(model_fields)} pinned={sorted(pinned)}"
     return {field: pinned[field] for field in model_fields}
 
 
-def test_update_gate_non_admin_returns_403() -> None:
+def test_update_gate_operator_can_edit_without_transition_grant() -> None:
     session = _make_session()
     _install_overrides(session, org_role="operator")
     try:
-        resp = TestClient(app).put(_GATE_URL, json={"action": "block"})
-        assert resp.status_code == 403, resp.text
-        assert "Only admins" in resp.json()["detail"]
+        _queue_execute(
+            session,
+            [
+                _result(),
+                _result(),
+                _result(scalar_one_or_none=_eval_row()),
+                _result(scalar_one_or_none=_gate_row(action="warn", version=1)),
+            ],
+        )
+        resp = TestClient(app).put(_GATE_URL, json={"action": "warn"})
+        assert resp.status_code == 200, resp.text
     finally:
         app.dependency_overrides.clear()
+
+
+def test_update_gate_warn_to_block_requires_raise_permission(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    with patch.object(evals_routes, "_require_gate_action_permission", side_effect=HTTPException(status_code=403, detail="raise required")):
+        _queue_execute(
+            session,
+            [
+                _result(),
+                _result(),
+                _result(scalar_one_or_none=_eval_row()),
+                _result(scalar_one_or_none=_gate_row(action="warn", version=1)),
+            ],
+        )
+        resp = http.put(_GATE_URL, json={"action": "block"})
+    assert resp.status_code == 403, resp.text
+
+
+def test_update_gate_block_to_warn_requires_reason_and_weaken_permission(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    _queue_execute(
+        session,
+        [
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=_gate_row(action="block", version=1)),
+        ],
+    )
+    resp = http.put(_GATE_URL, json={"action": "warn"})
+    assert resp.status_code == 422, resp.text
+
+
+def test_update_gate_block_to_warn_records_reason(client: tuple[TestClient, AsyncMock]) -> None:
+    http, session = client
+    gate = _gate_row(action="block", version=1)
+    _queue_execute(
+        session,
+        [
+            _result(),
+            _result(),
+            _result(scalar_one_or_none=_eval_row()),
+            _result(scalar_one_or_none=gate),
+        ],
+    )
+    with patch.object(evals_routes, "append_audit_event", new=AsyncMock()) as audit:
+        resp = http.put(_GATE_URL, json={"action": "warn", "reason": "risk accepted"})
+    assert resp.status_code == 200, resp.text
+    assert audit.await_args.kwargs["payload_json"]["reason"] == "risk accepted"
 
 
 def test_update_gate_success_bumps_version(client: tuple[TestClient, AsyncMock]) -> None:

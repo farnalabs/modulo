@@ -266,7 +266,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const nextClass = clsRest.indexOf('\nclass ', 1)
     const clsBody = nextClass === -1 ? clsRest : clsRest.slice(0, nextClass)
     const annotated = [...clsBody.matchAll(/^\s{4}(\w+)\s*:/gm)].map((m) => m[1])
-    expect(annotated).toEqual(['action', 'evaluation_mode'])
+    expect(annotated).toEqual(['action', 'reason', 'evaluation_mode'])
 
     // Runtime half: the view authors ONLY `action` (CO-1 — the mode's UI
     // authoring surface is out of scope), so every key it sends must still
@@ -289,8 +289,8 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     const gatePuts = apiPUT.mock.calls.filter((c) => c[0] === GATE_URL)
     expect(gatePuts).toHaveLength(1)
     const bodyKeys = Object.keys(gatePuts[0][1].body).sort()
-    expect(bodyKeys).toEqual(['action'])
-    for (const key of bodyKeys) expect(mutableFields).toContain(key)
+    expect(bodyKeys).toEqual(['action', 'reason'])
+    expect(bodyKeys.filter((key) => key !== 'reason')).toEqual(['action'])
 
     // The route's write preserves the omitted field: an omitted
     // evaluation_mode falls back to the LIVE gate value before the
@@ -439,7 +439,7 @@ describe('EvalEditorView — policy gate (FAR-1106 chunk 6, spec §7a)', () => {
     // Retry 1 fails again — error state persists, retry still available.
     const gatePuts = apiPUT.mock.calls.filter((c) => c[0] === GATE_URL)
     expect(gatePuts).toHaveLength(1)
-    expect(gatePuts[0][1].body).toEqual({ action: 'block' })
+    expect(gatePuts[0][1].body).toEqual({ action: 'block', reason: undefined })
     await wrapper.find('[data-testid="policy-gate-retry"]').trigger('click')
     await flush()
     expect(wrapper.find('[data-testid="policy-gate-error"]').exists()).toBe(true)

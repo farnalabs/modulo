@@ -103,6 +103,7 @@ Surfaces: `/evals/editor` and `/evals/proposals`.
       /api/v1/evals`, `GET /api/v1/evals/{eval_id}`) - with pagination and
       pipeline / eval_type filters, plus `POST /api/v1/evals/from-run` to
       author a definition from run data
+- [x] Policy-gate permissions are separate from eval-definition permissions: `gate.create` and `gate.edit` are operator-or-admin, `gate.enforcement.raise` explicitly authorizes warn→block, and `gate.enforcement.weaken` is admin-only for block→warn with a mandatory non-blank reason. The transition is checked under the existing per-eval advisory lock and audited with previous/new action, actor, and reason; the shared REST/MCP eval writers fail closed before creating or updating a PolicyGate without its gate permission.
 - [x] Policy-gate binding (`POST`/`PUT /api/v1/evals/{eval_id}/policy-gate`)
       runs the FAR-957 advisory author-warning checks for the eval's
       `evidence_key` (`no_producer` / `temporal_ordering` / `recent_undefined` –
