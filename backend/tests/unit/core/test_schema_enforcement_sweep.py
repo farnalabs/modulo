@@ -25,7 +25,7 @@ from farna.db.models.run_daily_facts import RunDailyFact
 from farna.db.models.run_node_outputs import RunNodeOutput
 
 # The migration file (structural: no DB needed).
-_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0251_schema_enforcement_telemetry.py"
+_MIGRATION_PATH = Path(__file__).resolve().parents[3] / "src" / "farna" / "db" / "migrations" / "versions" / "0350_baseline_schema.py"
 
 # The sweep module source.
 _SWEEP_MODULE = Path(__file__).resolve().parents[3] / "src" / "farna" / "core" / "analytics" / "enforcement_sweep.py"

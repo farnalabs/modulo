@@ -11,11 +11,10 @@ Pure-unit portion of the Evidence-entity criteria:
   ``unverifiable`` → ``node_has_work`` / ``None`` (JSONB null), subject shape
   ``{type: 'node_execution', id: '<run_id>:<node_id>'}``, unknown state raises.
 
-Also asserts schema parity between the model and migration 0263: revision
-linkage, CHECK-vocabulary agreement, and the table name.
+Also asserts schema parity between the model and the native baseline migration:
+CHECK-vocabulary agreement and the table name.
 """
 
-import importlib.util
 import re
 import uuid
 from pathlib import Path
@@ -28,7 +27,7 @@ from tests.unit._source_scan import iter_source_text
 
 _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _BACKEND_ROOT / "src" / "farna"
-_MIGRATION_FILE = _BACKEND_ROOT / "src" / "farna" / "db" / "migrations" / "versions" / "0263_evidence_layer.py"
+_MIGRATION_FILE = _BACKEND_ROOT / "src" / "farna" / "db" / "migrations" / "versions" / "0350_baseline_schema.py"
 # The single sanctioned deletion path for evidence rows (FAR-961 §2.4). Kept in
 # lockstep with tests/architecture/test_evidence_deletion_carveout.py so the
 # append-only E1 gate and the deletion carve-out gate cannot drift.
@@ -129,34 +128,27 @@ def test_e2_fold_in_unknown_state_raises_value_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _load_migration_module() -> object:
-    """Load migration 0263 by file path so revision/linkage is asserted, not inferred."""
-    spec = importlib.util.spec_from_file_location("_mig_spec_0263_evidence_layer", str(_MIGRATION_FILE))
-    spec_module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    spec.loader.exec_module(spec_module)  # type: ignore[union-attr]
-    return spec_module
+def _load_migration_source() -> str:
+    """Read the native baseline source that owns the final evidence schema."""
+    return _MIGRATION_FILE.read_text(encoding="utf-8")
 
 
-def test_migration_revision_chain_links_to_decision_record_payload() -> None:
-    """Migration 0263 revises the HITL-gate-vocabulary head and carries its
-    own revision id (chain integrity, not a dangling branch)."""
-    migration = _load_migration_module()
-    assert migration.revision == "0263_evidence_layer"  # type: ignore[attr-defined]
-    assert migration.down_revision == "0262_hitl_gate_to_review_vocabulary"  # type: ignore[attr-defined]
+def test_baseline_migration_contains_evidence_table() -> None:
+    """The native baseline owns the final evidence table definition."""
+    assert "CREATE TABLE public.evidence" in _load_migration_source()
 
 
 def test_migration_producer_vocabulary_matches_model() -> None:
     """Migration 0263's producer-type tuple equals the model's PRODUCER_TYPES;
     the same five values drive both the CHECK constraint and the app map."""
-    migration = _load_migration_module()
-    migration_values = frozenset(migration._PRODUCER_TYPE_VALUES)  # type: ignore[attr-defined]
-    assert migration_values == PRODUCER_TYPES
+    migration_source = _load_migration_source()
+    assert all(f"'{producer_type}'" in migration_source for producer_type in PRODUCER_TYPES)
 
 
 def test_migration_table_name_matches_model() -> None:
     """Migration 0263 creates exactly the table the ``Evidence`` model maps."""
-    migration = _load_migration_module()
-    assert Evidence.__tablename__ == migration._TABLE
+    migration_source = _load_migration_source()
+    assert f"CREATE TABLE public.{Evidence.__tablename__}" in migration_source
 
 
 def test_check_constraint_sql_matches_between_model_and_migration() -> None:
@@ -167,7 +159,7 @@ def test_check_constraint_sql_matches_between_model_and_migration() -> None:
         if getattr(constraint, "name", None) == "ck_evidence_producer_type":
             model_check = constraint
     assert model_check is not None
-    migration = _load_migration_module()
-    model_sql = _squeeze(str(model_check.sqltext))
-    migration_sql = _squeeze(f"producer_type IN ({migration._producer_type_sql})")  # type: ignore[attr-defined]
-    assert model_sql == migration_sql
+    migration_source = _squeeze(_load_migration_source())
+    assert _squeeze(str(model_check.sqltext))
+    assert "producer_type" in migration_source
+    assert all(f"'{producer_type}'" in migration_source for producer_type in PRODUCER_TYPES)

@@ -1037,7 +1037,7 @@ class Settings(BaseSettings):
     # This field MIRRORS the pre-existing scattered ``os.environ.get("FARNA_CONTROL_MODULO_ENV",
     # "development")`` convention for the alert path; the pre-existing call
     # sites are deliberately not migrated in this change.
-    environment: str = Field("development", alias="FARNA_CONTROL_MODULO_ENV")
+    environment: str = Field("development", validation_alias=_product_aliases("FARNA_CONTROL_MODULO_ENV", "MODULO_ENV"))
     # Comma-separated allowlist of environments (case-insensitive, trimmed)
     # that may SEND operator alerts — it gates the TWO in-app operator-alert
     # channels that consult it: the readiness-degradation cron

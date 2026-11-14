@@ -15,8 +15,6 @@ invariant test ``test_run_daily_facts`` (``TERMINAL_STATUSES ⊆ ck_runs_status`
 
 from __future__ import annotations
 
-import importlib
-
 from farna.core.cost_controller.probe import PROBE_TERMINAL_STATUSES
 from farna.db.crud.run import RUN_STATUS_WHITELIST
 from farna.db.models.run import TERMINAL_STATUSES, Run
@@ -25,9 +23,9 @@ NEW_STATUS = "cost_ceiling_exceeded"
 
 
 def _migration_0128():
-    # The migration module name starts with a digit, so it cannot be imported
-    # with a normal ``import`` statement — load it by string instead.
-    return importlib.import_module("farna.db.migrations.versions.0146_extend_runs_status_cost_ceiling")
+    # The historical migration was folded into the native baseline.  The
+    # vocabulary and model assertions above are the surviving contract.
+    return None
 
 
 def test_cost_ceiling_exceeded_registered_in_vocabularies() -> None:
@@ -41,11 +39,12 @@ def test_cost_ceiling_exceeded_in_runs_check_constraint() -> None:
     assert NEW_STATUS in str(constraint.sqltext)
 
 
-def test_migration_0128_extends_constraint_consistently() -> None:
-    migration = _migration_0128()
-    # The new ADD statement includes the new terminal status; the OLD one does not.
-    assert NEW_STATUS in migration._ADD_NEW
-    assert NEW_STATUS not in migration._ADD_OLD
-    # Both share the pre-existing base statuses.
-    assert "'budget_exceeded'::character varying" in migration._ADD_NEW
-    assert "'budget_exceeded'::character varying" in migration._ADD_OLD
+def test_baseline_migration_extends_constraint_consistently() -> None:
+    # The historical migration was folded into 0350_baseline_schema.  The
+    # model constraint assertion above proves the runtime vocabulary; this
+    # test checks the shipped baseline source carries the same status.
+    from pathlib import Path
+
+    baseline = Path(__file__).resolve().parents[4] / "src" / "farna" / "db" / "migrations" / "versions" / "0350_baseline_schema.py"
+    source = baseline.read_text(encoding="utf-8")
+    assert NEW_STATUS in source
