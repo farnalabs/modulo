@@ -61,6 +61,7 @@ __all__ = [
     "compose_config",
     "load_launcher_config_inputs",
     "render_env_file",
+    "resolve_pinned_runtime_keys",
     "write_pinned_env_file",
 ]
 
@@ -79,6 +80,19 @@ def _native_settings_keys(secrets: LauncherSecrets) -> tuple[str, str]:
     secret_key = hmac.new(secrets.state_hmac_key, b"modulo/native/secret-key", hashlib.sha256).digest()
     fernet_raw = hmac.new(secrets.state_hmac_key, b"modulo/native/fernet-key", hashlib.sha256).digest()
     return base64.urlsafe_b64encode(secret_key).decode("ascii"), base64.urlsafe_b64encode(fernet_raw).decode("ascii")
+
+
+def _existing_runtime_keys(path: Path) -> tuple[str | None, str | None]:
+    """Read operator-owned application keys without logging their values."""
+    try:
+        values: dict[str, str] = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key in {"SECRET_KEY", "FERNET_KEY"} and value:
+                values[key] = value
+        return values.get("SECRET_KEY"), values.get("FERNET_KEY")
+    except OSError:
+        return None, None
 
 
 def compose_config(state: LauncherState, secrets: LauncherSecrets) -> dict[str, str]:
@@ -124,6 +138,20 @@ def render_env_file(composed: dict[str, str]) -> str:
     return "".join(f"{key}={composed[key]}\n" for key in sorted(composed))
 
 
+def resolve_pinned_runtime_keys(composed: dict[str, str], path: Path) -> dict[str, str]:
+    """Apply the installer's runtime-key precedence to launcher config."""
+    existing_secret, existing_fernet = _existing_runtime_keys(path)
+    if existing_secret:
+        composed["SECRET_KEY"] = existing_secret
+    if existing_fernet:
+        composed["FERNET_KEY"] = existing_fernet
+    if os.environ.get("SECRET_KEY"):
+        composed["SECRET_KEY"] = os.environ["SECRET_KEY"]
+    if os.environ.get("FERNET_KEY"):
+        composed["FERNET_KEY"] = os.environ["FERNET_KEY"]
+    return composed
+
+
 def write_pinned_env_file(
     data_dir: Path,
     state: LauncherState,
@@ -142,9 +170,9 @@ def write_pinned_env_file(
     """
     from farna.db.bootstrap import _write_env_file
 
-    composed = compose_config(state, secrets)
-    rendered = render_env_file(composed)
     path = path if path is not None else data_dir / CONFIG_ENV_FILENAME
+    composed = resolve_pinned_runtime_keys(compose_config(state, secrets), path)
+    rendered = render_env_file(composed)
     try:
         if path.exists() and path.read_text(encoding="utf-8") != rendered:
             _log.warning(
@@ -181,7 +209,10 @@ class LauncherConfigSource:
         operator_system_url = os.environ.get("FARNA_CONTROL_SYSTEM_DATABASE_URL")
         derived_system = _derive_operator_system_url(operator_database_url, operator_system_url)
         resolved: dict[str, Any] = {}
-        for env_name, field_name in _COMPOSED_FIELDS.items():
+        for env_name, field_name in {
+            **_COMPOSED_FIELDS,
+            "FARNA_CONTROL_MODULO_SYSTEM_DATABASE_URL": "farna_control_system_database_url",
+        }.items():
             value = _resolve_composed_field(
                 env_name,
                 composed,

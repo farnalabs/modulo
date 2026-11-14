@@ -235,7 +235,12 @@ def _install_boot_mocks(monkeypatch: pytest.MonkeyPatch, order: list[str], *, mo
     monkeypatch.setattr(
         config_source_module,
         "compose_config",
-        lambda state, secrets: {"DATABASE_URL": "postgresql://x", "REDIS_URL": "redis://x"},
+        lambda state, secrets: {
+            "DATABASE_URL": "postgresql://x",
+            "REDIS_URL": "redis://x",
+            "SECRET_KEY": SECRET_KEY,
+            "FERNET_KEY": FERNET_KEY,
+        },
     )
 
     def recorded_pin(path: object) -> None:
@@ -621,6 +626,10 @@ def test_saq_children_gated_on_migration_head(monkeypatch: pytest.MonkeyPatch, t
         spec = registered[name]
         condition = spec.start_condition
         assert condition() is True
+        child_env = spec.env_builder({})
+        assert child_env["SECRET_KEY"] == "a" * 32
+        assert child_env["FERNET_KEY"] == FERNET_KEY
+
     assert head_calls["n"] == 1
 
 
